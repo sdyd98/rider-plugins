@@ -53,7 +53,5 @@ class SheetTableModel(val sheetName: String) : AbstractTableModel() {
         private const val MIN_COLS = 8
 
         fun pack(row: Int, col: Int): Long = (row.toLong() shl 32) or (col.toLong() and 0xFFFFFFFFL)
-        fun rowOf(packed: Long): Int = (packed ushr 32).toInt()
-        fun colOf(packed: Long): Int = (packed and 0xFFFFFFFFL).toInt()
     }
 }

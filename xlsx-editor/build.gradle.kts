@@ -1,4 +1,4 @@
-// The XLSX Grid Editor plugin. Produces the installable ZIP via `:xlsx-editor:buildPlugin`.
+// The XLSX Grid Viewer plugin. Produces the installable ZIP via `:xlsx-editor:buildPlugin`.
 plugins {
     java
     id("org.jetbrains.kotlin.jvm")
@@ -7,7 +7,7 @@ plugins {
 }
 
 group = "com.example.xlsx"
-version = "0.2.0"
+version = "0.3.0"
 
 repositories {
     mavenCentral()
@@ -45,9 +45,9 @@ dependencies {
     // Shared helpers (POI classloader swap, cached-formula formatting). Bundled into the plugin.
     implementation(project(":common"))
 
-    // Apache POI — bundled into the plugin's lib/ so we can read & write .xlsx at runtime.
+    // Apache POI — bundled into the plugin's lib/ so we can read .xlsx / .xls at runtime.
     // The optional pdfbox/batik/bouncycastle/xmlsec chains are <optional> in POI's POM and
-    // are not needed for plain spreadsheet read/write; excluded to keep the bundle small.
+    // are not needed for plain spreadsheet reading; excluded to keep the bundle small.
     implementation(libs.poi.ooxml) {
         exclude(group = "org.apache.pdfbox")
         exclude(group = "org.apache.xmlgraphics")

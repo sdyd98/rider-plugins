@@ -6,9 +6,8 @@ import org.apache.poi.ss.usermodel.DataFormatter
 import org.apache.poi.ss.usermodel.FormulaError
 
 /**
- * Display text for a formula cell's **cached result** (like Excel's normal view). Shared by the
- * `.xls` open path ([XlsWorkbookReader]) and the live-recalc path ([XlsxFileEditor]) so the two
- * never diverge.
+ * Display text for a formula cell's **cached result** (like Excel's normal view) — used by the `.xls`
+ * read path (XlsWorkbookReader) to show what Excel last computed, since the viewer does not evaluate.
  */
 fun formatCachedFormulaResult(cell: Cell, formatter: DataFormatter): String = when (cell.cachedFormulaResultType) {
     CellType.NUMERIC -> formatter.formatRawCellContents(

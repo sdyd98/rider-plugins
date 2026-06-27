@@ -8,8 +8,8 @@ import com.intellij.openapi.project.Project
 import com.intellij.openapi.vfs.VirtualFile
 
 /**
- * Tells the platform that `.xlsx` files open in [XlsxFileEditor]. [DumbAware] so the editor
- * works during indexing; [FileEditorPolicy.HIDE_OTHER_EDITORS] so only our grid tab shows.
+ * Tells the platform that `.xlsx` / `.xls` files open in [XlsxFileEditor] (a read-only grid viewer).
+ * [DumbAware] so it works during indexing; [FileEditorPolicy.HIDE_OTHER_EDITORS] so only our tab shows.
  */
 class XlsxFileEditorProvider : FileEditorProvider, DumbAware {
 
@@ -22,7 +22,7 @@ class XlsxFileEditorProvider : FileEditorProvider, DumbAware {
     override fun acceptRequiresReadAction(): Boolean = false
 
     override fun createEditor(project: Project, file: VirtualFile): FileEditor =
-        XlsxFileEditor(project, file)
+        XlsxFileEditor(file)
 
     override fun getEditorTypeId(): String = "xlsx-grid-editor"
 

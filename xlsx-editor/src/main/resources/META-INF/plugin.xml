@@ -1,6 +1,6 @@
 <idea-plugin>
     <id>com.example.xlsxgrid</id>
-    <name>XLSX Grid Editor</name>
+    <name>XLSX Grid Viewer</name>
     <vendor>example</vendor>
 
     <description><![CDATA[

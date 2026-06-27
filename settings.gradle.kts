@@ -2,7 +2,7 @@ rootProject.name = "rider-plugins"
 
 // Monorepo of JetBrains/Rider plugins:
 //   :common      shared library (POI helpers, and later grid/vim infrastructure)
-//   :xlsx-editor the in-IDE .xlsx/.xls grid editor plugin
+//   :xlsx-editor the in-IDE .xlsx/.xls grid viewer plugin
 // Add new plugins as sibling modules: create <plugin>/build.gradle.kts + src, then include it here.
 include(":common", ":xlsx-editor")
 

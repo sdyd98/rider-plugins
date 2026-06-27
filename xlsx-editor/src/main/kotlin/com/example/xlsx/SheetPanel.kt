@@ -21,9 +21,10 @@ import javax.swing.event.ListSelectionListener
 import javax.swing.table.TableRowSorter
 
 /**
- * One sheet's UI: filter bar (top), grid with an Excel-style row-number gutter + cross-highlight
- * (center), and a status bar (bottom). Owns the [SheetTableModel], [JBTable], a filter-only
- * [TableRowSorter], a [VimGridController], and a [ColumnFilterController].
+ * One sheet's UI: the grid with an Excel-style row-number gutter + cross-highlight. The filter bar
+ * and status bar are shared **editor** chrome (see [createFilterBar]/[createStatusBar] in
+ * ComposeChrome.kt); this panel feeds them via [onChrome]. Owns the [SheetTableModel], [JBTable], a
+ * filter-only [TableRowSorter], a [VimGridController], and a [ColumnFilterController].
  *
  * **Frozen header rows:** the top `frozenRowCount` model rows are shown in a separate [frozenTable]
  * placed in the scroll pane's column-header view (so they stay pinned at the top while scrolling and
@@ -87,12 +88,29 @@ class SheetPanel(
     var onChrome: ((ChromeData) -> Unit)? = null
     private var ready = false
 
+    // Filter-derived state, recomputed only when the query / column filters / key row change (NOT on
+    // every cursor move). updateStatus() reads these; rebuildRowFilter() reuses the compiled regex.
+    private var compiledRegex: Regex? = null
+    private var regexValid = true
+    private var cachedChips: List<FilterChip> = emptyList()
+
     private var sorter: TableRowSorter<SheetTableModel>? = null
 
     private val columnFilter = ColumnFilterController(table, model) {
+        recomputeFilterState()
         rebuildRowFilter()
         updateStatus()
         table.tableHeader.repaint()
+    }
+
+    /** Recompute the cached compiled regex (+ validity) and the column-filter chips. Call only when the
+     *  text query, the column filters, or the key row actually change — never on a cursor move. */
+    private fun recomputeFilterState() {
+        val q = filterQueryText.trim()
+        compiledRegex = if (q.isEmpty()) null else runCatching { Regex(q, RegexOption.IGNORE_CASE) }.getOrNull()
+        regexValid = q.isEmpty() || compiledRegex != null
+        cachedChips = columnFilter.activeFilters().entries.sortedBy { it.key }
+            .map { (col, vals) -> FilterChip(col, chipLabel(col), vals.size) }
     }
 
     // Vim mode is always on; mode is not displayed. `/` focuses the editor's shared filter bar.
@@ -130,9 +148,10 @@ class SheetPanel(
             rowHeader.revalidate(); rowHeader.repaint()
             if (!ready) updateStatus() // show streaming progress (loaded-row count) in the status bar
         }
-        // Excel-style cross-highlight: moving the active cell repaints both axes.
-        val selectionListener = ListSelectionListener {
-            updateStatus()
+        // Excel-style cross-highlight: moving the active cell repaints both axes. Skip the status push
+        // for valueIsAdjusting (mid-drag) events — the repaints still run for the live highlight.
+        val selectionListener = ListSelectionListener { e ->
+            if (!e.valueIsAdjusting) updateStatus()
             rowHeader.repaint()
             table.tableHeader.repaint()
         }
@@ -160,9 +179,11 @@ class SheetPanel(
     // ---- Shared filter / status (driven by the editor's chrome) ----
 
     /** Apply a filter query (from the shared bar). Safe before streaming finishes — [rebuildRowFilter]
-     *  no-ops until the sorter exists. */
+     *  no-ops until the sorter exists, and [onStreamingFinished] applies the pending query then. */
     fun applyFilter(query: String) {
+        if (query == filterQueryText) return // already applied (e.g. re-selecting the same sheet's tab)
         filterQueryText = query
+        recomputeFilterState()
         rebuildRowFilter()
         updateStatus()
     }
@@ -172,8 +193,14 @@ class SheetPanel(
     /** Remove a per-column filter (from a filter-bar chip's ✕). */
     fun clearColumnFilter(col: Int) = columnFilter.clearFilter(col)
 
-    /** True once streaming finished and the filter sorter is attached. */
-    fun isReady(): Boolean = ready
+    /** Clear the text query AND all column filters (from the filter bar's "clear all"). */
+    fun clearAllFilters() {
+        filterQueryText = ""
+        columnFilter.clearAllSilently() // we rebuild once below, not via the controller's onChanged
+        recomputeFilterState()
+        rebuildRowFilter()
+        updateStatus()
+    }
 
     /** Recompute the status line and push it to the sink (e.g. when this sheet becomes active). */
     fun refreshStatus() = updateStatus()
@@ -198,6 +225,9 @@ class SheetPanel(
         columnFilter.install()
         autoSizeColumns(table)
         ready = true
+        // Apply any filter typed while streaming — the sorter didn't exist yet, so rebuildRowFilter no-op'd.
+        recomputeFilterState()
+        rebuildRowFilter()
         rowHeader.revalidate(); rowHeader.repaint()
         updateStatus()
     }
@@ -234,6 +264,7 @@ class SheetPanel(
         if (frozenRowCount <= 0) return
         keyRow = if (keyRow < 0) frozenRowCount - 1 else (keyRow + 1) % frozenRowCount
         frozenTable.repaint()
+        recomputeFilterState() // chip labels come from the key row
         updateStatus()
     }
 
@@ -249,6 +280,7 @@ class SheetPanel(
         scrollPane.revalidate(); scrollPane.repaint()
         // Keep a sensible selection in the main table.
         if (table.rowCount > 0 && table.selectedRow < 0) table.changeSelection(0, table.selectedColumn.coerceAtLeast(0), false, false)
+        recomputeFilterState() // chip labels come from the (now changed) key row
         updateStatus()
     }
 
@@ -311,16 +343,10 @@ class SheetPanel(
             s.rowFilter = null
             return
         }
-        // The text query is a vim-style regex search (case-insensitive substring match). Compile it
-        // once here (not per cell — matters at 100k rows); an incomplete/invalid pattern typed mid-
-        // keystroke falls back to a literal case-insensitive contains so filtering never errors.
-        val regex: Regex? = if (query.isEmpty()) null else {
-            try {
-                Regex(query, RegexOption.IGNORE_CASE)
-            } catch (e: Exception) {
-                null
-            }
-        }
+        // The text query is a vim-style regex search (case-insensitive substring match), compiled once
+        // in recomputeFilterState() (not per cell — matters at 100k rows); an incomplete/invalid pattern
+        // (compiledRegex == null) falls back to a literal case-insensitive contains so filtering never errors.
+        val regex: Regex? = compiledRegex
         s.rowFilter = object : RowFilter<SheetTableModel, Int>() {
             override fun include(entry: Entry<out SheetTableModel, out Int>): Boolean {
                 if (entry.identifier < frozen) return false // frozen header rows live in the frozen table
@@ -383,8 +409,8 @@ class SheetPanel(
                 visible = visible,
                 total = total,
                 filterActive = queryActive || colFilters.isNotEmpty(),
-                regexValid = filterQueryText.isBlank() || runCatching { Regex(filterQueryText) }.isSuccess,
-                chips = colFilters.keys.sorted().map { FilterChip(it, chipLabel(it)) },
+                regexValid = regexValid,
+                chips = cachedChips,
                 streaming = !ready,
             ),
         )

@@ -9,14 +9,15 @@ import com.intellij.openapi.diagnostic.logger
 import com.intellij.openapi.fileEditor.FileEditor
 import com.intellij.openapi.fileEditor.FileEditorState
 import com.intellij.openapi.fileEditor.FileEditorStateLevel
-import com.intellij.openapi.project.Project
 import com.intellij.openapi.util.UserDataHolderBase
 import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.ui.components.JBLabel
 import com.intellij.ui.components.JBTabbedPane
 import com.intellij.ui.table.JBTable
+import com.intellij.util.ui.JBUI
 import com.intellij.util.ui.UIUtil
 import java.awt.BorderLayout
+import java.awt.Dimension
 import java.beans.PropertyChangeListener
 import java.beans.PropertyChangeSupport
 import javax.swing.JComponent
@@ -26,6 +27,12 @@ import javax.swing.Timer
 
 /** Rows per streamed batch pushed to the EDT. */
 private const val BATCH_SIZE = 2000
+
+// Pinned heights (px, pre-scale) for the Compose chrome bars — JewelComposePanel doesn't report its
+// content height to the Swing layout, so we set these explicitly. Filter bar gains a row for chips.
+private const val FILTER_BAR_H = 38
+private const val FILTER_BAR_CHIPS_H = 64
+private const val STATUS_BAR_H = 26
 
 private val LOG = logger<XlsxFileEditor>()
 
@@ -41,7 +48,6 @@ private val LOG = logger<XlsxFileEditor>()
  * This is a viewer: cells are not editable and the file is never written back.
  */
 class XlsxFileEditor(
-    private val project: Project,
     private val file: VirtualFile,
 ) : UserDataHolderBase(), FileEditor {
 
@@ -63,6 +69,7 @@ class XlsxFileEditor(
     private val filterFocus = FocusRequester()
     private val chrome = mutableStateOf(ChromeData())
     private var activeSheet: SheetPanel? = null
+    private var filterBar: JComponent? = null // pinned-height holder for the Compose filter bar
     // Debounce so a keystroke at 100k rows doesn't re-filter on every char.
     private val filterDebounce = Timer(150) { activeSheet?.applyFilter(filterQuery.text.toString()) }
         .apply { isRepeats = false }
@@ -99,8 +106,8 @@ class XlsxFileEditor(
                 }
                 openLegacyXls(bytes, started)
             } else {
-                // .xlsx: stream straight from the file — don't load the (possibly 100 MB) bytes
-                // upfront; they're read lazily only if the user edits (for the editable workbook).
+                // .xlsx: stream straight from the file — never load the (possibly 100 MB) bytes into
+                // memory; the streaming reader opens the package by random access for display only.
                 openStreamingXlsx(started)
             }
         }
@@ -247,30 +254,37 @@ class XlsxFileEditor(
                 tabbedPane = tabs
             }
         }
-        // Wrap the grid(s) with ONE shared Compose filter bar (top) + status bar (bottom).
+        // Wrap the grid(s) with ONE shared Compose filter bar (top) + status bar (bottom). A
+        // JewelComposePanel doesn't report its Compose content height to Swing, so we pin explicit
+        // heights (else the bars are sized 0 / one row and overflow the grid until a window resize).
+        val fb = createFilterBar(
+            filterQuery,
+            filterFocus,
+            chrome,
+            onQueryChanged = { filterDebounce.restart() },
+            onEnter = {
+                filterDebounce.stop()
+                activeSheet?.applyFilter(filterQuery.text.toString())
+                activeSheet?.focusGrid()
+            },
+            onClearChip = { col -> activeSheet?.clearColumnFilter(col) },
+            onClearAll = {
+                filterQuery.edit { replace(0, length, "") }
+                activeSheet?.clearAllFilters()
+            },
+        ).apply { preferredSize = Dimension(0, JBUI.scale(FILTER_BAR_H)) }
+        filterBar = fb
+        val sb = createStatusBar(chrome).apply { preferredSize = Dimension(0, JBUI.scale(STATUS_BAR_H)) }
         val chromePanel = JPanel(BorderLayout()).apply {
-            add(
-                createFilterBar(
-                    filterQuery,
-                    filterFocus,
-                    chrome,
-                    onQueryChanged = { filterDebounce.restart() },
-                    onEnter = {
-                        filterDebounce.stop()
-                        activeSheet?.applyFilter(filterQuery.text.toString())
-                        activeSheet?.focusGrid()
-                    },
-                    onClearChip = { col -> activeSheet?.clearColumnFilter(col) },
-                ),
-                BorderLayout.NORTH,
-            )
+            add(fb, BorderLayout.NORTH)
             add(center, BorderLayout.CENTER)
-            add(createStatusBar(chrome), BorderLayout.SOUTH)
+            add(sb, BorderLayout.SOUTH)
         }
         loadingPanel.add(chromePanel, BorderLayout.CENTER)
         built.firstOrNull()?.let { setActiveSheet(it) }
         loadingPanel.revalidate()
         loadingPanel.repaint()
+        revalidateChrome() // the Compose bars size up only after their first frame — re-lay-out then
     }
 
     /** Point the shared filter + status bars at [panel] (the active tab). */
@@ -278,10 +292,29 @@ class XlsxFileEditor(
         if (activeSheet === panel) return
         activeSheet?.onChrome = null
         activeSheet = panel
-        panel.onChrome = { data -> chrome.value = data }
+        panel.onChrome = { data ->
+            val prev = chrome.value
+            chrome.value = data
+            // The filter bar grows a row when chips appear (and shrinks when they go). Re-pin its height
+            // and re-lay-out, else the chips row overflows the grid until the window is resized.
+            if (data.chips.isEmpty() != prev.chips.isEmpty()) {
+                filterBar?.preferredSize = Dimension(0, JBUI.scale(if (data.chips.isEmpty()) FILTER_BAR_H else FILTER_BAR_CHIPS_H))
+                revalidateChrome()
+            }
+        }
         // Show this sheet's own filter query in the shared bar, then refresh its status line.
         filterQuery.edit { replace(0, length, panel.filterText()) }
         panel.refreshStatus()
+    }
+
+    /** Re-lay-out the editor after the Compose chrome's size settles (next EDT tick). */
+    private fun revalidateChrome() {
+        ApplicationManager.getApplication().invokeLater({
+            if (!disposed) {
+                loadingPanel.revalidate()
+                loadingPanel.repaint()
+            }
+        }, ModalityState.any())
     }
 
     private fun focusSharedFilter() {

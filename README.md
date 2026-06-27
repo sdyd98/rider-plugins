@@ -14,7 +14,7 @@ rider-plugins/
 ├─ gradle.properties            riderLocalPath + shared Gradle/Kotlin flags
 ├─ common/                      shared library (POI helpers; grid/vim infra will move here)
 │  └─ src/main/kotlin/…
-└─ xlsx-editor/                 plugin: in-IDE .xlsx/.xls grid editor (see its own README)
+└─ xlsx-editor/                 plugin: in-IDE .xlsx/.xls grid viewer (see its own README)
    ├─ build.gradle.kts
    ├─ README.md
    └─ src/main/{kotlin,resources/META-INF/plugin.xml}
@@ -25,7 +25,8 @@ rider-plugins/
   classes are bundled into whichever plugin depends on it (`implementation(project(":common"))`).
   When shared UI (grid renderer, vim controller) moves here it will also apply
   `org.jetbrains.intellij.platform.module` to compile against the platform.
-- **`xlsx-editor`** — the first plugin. Opens/edits/saves Excel files in an in-IDE grid. See
+- **`xlsx-editor`** — the first plugin. Opens Excel files in a read-only in-IDE grid viewer
+  (vim navigation, filters, frozen headers). See
   [`xlsx-editor/README.md`](xlsx-editor/README.md) for how it works.
 
 ## Build & run
@@ -56,4 +57,4 @@ tasks; `./gradlew buildPlugin` (no module prefix) builds every plugin.
 Each plugin ships as a self-contained ZIP (plugin + bundled libraries such as Apache POI). Install on
 another machine via **Settings → Plugins → ⚙ → Install Plugin from Disk…** (the target IDE must be a
 compatible build — `xlsx-editor` targets Rider 2026.1.x). Releases are published per plugin (e.g. a
-GitHub Release tagged `xlsx-editor-v0.2.0` with that module's ZIP attached).
+GitHub Release tagged `xlsx-editor-v0.3.0` with that module's ZIP attached).

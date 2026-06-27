@@ -25,10 +25,14 @@ xlsx-editor/
     XlsxStreamingReader.kt    .xlsx SAX event-model reader (lazy per-sheet, parallel parse)
     XlsWorkbookReader.kt      .xls (BIFF) usermodel reader (build + incremental render)
     SheetTableModel.kt        compact, read-only String-based model; streams rows in
-    SheetPanel.kt             per-sheet UI: filter bar + table + sorter + combined row filter
+    SheetPanel.kt             per-sheet grid + sorter + combined row filter (filter/status bars are shared chrome)
     ColumnFilterController.kt Excel-style per-column value filter (header funnel + checkbox popup)
     VimGridController.kt      always-on modal vim navigation for the grid
     GridStyling.kt            cell renderer + row-number gutter
+    FormulaScanner.kt         SAX pass that records .xlsx formula-cell positions (parallel with parse)
+    ComposeChrome.kt          shared Compose/Jewel filter bar + status bar (editor-level)
+    ComposeColumnFilter.kt    Compose popup for the per-column value filter
+    ComposeHelp.kt            Compose `?` shortcut cheat-sheet popup
   (shared in ../common: PoiClassLoaders.kt, CellFormatting.kt)
 ```
 
@@ -61,18 +65,28 @@ xlsx-editor/
     registered via `DumbAwareAction.registerCustomShortcutSet` so it overrides any IDE-global binding
     while the grid is focused.
 
-  The sorter is attached **only after streaming finishes** with `setSortsOnUpdates(false)`, so edits
-  never reshuffle rows; `JTable` converts view↔model indices so editing stays correct under a filter.
+  The sorter is attached **only after streaming finishes** with `setSortsOnUpdates(false)`, so streamed
+  row appends never reshuffle rows; `JTable` converts view↔model indices so navigation/selection stay
+  correct under a filter.
   Pressing **Enter** in the filter field applies the filter immediately and returns focus to the grid
   (so vim navigation resumes without a mouse click).
 - **Vim navigation (always on):** `VimGridController` installs modal keybindings on the table's
-  `WHEN_FOCUSED` InputMap: `hjkl` move, `0` row start, `$` last cell **with data** in the row,
-  `gg`/`G`, counts (`5j`), `Ctrl+D`/`Ctrl+U` half-page, `Ctrl+E`/`Ctrl+Y` scroll one line,
-  `V` **visual-line select** (then `j`/`k` extend the row range, Esc cancel — use `Ctrl+C` to copy the
-  selection), `gt`/`gT` **next/previous sheet**, `/` focus filter, `?` **show a shortcut cheat-sheet
-  popup**. (`Ctrl+D`/`U`/`E`/`Y` and `Ctrl+Alt+F` use `registerCustomShortcutSet` to beat IDE-global
-  bindings.) The grid is read-only, so there are no editing commands. IdeaVim can't be reused — it
-  targets text editors, not a grid.
+  `WHEN_FOCUSED` InputMap (a-z are all captured so a mark name is read — the grid is read-only, so vim
+  owns the keys):
+  - **Move:** `hjkl`, counts (`5j`), `0` row start, `^`/`$` first/last cell **with data** in the row,
+    `gg`/`G` top/bottom, `w`/`e`/`b` next-word-start / word-end / prev-word (a *word* = a run of
+    non-empty cells).
+  - **Scroll:** `Ctrl+D`/`Ctrl+U` half-page, `Ctrl+E`/`Ctrl+Y` one line, `zz`/`zt`/`zb` cursor row to
+    center/top/bottom, `H`/`M`/`L` top/middle/bottom of the visible screen.
+  - **Search/jump:** `*`/`#` next/prev row with the **same value in this column**, `n`/`N` repeat;
+    `{`/`}` prev/next blank row; `m{a-z}` set a mark / `` `{a-z} `` jump to it (marks are stored by
+    model coordinates, so they survive filtering/streaming).
+  - **Other:** `V` visual-line select (then `j`/`k` extend, Esc cancel — `Ctrl+C` copies), `gt`/`gT`
+    next/previous sheet, `/` focus filter, `?` shortcut cheat-sheet popup.
+
+  (`Ctrl+D`/`U`/`E`/`Y` and `Ctrl+Alt+F` use `registerCustomShortcutSet` to beat IDE-global bindings.)
+  The grid is read-only, so there are no editing commands. IdeaVim can't be reused — it targets text
+  editors, not a grid.
 
 - **Frozen header rows + column jump:** press **`Alt+Shift+F`** to freeze the top rows through the
   cursor (model rows `0..current`); press it again to **unfreeze**. Frozen rows pin to the top while
@@ -83,9 +97,11 @@ xlsx-editor/
 
 - **Grid styling** (`GridStyling.kt`): an Excel-style row-number gutter (`RowNumberHeader`, painted
   from live table geometry so it tracks scroll/filter), a `GridCellRenderer` (zebra striping,
-  right-aligned numbers, bold first/header row), column auto-sizing from a row sample, and a status
-  bar showing the current cell reference (e.g. `C5`), visible/total row counts, active filters, and
-  the freeze/key-row state.
+  right-aligned numbers, bold first/header row), and column auto-sizing from a row sample.
+- **Shared Compose chrome** (`ComposeChrome.kt`): one editor-level filter bar + status bar (Compose/
+  Jewel), bound to the active sheet. The filter bar has a live match count, an invalid-regex outline,
+  and removable per-column filter chips; the status bar shows the cell reference (e.g. `C5`),
+  visible/total row counts, active filters, the freeze/key-row state, and streaming progress.
 
 ### Performance note (measured)
 

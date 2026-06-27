@@ -5,8 +5,8 @@ import com.intellij.openapi.vfs.VirtualFile
 import javax.swing.Icon
 
 /**
- * Binary file type for `.xlsx` so the platform routes the file to our grid editor instead of
- * treating it as a generic ZIP archive or unknown binary.
+ * Binary file type for `.xlsx` / `.xls` so the platform routes the file to our grid viewer instead
+ * of treating it as a generic ZIP archive or unknown binary.
  */
 class XlsxFileType private constructor() : FileType {
     override fun getName(): String = "Excel Spreadsheet"

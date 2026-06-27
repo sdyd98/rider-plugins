@@ -80,7 +80,7 @@ open class GridCellRenderer : DefaultTableCellRenderer() {
 
 /**
  * Excel-style row-number gutter shown as the scroll pane's row header. Paints numbers from the
- * table's live geometry (so it tracks scroll/filter/edits) and highlights the active row, like
+ * table's live geometry (so it tracks scroll/filter/streaming) and highlights the active row, like
  * Excel lighting up the current row number.
  */
 class RowNumberHeader(private val table: JBTable) : JComponent() {

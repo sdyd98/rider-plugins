@@ -45,6 +45,14 @@ class ColumnFilterController(
         }
     }
 
+    /** Remove all per-column filters without firing onChanged — the caller (SheetPanel.clearAllFilters)
+     *  rebuilds the row filter once itself, avoiding a double O(n) re-filter pass. */
+    fun clearAllSilently() {
+        if (filters.isEmpty()) return
+        filters.clear()
+        table.tableHeader.repaint()
+    }
+
     fun install() {
         val base = table.tableHeader.defaultRenderer
         table.tableHeader.defaultRenderer = TableCellRenderer { t, value, selected, focused, row, column ->

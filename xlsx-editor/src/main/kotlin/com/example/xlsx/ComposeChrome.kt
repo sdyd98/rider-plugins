@@ -33,8 +33,8 @@ import org.jetbrains.jewel.ui.component.Text
 import org.jetbrains.jewel.ui.component.TextField
 import javax.swing.JComponent
 
-/** A removable active column-filter chip. */
-data class FilterChip(val col: Int, val label: String)
+/** A removable active column-filter chip ([count] = how many values are kept for that column). */
+data class FilterChip(val col: Int, val label: String, val count: Int)
 
 /** Everything the Compose chrome (filter bar + status bar) shows for the active sheet. */
 data class ChromeData(
@@ -61,6 +61,7 @@ fun createFilterBar(
     onQueryChanged: () -> Unit,
     onEnter: () -> Unit,
     onClearChip: (Int) -> Unit,
+    onClearAll: () -> Unit,
 ): JComponent = JewelComposePanel {
     // Mirror Swing's debounced filter: notify on every text change (the editor debounces).
     LaunchedEffect(Unit) {
@@ -91,6 +92,11 @@ fun createFilterBar(
                 if (data.filterActive) "${data.visible.commas()} / ${data.total.commas()}"
                 else "${data.total.commas()} rows",
             )
+            // Clear every filter (text query + all column filters) at once.
+            if (data.filterActive) {
+                Spacer(Modifier.width(10.dp))
+                Text("✕ 해제", Modifier.clickable { onClearAll() })
+            }
         }
         // Active per-column filters as removable chips.
         if (data.chips.isNotEmpty()) {
@@ -103,7 +109,7 @@ fun createFilterBar(
                             .padding(horizontal = 6.dp, vertical = 1.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        Text(chip.label)
+                        Text("${chip.label} (${chip.count})")
                         Spacer(Modifier.width(5.dp))
                         Text("✕", Modifier.clickable { onClearChip(chip.col) })
                     }
@@ -120,9 +126,8 @@ fun createStatusBar(chrome: State<ChromeData>): JComponent = JewelComposePanel {
         Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 3.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        // Text-only while streaming (the file-open JBLoadingPanel already shows a spinner — a second
-        // circular spinner here looked like the file was loading twice). The counting row total is
-        // the progress feedback.
+        // Text-only progress while streaming — the counting row total is the feedback (no spinner; the
+        // file-open placeholder is already just a "Loading…" label, so a circle here is redundant).
         if (data.streaming) Text("로딩 중… ${data.visible.commas()}행") else Text(data.status)
     }
 }
