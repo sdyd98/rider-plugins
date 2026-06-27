@@ -2,6 +2,7 @@
 plugins {
     java
     id("org.jetbrains.kotlin.jvm")
+    id("org.jetbrains.kotlin.plugin.compose") // enables @Composable (Jewel UI demo)
     id("org.jetbrains.intellij.platform")
 }
 
@@ -29,6 +30,16 @@ dependencies {
         } else {
             local(riderLocalPath)
         }
+
+        // Compose + Jewel are BUNDLED with the IDE — reference them for compilation; the IDE provides
+        // them at runtime (so they are NOT shipped in the plugin ZIP). Demo for the Compose help UI.
+        bundledLibrary("lib/intellij.libraries.compose.foundation.desktop.jar")
+        bundledLibrary("lib/intellij.libraries.compose.runtime.desktop.jar")
+        bundledLibrary("lib/intellij.libraries.skiko.jar")
+        bundledLibrary("lib/intellij.platform.compose.jar")
+        bundledLibrary("lib/intellij.platform.jewel.foundation.jar")
+        bundledLibrary("lib/intellij.platform.jewel.ui.jar")
+        bundledLibrary("lib/intellij.platform.jewel.ideLafBridge.jar")
     }
 
     // Shared helpers (POI classloader swap, cached-formula formatting). Bundled into the plugin.
@@ -64,4 +75,10 @@ intellijPlatform {
             untilBuild = "261.*"
         }
     }
+}
+
+// Give the sandbox more heap so large (100 MB+) spreadsheets can be load-tested. Dev-only — this
+// does NOT affect the shipped plugin; users adjust their own IDE memory (Help → Change Memory Settings).
+tasks.runIde {
+    maxHeapSize = "4g"
 }

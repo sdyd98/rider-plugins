@@ -3,5 +3,6 @@
 // (IntelliJ Platform target, dependencies, plugin.xml) lives in each module's own build file.
 plugins {
     id("org.jetbrains.kotlin.jvm") version "2.3.21" apply false
+    id("org.jetbrains.kotlin.plugin.compose") version "2.3.21" apply false // Compose UI (Jewel) — demo
     id("org.jetbrains.intellij.platform") version "2.16.0" apply false
 }

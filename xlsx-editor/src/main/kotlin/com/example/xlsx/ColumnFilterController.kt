@@ -6,29 +6,18 @@ import com.intellij.openapi.actionSystem.CustomShortcutSet
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.application.ModalityState
 import com.intellij.openapi.project.DumbAwareAction
+import com.intellij.openapi.ui.popup.JBPopup
 import com.intellij.openapi.ui.popup.JBPopupFactory
 import com.intellij.openapi.util.IconLoader
-import com.intellij.ui.CheckBoxList
 import com.intellij.ui.ColorUtil
-import com.intellij.ui.SearchTextField
 import com.intellij.ui.awt.RelativePoint
-import com.intellij.ui.components.JBLabel
-import com.intellij.ui.components.JBScrollPane
 import com.intellij.ui.table.JBTable
-import java.awt.BorderLayout
-import java.awt.Dimension
-import java.awt.FlowLayout
 import java.awt.Font
 import java.awt.Point
 import java.awt.event.MouseAdapter
 import java.awt.event.MouseEvent
-import javax.swing.JButton
-import javax.swing.JComponent
 import javax.swing.JLabel
-import javax.swing.JPanel
 import javax.swing.SwingConstants
-import javax.swing.event.DocumentEvent
-import javax.swing.event.DocumentListener
 import javax.swing.table.TableCellRenderer
 
 /**
@@ -124,69 +113,31 @@ class ColumnFilterController(
         return set.sortedWith(String.CASE_INSENSITIVE_ORDER) to truncated
     }
 
-    private fun label(value: String): String = value.ifEmpty { "(blanks)" }
-
+    /** Build the popup content with Compose (Jewel) — see [createColumnFilterPanel]. */
     private fun showPopup(modelCol: Int, title: String, distinct: List<String>, truncated: Boolean, where: RelativePoint) {
-        val current = filters[modelCol]
-        val checked = LinkedHashMap<String, Boolean>()
-        for (v in distinct) checked[v] = current == null || v in current
-
-        val list = CheckBoxList<String>()
-        fun rebuild(query: String) {
-            list.clear()
-            val q = query.trim()
-            for (v in distinct) {
-                if (q.isEmpty() || v.contains(q, ignoreCase = true)) list.addItem(v, label(v), checked[v] == true)
-            }
-        }
-        rebuild("")
-        list.setCheckBoxListListener { index, value -> list.getItemAt(index)?.let { checked[it] = value } }
-
-        val search = SearchTextField()
-        search.addDocumentListener(object : DocumentListener {
-            override fun insertUpdate(e: DocumentEvent) = rebuild(search.text)
-            override fun removeUpdate(e: DocumentEvent) = rebuild(search.text)
-            override fun changedUpdate(e: DocumentEvent) = rebuild(search.text)
-        })
-
-        val all = JButton("All").apply { addActionListener { distinct.forEach { checked[it] = true }; rebuild(search.text) } }
-        val none = JButton("None").apply { addActionListener { distinct.forEach { checked[it] = false }; rebuild(search.text) } }
-        val ok = JButton("OK")
-        val cancel = JButton("Cancel")
-
-        val top = JPanel(BorderLayout()).apply {
-            add(search, BorderLayout.CENTER)
-            add(JPanel(FlowLayout(FlowLayout.LEFT, 4, 0)).apply { add(all); add(none) }, BorderLayout.EAST)
-        }
-        val north = JPanel(BorderLayout()).apply {
-            add(top, BorderLayout.NORTH)
-            if (truncated) add(JBLabel(" Showing first $MAX_DISTINCT values "), BorderLayout.SOUTH)
-        }
-        val south = JPanel(FlowLayout(FlowLayout.RIGHT, 4, 0)).apply { add(ok); add(cancel) }
-        val content = JPanel(BorderLayout()).apply {
-            add(north, BorderLayout.NORTH)
-            add(JBScrollPane(list), BorderLayout.CENTER)
-            add(south, BorderLayout.SOUTH)
-            preferredSize = Dimension(260, 320)
-        }
-
+        var popupRef: JBPopup? = null
+        val content = createColumnFilterPanel(
+            title = title,
+            distinct = distinct,
+            truncated = truncated,
+            maxDistinct = MAX_DISTINCT,
+            initiallyChecked = filters[modelCol],
+            onApply = { allowed ->
+                if (allowed.size == distinct.size) filters.remove(modelCol) else filters[modelCol] = allowed
+                table.tableHeader.repaint()
+                onChanged()
+                popupRef?.cancel()
+            },
+            onCancel = { popupRef?.cancel() },
+        )
         val popup = JBPopupFactory.getInstance()
-            .createComponentPopupBuilder(content, search.textEditor)
+            .createComponentPopupBuilder(content, content)
             .setTitle("Filter: $title")
             .setResizable(true)
             .setMovable(true)
             .setRequestFocus(true)
             .createPopup()
-
-        ok.addActionListener {
-            val allowed = checked.filterValues { it }.keys.toSet()
-            if (allowed.size == distinct.size) filters.remove(modelCol) else filters[modelCol] = allowed
-            table.tableHeader.repaint()
-            onChanged()
-            popup.cancel()
-        }
-        cancel.addActionListener { popup.cancel() }
-
+        popupRef = popup
         popup.show(where)
     }
 
