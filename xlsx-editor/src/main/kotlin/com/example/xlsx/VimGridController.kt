@@ -3,6 +3,7 @@ package com.example.xlsx
 import com.intellij.openapi.actionSystem.AnActionEvent
 import com.intellij.openapi.actionSystem.CustomShortcutSet
 import com.intellij.openapi.project.DumbAwareAction
+import com.intellij.openapi.ui.popup.JBPopupFactory
 import com.intellij.ui.table.JBTable
 import java.awt.event.ActionEvent
 import java.awt.event.FocusEvent
@@ -38,7 +39,7 @@ class VimGridController(
     private var visualAnchor = 0
     private var visualCurrent = 0
 
-    private val keyChars = "hjkl0123456789\$gGiaxdypPoOtTuV./"
+    private val keyChars = "hjkl0123456789\$gGiaxdypPoOtTuV./?"
     private var shortcutsRegistered = false
 
     private val sheetModel: SheetTableModel?
@@ -143,8 +144,20 @@ class VimGridController(
             '.' -> { val times = n; reset(); repeat(times) { lastChange?.invoke() } }
             'V' -> { reset(); enterVisual() }
             '/' -> { onFocusFilter(); reset() }
+            '?' -> { reset(); showHelp() }
             else -> reset()
         }
+    }
+
+    /** `?` — shortcut cheat sheet rendered with **Compose (Jewel)**; see [createComposeHelpPanel]. */
+    private fun showHelp() {
+        JBPopupFactory.getInstance()
+            .createComponentPopupBuilder(createComposeHelpPanel(), null)
+            .setTitle("단축키")
+            .setRequestFocus(true)
+            .setMovable(true)
+            .createPopup()
+            .showInCenterOf(table)
     }
 
     private fun escapePressed() {

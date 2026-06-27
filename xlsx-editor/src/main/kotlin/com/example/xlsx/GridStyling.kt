@@ -29,7 +29,7 @@ internal val GRID_ACCENT: JBColor = JBColor(0x3574F0, 0x589DF6)
  * per-cell paint (the hot path during scroll) does almost no work and no allocation for the common
  * no-formula case (the boxing `isFormula` lookup is skipped unless the sheet actually has formulas).
  */
-class GridCellRenderer : DefaultTableCellRenderer() {
+open class GridCellRenderer : DefaultTableCellRenderer() {
 
     private var seenFont: Font? = null
     private var plainFont: Font? = null
