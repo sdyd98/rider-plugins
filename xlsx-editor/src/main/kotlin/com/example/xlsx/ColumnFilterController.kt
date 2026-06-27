@@ -37,6 +37,14 @@ class ColumnFilterController(
 
     fun activeFilters(): Map<Int, Set<String>> = filters
 
+    /** Remove the filter on [modelCol] (e.g. from a chip's ✕ in the filter bar) and refresh. */
+    fun clearFilter(modelCol: Int) {
+        if (filters.remove(modelCol) != null) {
+            table.tableHeader.repaint()
+            onChanged()
+        }
+    }
+
     fun install() {
         val base = table.tableHeader.defaultRenderer
         table.tableHeader.defaultRenderer = TableCellRenderer { t, value, selected, focused, row, column ->

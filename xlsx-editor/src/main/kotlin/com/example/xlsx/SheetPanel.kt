@@ -84,7 +84,7 @@ class SheetPanel(
     // sheet — see XlsxFileEditor). This sheet holds its own filter query and a status sink that the
     // editor points at the active sheet so its status drives the shared status bar.
     private var filterQueryText: String = ""
-    var statusSink: ((String) -> Unit)? = null
+    var onChrome: ((ChromeData) -> Unit)? = null
     private var ready = false
 
     private var sorter: TableRowSorter<SheetTableModel>? = null
@@ -128,6 +128,7 @@ class SheetPanel(
 
         model.addTableModelListener {
             rowHeader.revalidate(); rowHeader.repaint()
+            if (!ready) updateStatus() // show streaming progress (loaded-row count) in the status bar
         }
         // Excel-style cross-highlight: moving the active cell repaints both axes.
         val selectionListener = ListSelectionListener {
@@ -167,6 +168,9 @@ class SheetPanel(
     }
 
     fun filterText(): String = filterQueryText
+
+    /** Remove a per-column filter (from a filter-bar chip's ✕). */
+    fun clearColumnFilter(col: Int) = columnFilter.clearFilter(col)
 
     /** True once streaming finished and the filter sorter is attached. */
     fun isReady(): Boolean = ready
@@ -342,6 +346,7 @@ class SheetPanel(
     }
 
     private fun updateStatus() {
+        val sink = onChrome ?: return // only the active sheet drives the shared chrome
         val r = table.selectedRow
         val c = table.selectedColumn
         // Validate against the CURRENT view bounds: a selection can be momentarily stale (beyond the
@@ -355,7 +360,9 @@ class SheetPanel(
         val visible = table.rowCount
         val total = model.loadedRowCount()
         val rowsText = if (visible == total) "%,d rows".format(total) else "%,d / %,d rows".format(visible, total)
-        val filters = columnFilter.activeFilters().size + (if (filterQueryText.isNotBlank()) 1 else 0)
+        val colFilters = columnFilter.activeFilters()
+        val queryActive = filterQueryText.isNotBlank()
+        val filterCount = colFilters.size + (if (queryActive) 1 else 0)
         val formula = if (valid) {
             val mr = table.convertRowIndexToModel(r)
             val mc = table.convertColumnIndexToModel(c)
@@ -367,9 +374,23 @@ class SheetPanel(
             add(ref)
             if (formula != null) add("ƒ $formula · Excel에서 계산")
             add(rowsText)
-            if (filters > 0) add("$filters filter(s)")
+            if (filterCount > 0) add("$filterCount filter(s)")
             if (frozenRowCount > 0) add("❄ $frozenRowCount frozen · key r${keyRow + 1}")
         }
-        statusSink?.invoke(parts.joinToString("   •   "))
+        sink(
+            ChromeData(
+                status = parts.joinToString("   •   "),
+                visible = visible,
+                total = total,
+                filterActive = queryActive || colFilters.isNotEmpty(),
+                regexValid = filterQueryText.isBlank() || runCatching { Regex(filterQueryText) }.isSuccess,
+                chips = colFilters.keys.sorted().map { FilterChip(it, chipLabel(it)) },
+                streaming = !ready,
+            ),
+        )
     }
+
+    /** Chip label for a filtered column: the key-row name if any, else the column letter. */
+    private fun chipLabel(col: Int): String =
+        keyRowLabel(col).ifEmpty { CellReference.convertNumToColString(col) }
 }

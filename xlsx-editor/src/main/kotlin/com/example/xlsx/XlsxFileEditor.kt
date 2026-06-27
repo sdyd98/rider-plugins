@@ -13,14 +13,15 @@ import com.intellij.openapi.project.Project
 import com.intellij.openapi.util.UserDataHolderBase
 import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.ui.components.JBLabel
-import com.intellij.ui.components.JBLoadingPanel
 import com.intellij.ui.components.JBTabbedPane
 import com.intellij.ui.table.JBTable
+import com.intellij.util.ui.UIUtil
 import java.awt.BorderLayout
 import java.beans.PropertyChangeListener
 import java.beans.PropertyChangeSupport
 import javax.swing.JComponent
 import javax.swing.JPanel
+import javax.swing.SwingConstants
 import javax.swing.Timer
 
 /** Rows per streamed batch pushed to the EDT. */
@@ -45,7 +46,9 @@ class XlsxFileEditor(
 ) : UserDataHolderBase(), FileEditor {
 
     private val changeSupport = PropertyChangeSupport(this)
-    private val loadingPanel = JBLoadingPanel(BorderLayout(), this)
+    // Plain container (NOT JBLoadingPanel) — opens are fast, so we show a quiet centered "Loading…"
+    // text instead of a spinner (multiple spinners when opening several files at once looked noisy).
+    private val loadingPanel = JPanel(BorderLayout())
     private var firstTable: JBTable? = null
 
     private var panels: List<SheetPanel> = emptyList()
@@ -58,7 +61,7 @@ class XlsxFileEditor(
     // 20-sheet workbook doesn't pay 40 Compose-panel setups on open.
     private val filterQuery = TextFieldState()
     private val filterFocus = FocusRequester()
-    private val statusText = mutableStateOf(" ")
+    private val chrome = mutableStateOf(ChromeData())
     private var activeSheet: SheetPanel? = null
     // Debounce so a keystroke at 100k rows doesn't re-filter on every char.
     private val filterDebounce = Timer(150) { activeSheet?.applyFilter(filterQuery.text.toString()) }
@@ -66,8 +69,9 @@ class XlsxFileEditor(
 
     init {
         LOG.info("XLSX editor opening: ${file.name}")
-        loadingPanel.setLoadingText("Loading spreadsheet…")
-        loadingPanel.startLoading()
+        loadingPanel.add(JBLabel("Loading spreadsheet…", SwingConstants.CENTER).apply {
+            foreground = UIUtil.getContextHelpForeground()
+        }, BorderLayout.CENTER)
         startBackgroundOpen()
     }
 
@@ -223,7 +227,7 @@ class XlsxFileEditor(
     }
 
     private fun buildTabs(names: List<String>) {
-        loadingPanel.stopLoading()
+        loadingPanel.removeAll() // drop the "Loading…" placeholder
         val built = names.map { name ->
             SheetPanel(
                 SheetTableModel(name),
@@ -244,24 +248,26 @@ class XlsxFileEditor(
             }
         }
         // Wrap the grid(s) with ONE shared Compose filter bar (top) + status bar (bottom).
-        val chrome = JPanel(BorderLayout()).apply {
+        val chromePanel = JPanel(BorderLayout()).apply {
             add(
                 createFilterBar(
                     filterQuery,
                     filterFocus,
+                    chrome,
                     onQueryChanged = { filterDebounce.restart() },
                     onEnter = {
                         filterDebounce.stop()
                         activeSheet?.applyFilter(filterQuery.text.toString())
                         activeSheet?.focusGrid()
                     },
+                    onClearChip = { col -> activeSheet?.clearColumnFilter(col) },
                 ),
                 BorderLayout.NORTH,
             )
             add(center, BorderLayout.CENTER)
-            add(createStatusBar(statusText), BorderLayout.SOUTH)
+            add(createStatusBar(chrome), BorderLayout.SOUTH)
         }
-        loadingPanel.add(chrome, BorderLayout.CENTER)
+        loadingPanel.add(chromePanel, BorderLayout.CENTER)
         built.firstOrNull()?.let { setActiveSheet(it) }
         loadingPanel.revalidate()
         loadingPanel.repaint()
@@ -270,9 +276,9 @@ class XlsxFileEditor(
     /** Point the shared filter + status bars at [panel] (the active tab). */
     private fun setActiveSheet(panel: SheetPanel) {
         if (activeSheet === panel) return
-        activeSheet?.statusSink = null
+        activeSheet?.onChrome = null
         activeSheet = panel
-        panel.statusSink = { text -> statusText.value = text }
+        panel.onChrome = { data -> chrome.value = data }
         // Show this sheet's own filter query in the shared bar, then refresh its status line.
         filterQuery.edit { replace(0, length, panel.filterText()) }
         panel.refreshStatus()
@@ -296,8 +302,8 @@ class XlsxFileEditor(
     }
 
     private fun showError(message: String) {
-        loadingPanel.stopLoading()
-        loadingPanel.add(JBLabel("Cannot open spreadsheet: $message"), BorderLayout.NORTH)
+        loadingPanel.removeAll()
+        loadingPanel.add(JBLabel("Cannot open spreadsheet: $message", SwingConstants.CENTER), BorderLayout.CENTER)
         loadingPanel.revalidate()
         loadingPanel.repaint()
     }
