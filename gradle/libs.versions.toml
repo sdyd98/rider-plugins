@@ -1,0 +1,6 @@
+# Shared dependency versions for every plugin module in this repo.
+[versions]
+poi = "5.5.1"
+
+[libraries]
+poi-ooxml = { module = "org.apache.poi:poi-ooxml", version.ref = "poi" }

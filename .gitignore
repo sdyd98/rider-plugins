@@ -1,0 +1,19 @@
+# Gradle / build output (any module level). Release ZIPs go to GitHub Releases, not the repo.
+.gradle/
+.kotlin/
+build/
+out/
+!gradle/wrapper/gradle-wrapper.jar
+
+# IntelliJ Platform plugin sandbox + caches — large (GBs), machine-specific. MUST be ignored.
+.intellijPlatform/
+
+# IDE
+.idea/
+*.iml
+*.ipr
+*.iws
+
+# OS
+.DS_Store
+Thumbs.db
