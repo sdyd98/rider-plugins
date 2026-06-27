@@ -1,0 +1,34 @@
+<idea-plugin>
+    <id>com.example.xlsxgrid</id>
+    <name>XLSX Grid Editor</name>
+    <vendor>example</vendor>
+
+    <description><![CDATA[
+        Opens <code>.xlsx</code> spreadsheets in an editable grid inside Rider and saves
+        changes back to the file with Apache POI.
+    ]]></description>
+
+    <!-- Frontend-only plugin: the platform module is enough. It loads in Rider (and any
+         other IntelliJ-based IDE). The plugin name / version / since-build are injected
+         from build.gradle.kts by the IntelliJ Platform Gradle Plugin. -->
+    <depends>com.intellij.modules.platform</depends>
+
+    <extensions defaultExtensionNs="com.intellij">
+        <!-- Treat .xlsx/.xls as a binary file type routed to our editor (not a generic archive). -->
+        <fileType
+            name="Excel Spreadsheet"
+            implementationClass="com.example.xlsx.XlsxFileType"
+            fieldName="INSTANCE"
+            extensions="xlsx;xls"/>
+
+        <!-- The custom grid editor for .xlsx files. -->
+        <fileEditorProvider implementation="com.example.xlsx.XlsxFileEditorProvider"/>
+    </extensions>
+
+    <!-- App-level hook so Ctrl+S / Save All reaches our non-text editor and writes the file. -->
+    <applicationListeners>
+        <listener
+            class="com.example.xlsx.XlsxSaveListener"
+            topic="com.intellij.openapi.fileEditor.FileDocumentManagerListener"/>
+    </applicationListeners>
+</idea-plugin>
