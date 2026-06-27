@@ -56,4 +56,4 @@ tasks; `./gradlew buildPlugin` (no module prefix) builds every plugin.
 Each plugin ships as a self-contained ZIP (plugin + bundled libraries such as Apache POI). Install on
 another machine via **Settings → Plugins → ⚙ → Install Plugin from Disk…** (the target IDE must be a
 compatible build — `xlsx-editor` targets Rider 2026.1.x). Releases are published per plugin (e.g. a
-GitHub Release tagged `xlsx-editor-v0.1.0` with that module's ZIP attached).
+GitHub Release tagged `xlsx-editor-v0.2.0` with that module's ZIP attached).
