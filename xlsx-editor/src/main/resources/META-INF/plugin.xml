@@ -4,8 +4,9 @@
     <vendor>example</vendor>
 
     <description><![CDATA[
-        Opens <code>.xlsx</code> spreadsheets in an editable grid inside Rider and saves
-        changes back to the file with Apache POI.
+        Opens <code>.xlsx</code> / <code>.xls</code> spreadsheets in a fast, read-only grid viewer
+        inside Rider — vim-style navigation, column/regex filters, and frozen header rows. Reads
+        large multi-sheet workbooks with Apache POI (streaming); it does not modify files.
     ]]></description>
 
     <!-- Frontend-only plugin: the platform module is enough. It loads in Rider (and any
@@ -33,17 +34,7 @@
             fieldName="INSTANCE"
             extensions="xlsx;xls"/>
 
-        <!-- The custom grid editor for .xlsx files. -->
+        <!-- The custom grid editor for .xlsx / .xls files (read-only viewer). -->
         <fileEditorProvider implementation="com.example.xlsx.XlsxFileEditorProvider"/>
-
-        <!-- Balloon notifications (e.g. when a save fails because the file is read-only). -->
-        <notificationGroup id="XLSX Grid Editor" displayType="BALLOON"/>
     </extensions>
-
-    <!-- App-level hook so Ctrl+S / Save All reaches our non-text editor and writes the file. -->
-    <applicationListeners>
-        <listener
-            class="com.example.xlsx.XlsxSaveListener"
-            topic="com.intellij.openapi.fileEditor.FileDocumentManagerListener"/>
-    </applicationListeners>
 </idea-plugin>

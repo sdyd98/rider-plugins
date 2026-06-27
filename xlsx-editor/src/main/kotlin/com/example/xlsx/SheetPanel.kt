@@ -56,7 +56,6 @@ class SheetPanel(
         autoResizeMode = JTable.AUTO_RESIZE_OFF
         cellSelectionEnabled = true
         setDefaultRenderer(Any::class.java, GridCellRenderer())
-        setDefaultEditor(Any::class.java, FormulaCellEditor()) // edit shows formula text for formula cells
         // Lean on zebra striping for rows; keep light vertical separators for columns.
         setShowHorizontalLines(false)
         setShowVerticalLines(true)

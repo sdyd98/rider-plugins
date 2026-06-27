@@ -15,13 +15,12 @@ import javax.swing.JViewport
 import javax.swing.KeyStroke
 
 /**
- * Always-on modal (vim-like) keybindings for a spreadsheet [JBTable].
+ * Always-on modal (vim-like) **navigation** for a read-only spreadsheet [JBTable].
  *
- * Normal: `hjkl` move · `0`/`$` · `gg`/`G` · counts (`5j`) · `Ctrl+D`/`Ctrl+U` half-page ·
- * `Ctrl+E`/`Ctrl+Y` scroll one line · `i`/`a`/Enter edit · `x` clear cell · `dd` delete row ·
- * `o`/`O` add row · `yy` yank row · `p`/`P` paste row below/above · `u` undo · `.` repeat last
- * change · `gt`/`gT` switch sheet · `/` filter · `V` visual-line mode (then `j`/`k` extend, `d`
- * delete, `y` yank, Esc cancel).
+ * Normal: `hjkl` move · `0`/`$` (last data cell) · `gg`/`G` · counts (`5j`) · `Ctrl+D`/`Ctrl+U`
+ * half-page · `Ctrl+E`/`Ctrl+Y` scroll one line · `gt`/`gT` switch sheet · `/` filter ·
+ * `V` visual-line select (then `j`/`k` extend, Esc cancel — use Ctrl+C to copy) · `?` help.
+ * The grid is a viewer, so there are no editing commands.
  */
 class VimGridController(
     private val table: JBTable,
@@ -32,18 +31,13 @@ class VimGridController(
     private var enabled = false
     private val count = StringBuilder()
     private var pending: Char? = null
-    private var yanked: List<Array<String?>> = emptyList()
-    private var lastChange: (() -> Unit)? = null
 
     private var visualMode = false
     private var visualAnchor = 0
     private var visualCurrent = 0
 
-    private val keyChars = "hjkl0123456789\$gGiaxdypPoOtTuV./?"
+    private val keyChars = "hjkl0123456789\$gGtTV/?"
     private var shortcutsRegistered = false
-
-    private val sheetModel: SheetTableModel?
-        get() = table.model as? SheetTableModel
 
     init {
         table.addFocusListener(object : FocusListener {
@@ -60,7 +54,6 @@ class VimGridController(
     fun setEnabled(on: Boolean) {
         if (enabled == on) return
         enabled = on
-        table.putClientProperty("JTable.autoStartsEdit", !on)
         if (on) installBindings() else removeBindings()
         reset()
     }
@@ -74,10 +67,6 @@ class VimGridController(
         }
         im.put(KeyStroke.getKeyStroke(KeyEvent.VK_ESCAPE, 0), "vim.esc")
         am.put("vim.esc", action { escapePressed() })
-        im.put(KeyStroke.getKeyStroke(KeyEvent.VK_ENTER, 0), "vim.enter")
-        am.put("vim.enter", action { startEdit() })
-        im.put(KeyStroke.getKeyStroke(KeyEvent.VK_F2, 0), "vim.edit")
-        am.put("vim.edit", action { startEdit() })
 
         if (!shortcutsRegistered) {
             shortcutsRegistered = true
@@ -101,8 +90,6 @@ class VimGridController(
         val im = table.getInputMap(JComponent.WHEN_FOCUSED)
         for (ch in keyChars) im.remove(KeyStroke.getKeyStroke(ch))
         im.remove(KeyStroke.getKeyStroke(KeyEvent.VK_ESCAPE, 0))
-        im.remove(KeyStroke.getKeyStroke(KeyEvent.VK_ENTER, 0))
-        im.remove(KeyStroke.getKeyStroke(KeyEvent.VK_F2, 0))
     }
 
     private fun action(run: () -> Unit) = object : AbstractAction() {
@@ -132,16 +119,6 @@ class VimGridController(
             'g' -> if (pending == 'g') { gotoRow(0); reset() } else { pending = 'g' }
             't' -> { val g = pending == 'g'; reset(); if (g) onNextSheet() }
             'T' -> { val g = pending == 'g'; reset(); if (g) onPrevSheet() }
-            'i', 'a' -> { startEdit(); reset() }
-            'x' -> { clearCells(n); lastChange = { clearCells(n) }; reset() }
-            'd' -> if (pending == 'd') { deleteRows(n); lastChange = { deleteRows(n) }; reset() } else { pending = 'd' }
-            'o' -> { openRow(below = true, n = n); reset() }
-            'O' -> { openRow(below = false, n = n); reset() }
-            'y' -> if (pending == 'y') { yankRow(); reset() } else { pending = 'y' }
-            'p' -> { pasteRows(below = true); lastChange = { pasteRows(below = true) }; reset() }
-            'P' -> { pasteRows(below = false); lastChange = { pasteRows(below = false) }; reset() }
-            'u' -> { sheetModel?.undo(); reset() }
-            '.' -> { val times = n; reset(); repeat(times) { lastChange?.invoke() } }
             'V' -> { reset(); enterVisual() }
             '/' -> { onFocusFilter(); reset() }
             '?' -> { reset(); showHelp() }
@@ -217,74 +194,7 @@ class VimGridController(
         viewport.viewPosition = pos
     }
 
-    private fun startEdit() {
-        val r = table.selectedRow
-        val c = table.selectedColumn
-        if (r >= 0 && c >= 0 && table.editCellAt(r, c)) {
-            table.editorComponent?.requestFocusInWindow()
-        }
-        reset()
-    }
-
-    private fun clearCells(n: Int) {
-        val r = table.selectedRow
-        if (r < 0) return
-        val start = curCol()
-        for (c in start until (start + n).coerceAtMost(table.columnCount)) table.setValueAt("", r, c)
-    }
-
-    private fun deleteRows(n: Int) {
-        val model = sheetModel ?: return
-        val viewStart = table.selectedRow
-        if (viewStart < 0) return
-        val modelRows = (viewStart until (viewStart + n).coerceAtMost(table.rowCount))
-            .map { table.convertRowIndexToModel(it) }
-            .filter { it >= 0 }
-            .sortedDescending()
-        for (mr in modelRows) model.deleteRow(mr)
-        if (table.rowCount > 0) {
-            table.changeSelection(viewStart.coerceIn(0, table.rowCount - 1), curCol(), false, false)
-        }
-    }
-
-    private fun openRow(below: Boolean, n: Int) {
-        val model = sheetModel ?: return
-        val viewRow = table.selectedRow
-        val modelRow = if (viewRow >= 0) table.convertRowIndexToModel(viewRow) else -1
-        val at = if (modelRow < 0) model.rowCount else if (below) modelRow + 1 else modelRow
-        repeat(n.coerceAtLeast(1)) { model.insertRow(at) }
-        val viewAt = table.convertRowIndexToView(at)
-        if (viewAt >= 0) {
-            table.changeSelection(viewAt, curCol(), false, false)
-            startEdit()
-        }
-    }
-
-    private fun yankRow() {
-        val r = table.selectedRow
-        if (r < 0) return
-        yanked = listOf(rowValues(r))
-    }
-
-    private fun rowValues(viewRow: Int): Array<String?> =
-        Array(table.columnCount) { table.getValueAt(viewRow, it)?.toString() }
-
-    /** Insert the yanked row(s) as new rows below (`p`) or above (`P`) the current row. */
-    private fun pasteRows(below: Boolean) {
-        if (yanked.isEmpty()) return
-        val model = sheetModel ?: return
-        val viewRow = table.selectedRow
-        val modelRow = if (viewRow >= 0) table.convertRowIndexToModel(viewRow) else model.rowCount - 1
-        val at = if (below) modelRow + 1 else modelRow.coerceAtLeast(0)
-        for ((i, rowData) in yanked.withIndex()) model.insertRowWithData(at + i, rowData)
-        val viewAt = table.convertRowIndexToView(at)
-        if (viewAt >= 0) {
-            table.changeSelection(viewAt, curCol(), false, false)
-            table.scrollRectToVisible(table.getCellRect(viewAt, curCol(), true))
-        }
-    }
-
-    // ---- Visual-line mode ----
+    // ---- Visual-line mode (selection only — copy the selection with Ctrl+C) ----
 
     private fun enterVisual() {
         if (table.rowCount == 0) return
@@ -305,8 +215,6 @@ class VimGridController(
         when (ch) {
             'j' -> extendVisual(1)
             'k' -> extendVisual(-1)
-            'd', 'x' -> { deleteVisualRows(); exitVisual() } // vim: x deletes the selection, like d
-            'y' -> { yankVisualRows(); exitVisual() }
             else -> exitVisual()
         }
     }
@@ -324,21 +232,6 @@ class VimGridController(
         val hi = maxOf(a, b).coerceIn(0, table.rowCount - 1)
         table.setRowSelectionInterval(lo, hi)
         table.setColumnSelectionInterval(0, table.columnCount - 1)
-    }
-
-    private fun deleteVisualRows() {
-        val model = sheetModel ?: return
-        val lo = minOf(visualAnchor, visualCurrent)
-        val hi = maxOf(visualAnchor, visualCurrent)
-        val modelRows = (lo..hi).map { table.convertRowIndexToModel(it) }.filter { it >= 0 }.sortedDescending()
-        for (mr in modelRows) model.deleteRow(mr)
-        lastChange = null // a range delete isn't meaningfully repeatable at a point
-    }
-
-    private fun yankVisualRows() {
-        val lo = minOf(visualAnchor, visualCurrent)
-        val hi = maxOf(visualAnchor, visualCurrent)
-        yanked = (lo..hi).map { rowValues(it) }
     }
 
     private fun reset() {

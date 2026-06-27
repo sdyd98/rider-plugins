@@ -2,7 +2,6 @@ package com.example.xlsx
 
 import com.intellij.ui.ColorUtil
 import com.intellij.ui.JBColor
-import com.intellij.ui.components.JBTextField
 import com.intellij.util.ui.JBUI
 import com.intellij.util.ui.UIUtil
 import java.awt.Component
@@ -10,7 +9,6 @@ import java.awt.Dimension
 import java.awt.Font
 import java.awt.Graphics
 import java.awt.Point
-import javax.swing.DefaultCellEditor
 import javax.swing.JComponent
 import javax.swing.JTable
 import javax.swing.SwingConstants
@@ -135,25 +133,6 @@ class RowNumberHeader(private val table: JBTable) : JComponent() {
         }
         g.color = JBColor.border()
         g.drawLine(width - 1, clip.y, width - 1, clip.y + clip.height)
-    }
-}
-
-/**
- * Cell editor that shows the **formula text** (e.g. `=A2+B2`) when you edit a formula cell, instead
- * of its computed value — so you can read and edit the formula like in Excel. Committing a value
- * that starts with `=` is treated as a formula by [SheetTableModel.setValueAt].
- */
-class FormulaCellEditor : DefaultCellEditor(JBTextField()) {
-    override fun getTableCellEditorComponent(table: JTable, value: Any?, isSelected: Boolean, row: Int, column: Int): Component {
-        val model = table.model as? SheetTableModel
-        val initial = if (model != null) {
-            val mr = table.convertRowIndexToModel(row)
-            val mc = table.convertColumnIndexToModel(column)
-            if (model.isFormula(mr, mc)) model.formulaText(mr, mc) else value
-        } else {
-            value
-        }
-        return super.getTableCellEditorComponent(table, initial, isSelected, row, column)
     }
 }
 

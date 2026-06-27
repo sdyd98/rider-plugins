@@ -1,7 +1,5 @@
 package com.example.xlsx
 
-import com.intellij.notification.NotificationGroupManager
-import com.intellij.notification.NotificationType
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.application.ModalityState
 import com.intellij.openapi.diagnostic.logger
@@ -10,29 +8,15 @@ import com.intellij.openapi.fileEditor.FileEditorState
 import com.intellij.openapi.fileEditor.FileEditorStateLevel
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.util.UserDataHolderBase
-import com.intellij.openapi.util.io.FileTooBigException
-import com.intellij.openapi.vfs.ReadonlyStatusHandler
-import com.intellij.openapi.vfs.VfsUtilCore
 import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.ui.components.JBLabel
 import com.intellij.ui.components.JBLoadingPanel
 import com.intellij.ui.components.JBTabbedPane
 import com.intellij.ui.table.JBTable
-import org.apache.poi.ss.usermodel.Sheet
-import org.apache.poi.ss.usermodel.Workbook
-import org.apache.poi.ss.usermodel.WorkbookFactory
 import java.awt.BorderLayout
 import java.beans.PropertyChangeListener
 import java.beans.PropertyChangeSupport
-import java.io.ByteArrayInputStream
-import java.io.ByteArrayOutputStream
-import java.util.concurrent.CompletableFuture
-import java.util.concurrent.ExecutorService
-import java.util.concurrent.Executors
 import javax.swing.JComponent
-
-/** Property name fired so the IDE updates the "modified" marker on the editor tab. */
-private const val PROP_MODIFIED = "modified"
 
 /** Rows per streamed batch pushed to the EDT. */
 private const val BATCH_SIZE = 2000
@@ -40,17 +24,15 @@ private const val BATCH_SIZE = 2000
 private val LOG = logger<XlsxFileEditor>()
 
 /**
- * A [FileEditor] that renders an Excel workbook (`.xlsx` or `.xls`) as one editable, filterable
- * grid per sheet, with an optional vim mode.
+ * A [FileEditor] that renders an Excel workbook (`.xlsx` or `.xls`) as one read-only, filterable
+ * grid per sheet, with vim-style navigation.
  *
  * - `.xlsx` is read with the streaming SAX path ([XlsxStreamingReader]) — sheets parse on
  *   background threads (parallel) and rows stream into the grid in batches.
  * - `.xls` (BIFF, capped at 65,536 rows) is read fully via [XlsWorkbookReader] and fed through
  *   the same model.
  *
- * Editing is recorded as an overlay per sheet; the full editable [Workbook] is built lazily on
- * the first edit (via [WorkbookFactory], preserving the original format) and, on save, the overlay
- * is applied and the workbook written back.
+ * This is a viewer: cells are not editable and the file is never written back.
  */
 class XlsxFileEditor(
     private val project: Project,
@@ -59,26 +41,12 @@ class XlsxFileEditor(
 
     private val changeSupport = PropertyChangeSupport(this)
     private val loadingPanel = JBLoadingPanel(BorderLayout(), this)
-    private var modified = false
     private var firstTable: JBTable? = null
 
-    private var originalBytes: ByteArray? = null
     private var panels: List<SheetPanel> = emptyList()
     private var tabbedPane: JBTabbedPane? = null
 
     @Volatile private var disposed = false
-    @Volatile private var saving = false
-    @Volatile private var editableWorkbookFuture: CompletableFuture<Workbook>? = null
-
-    // All POI workbook work (build + non-live save serialize) runs on this single dedicated thread:
-    // serialized so the non-thread-safe workbook is only ever touched by one thread, and off the app
-    // pool so blocking on the build never starves it (which deadlocked saves before).
-    private val poiExecutor: ExecutorService = Executors.newSingleThreadExecutor { r ->
-        Thread(r, "xlsx-poi").apply { isDaemon = true }
-    }
-
-    // Shown once per editor: formulas are not evaluated in-IDE; Excel recalculates them on open.
-    private var formulaNoticeShown = false
 
     init {
         LOG.info("XLSX editor opening: ${file.name}")
@@ -109,7 +77,6 @@ class XlsxFileEditor(
                     fail(e)
                     return@executeOnPooledThread
                 }
-                originalBytes = bytes
                 openLegacyXls(bytes, started)
             } else {
                 // .xlsx: stream straight from the file — don't load the (possibly 100 MB) bytes
@@ -130,8 +97,8 @@ class XlsxFileEditor(
             source = if (localFile != null && localFile.isFile) {
                 XlsxStreamingReader.open(localFile)
             } else {
-                // Non-local file: fall back to the in-memory bytes (also kept for editing).
-                XlsxStreamingReader.open(file.inputStream.use { it.readBytes() }.also { originalBytes = it })
+                // Non-local file: fall back to reading the bytes in memory.
+                XlsxStreamingReader.open(file.inputStream.use { it.readBytes() })
             }
         } catch (e: Throwable) {
             fail(e)
@@ -243,7 +210,7 @@ class XlsxFileEditor(
         loadingPanel.stopLoading()
         val built = names.map { name ->
             SheetPanel(
-                SheetTableModel(name) { onEdited() },
+                SheetTableModel(name),
                 onNextSheet = { switchSheet(1) },
                 onPrevSheet = { switchSheet(-1) },
             )
@@ -280,296 +247,12 @@ class XlsxFileEditor(
         loadingPanel.repaint()
     }
 
-    private fun onEdited() {
-        if (!modified) {
-            modified = true
-            LOG.info("XLSX modified: ${file.name}")
-            changeSupport.firePropertyChange(PROP_MODIFIED, false, true)
-        }
-        ensureEditableWorkbookStarted()
-        // Formula results aren't recomputed in-IDE (POI can't evaluate many of them) — they recalc
-        // when the file is opened in Excel. Tell the user once so a stale result isn't surprising.
-        if (!formulaNoticeShown && panels.any { it.model.hasFormulas() }) {
-            formulaNoticeShown = true
-            notifyInfo("수식 결과는 IDE에서 재계산되지 않습니다 — 저장 후 Excel에서 열 때 재계산됩니다.")
-        }
-    }
-
-    /** Kick off building the full editable workbook in the background (once). */
-    private fun ensureEditableWorkbookStarted() {
-        if (editableWorkbookFuture != null || disposed) return
-        synchronized(this) {
-            if (editableWorkbookFuture != null || disposed) return
-            editableWorkbookFuture = CompletableFuture.supplyAsync(
-                {
-                    // Read the original bytes lazily — the .xlsx open path skips them for speed, so
-                    // the (possibly 100 MB) read only happens here, on first edit.
-                    val bytes = originalBytes ?: java.nio.file.Files.readAllBytes(
-                        com.intellij.openapi.vfs.VfsUtilCore.virtualToIoFile(file).toPath(),
-                    ).also { originalBytes = it }
-                    withPoiClassLoader { WorkbookFactory.create(ByteArrayInputStream(bytes)) }
-                },
-                poiExecutor,
-            )
-        }
-    }
-
-    /**
-     * Replay recorded edits in order, coalescing consecutive InsertRow / DeleteRow runs into a
-     * single (expensive) `shiftRows` call — e.g. vim `5o` / `5dd` near the top of a 100k-row sheet
-     * would otherwise do 5 full-sheet shifts.
-     */
-    private fun replayOps(sheet: Sheet, ops: List<EditOp>) {
-        var i = 0
-        while (i < ops.size) {
-            try {
-                when (val op = ops[i]) {
-                    is EditOp.SetCell -> {
-                        applySetCell(sheet, op)
-                        i++
-                    }
-                    is EditOp.SetFormula -> {
-                        val poiRow = sheet.getRow(op.row) ?: sheet.createRow(op.row)
-                        val cell = poiRow.getCell(op.col) ?: poiRow.createCell(op.col)
-                        try {
-                            cell.setCellFormula(op.formula)
-                        } catch (e: Exception) {
-                            LOG.warn("XLSX invalid formula on save at ${sheet.sheetName} ${op.row},${op.col}: ${e.message}")
-                            cell.setCellValue("=" + op.formula) // invalid formula: keep as text
-                        }
-                        i++
-                    }
-                    is EditOp.InsertRow -> {
-                        var k = 1
-                        while (i + k < ops.size) {
-                            val n = ops[i + k]
-                            if (n is EditOp.InsertRow && n.row == op.row) k++ else break
-                        }
-                        val last = sheet.lastRowNum
-                        if (op.row <= last) sheet.shiftRows(op.row, last, k) // open k blank rows at op.row
-                        i += k
-                    }
-                    is EditOp.DeleteRow -> {
-                        // vim Ndd records a strictly-descending run (R, R-1, …).
-                        var k = 1
-                        while (i + k < ops.size) {
-                            val n = ops[i + k]
-                            if (n is EditOp.DeleteRow && n.row == op.row - k) k++ else break
-                        }
-                        val last = sheet.lastRowNum
-                        val minRow = op.row - k + 1
-                        if (minRow in 0..last) {
-                            val hi = minOf(op.row, last)
-                            for (r in minRow..hi) sheet.getRow(r)?.let { sheet.removeRow(it) }
-                            if (hi < last) sheet.shiftRows(hi + 1, last, -(hi - minRow + 1))
-                        }
-                        i += k
-                    }
-                }
-            } catch (e: IllegalArgumentException) {
-                // e.g. .xls (BIFF8) row/col ceiling exceeded — skip and continue.
-                LOG.warn("XLSX skip op in ${sheet.sheetName}: ${e.message}")
-                i++
-            }
-        }
-    }
-
-    /**
-     * We don't evaluate formulas in-IDE (POI can't compute many of them, and per-edit recalc froze
-     * the UI). Instead flag the workbook so Excel recomputes every formula when the file is opened.
-     */
-    private fun recalcFormulas(workbook: Workbook) {
-        if (panels.none { it.model.hasFormulas() }) return
-        try {
-            // .xlsx (XSSF) honors the workbook-level flag; .xls (HSSF) ignores it and needs the flag
-            // set per sheet — set both so Excel recalculates on open for either format.
-            workbook.setForceFormulaRecalculation(true)
-            for (i in 0 until workbook.numberOfSheets) {
-                workbook.getSheetAt(i).forceFormulaRecalculation = true
-            }
-        } catch (ignored: Exception) {
-        }
-    }
-
-    private fun applySetCell(sheet: Sheet, op: EditOp.SetCell) {
-        if (op.value.isEmpty()) {
-            // Clearing: only touch a cell that already exists (don't bloat the file).
-            sheet.getRow(op.row)?.getCell(op.col)?.setBlank()
-        } else {
-            val row = sheet.getRow(op.row) ?: sheet.createRow(op.row)
-            val cell = row.getCell(op.col) ?: row.createCell(op.col)
-            val number = op.value.toDoubleOrNull()
-            if (number != null) cell.setCellValue(number) else cell.setCellValue(op.value)
-        }
-    }
-
-    private fun markSaved() {
-        if (modified) {
-            modified = false
-            changeSupport.firePropertyChange(PROP_MODIFIED, true, false)
-        }
-    }
-
-    /**
-     * Persist the edits. Called from the save hook ([XlsxSaveListener]) on the EDT. Always serializes
-     * the heavy `workbook.write` on the background [poiExecutor] so the UI never freezes (edits only
-     * touch the model + op log, not the workbook, until this runs).
-     */
-    fun requestSave() {
-        if (disposed || saving) return
-        saveAsync()
-    }
-
-    private fun saveAsync() {
-        if (panels.none { it.model.hasEdits() }) {
-            markSaved()
-            return
-        }
-        ensureEditableWorkbookStarted()
-        val future = editableWorkbookFuture
-        if (future == null) {
-            LOG.warn("XLSX saveAsync: editable workbook future is null (originalBytes=${originalBytes != null})")
-            return
-        }
-        saving = true
-        val app = ApplicationManager.getApplication()
-        // Snapshot edits on the EDT so the background thread doesn't race ongoing edits. For sheets
-        // with row insert/delete, also snapshot the rows: POI's XSSFSheet.shiftRows is O(n) with a
-        // catastrophic constant (~minutes on 100k rows), so those sheets are rebuilt from the model
-        // instead (value-only, but fast). Cell-only sheets keep the formatting-preserving op replay.
-        val plans = panels.map { panel ->
-            val ops = panel.model.drainOps()
-            val structural = ops.any { it is EditOp.InsertRow || it is EditOp.DeleteRow }
-            SavePlan(panel.model.sheetName, ops, if (structural) panel.model.snapshotRows() else null)
-        }
-        poiExecutor.execute {
-            val bytes: ByteArray? = try {
-                val workbook = future.get()
-                withPoiClassLoader {
-                    for (plan in plans) {
-                        if (plan.snapshot != null) {
-                            rebuildSheetFromRows(workbook, plan.name, plan.snapshot)
-                        } else {
-                            workbook.getSheet(plan.name)?.let { replayOps(it, plan.ops) }
-                        }
-                    }
-                    recalcFormulas(workbook)
-                    ByteArrayOutputStream(maxOf(originalBytes?.size ?: 0, 64 * 1024)).use { out ->
-                        workbook.write(out)
-                        out.toByteArray()
-                    }
-                }
-            } catch (e: Throwable) {
-                LOG.warn("XLSX async save failed: ${file.name} — ${e.message}")
-                null
-            }
-            app.invokeLater(Runnable {
-                // writeToFile never throws, so `saving` is always cleared (no stuck save state). Only
-                // mark saved when the write succeeded AND no new edits landed during the save.
-                if (!disposed && bytes != null && writeToFile(bytes) && panels.none { it.model.hasEdits() }) {
-                    markSaved()
-                }
-                saving = false
-            }, ModalityState.any())
-        }
-    }
-
-    /**
-     * Write [bytes] back to the file. Returns false — and leaves the editor "modified" — if the file
-     * can't be written: it's read-only and the user declined to clear that (or VCS check-out failed),
-     * or the write itself errored. Never throws, so the caller's save bookkeeping always completes.
-     */
-    private fun writeToFile(bytes: ByteArray): Boolean {
-        // Make the file writable first: clears an OS read-only flag (prompting the user) or checks it
-        // out from VCS. If it's still read-only afterward the user opted out, so don't write.
-        if (!file.isWritable) {
-            ReadonlyStatusHandler.getInstance(project).ensureFilesWritable(listOf(file))
-            if (!file.isWritable) {
-                LOG.info("XLSX save skipped — read-only: ${file.name}")
-                notifyWarn("저장하지 못했습니다 — '${file.name}'은(는) 읽기 전용입니다.")
-                return false
-            }
-        }
-        return try {
-            try {
-                ApplicationManager.getApplication().runWriteAction {
-                    file.setBinaryContent(bytes, -1L, -1L, this)
-                }
-            } catch (tooBig: FileTooBigException) {
-                // The IDE's VFS refuses to write very large files (same guard as the read side) — write
-                // straight to disk, then refresh the VFS so the IDE sees the new content. The refresh
-                // is outside the write action: a synchronous VFS refresh isn't allowed inside one.
-                java.nio.file.Files.write(VfsUtilCore.virtualToIoFile(file).toPath(), bytes)
-                file.refresh(false, false)
-            }
-            LOG.info("XLSX saved: ${file.name} (${bytes.size} bytes)")
-            true
-        } catch (e: Throwable) {
-            LOG.warn("XLSX write failed: ${file.name} [${e.javaClass.name}]", e)
-            notifyWarn("저장하지 못했습니다 — '${file.name}': ${e.message ?: e.javaClass.simpleName}")
-            false
-        }
-    }
-
-    private fun notifyWarn(message: String) {
-        NotificationGroupManager.getInstance()
-            .getNotificationGroup("XLSX Grid Editor")
-            .createNotification(message, NotificationType.WARNING)
-            .notify(project)
-    }
-
-    private fun notifyInfo(message: String) {
-        NotificationGroupManager.getInstance()
-            .getNotificationGroup("XLSX Grid Editor")
-            .createNotification(message, NotificationType.INFORMATION)
-            .notify(project)
-    }
-
-    private class SavePlan(val name: String, val ops: List<EditOp>, val snapshot: List<Array<String?>>?)
-
-    /**
-     * Rebuild a whole sheet from the model's current rows — the fast alternative to POI's
-     * pathologically slow `shiftRows` (O(n) with a ~minute constant on 100k rows) when a large sheet
-     * had rows inserted/deleted. Cell styles/number-formats for that sheet are not preserved (the
-     * non-formula data-table files that take this path rarely have them); values keep their text vs
-     * number type via a round-trip check so text like "01234" or long IDs are not mangled.
-     */
-    private fun rebuildSheetFromRows(workbook: Workbook, name: String, rows: List<Array<String?>>) {
-        val idx = workbook.getSheetIndex(name)
-        if (idx < 0) return
-        workbook.removeSheetAt(idx)
-        val sheet = workbook.createSheet(name)
-        workbook.setSheetOrder(name, idx)
-        for (r in rows.indices) {
-            val data = rows[r]
-            var poiRow: org.apache.poi.ss.usermodel.Row? = null
-            for (c in data.indices) {
-                val v = data[c]
-                if (v.isNullOrEmpty()) continue
-                if (poiRow == null) poiRow = sheet.createRow(r)
-                val cell = poiRow.createCell(c)
-                val num = numericIfRoundTrips(v)
-                if (num != null) cell.setCellValue(num) else cell.setCellValue(v)
-            }
-        }
-    }
-
-    /**
-     * Parse [v] as a number ONLY if its canonical form is exactly [v] — so text that merely looks
-     * numeric ("01234" zip codes, 16+ digit IDs that lose precision as a double, "1,000" grouped
-     * numbers) stays text instead of being silently coerced when a sheet is rebuilt.
-     */
-    private fun numericIfRoundTrips(v: String): Double? {
-        val d = v.toDoubleOrNull() ?: return null
-        val canonical = if (d == Math.floor(d) && !d.isInfinite() && Math.abs(d) < 1e15) d.toLong().toString() else d.toString()
-        return if (canonical == v) d else null
-    }
 
     override fun getComponent(): JComponent = loadingPanel
     override fun getPreferredFocusedComponent(): JComponent? = firstTable
     override fun getName(): String = "Spreadsheet"
     override fun getFile(): VirtualFile = file
-    override fun isModified(): Boolean = modified
+    override fun isModified(): Boolean = false // read-only viewer
     override fun isValid(): Boolean = file.isValid
     override fun getState(level: FileEditorStateLevel): FileEditorState = FileEditorState.INSTANCE
     override fun setState(state: FileEditorState) {}
@@ -582,21 +265,5 @@ class XlsxFileEditor(
 
     override fun dispose() {
         disposed = true
-        val future = editableWorkbookFuture
-        editableWorkbookFuture = null
-        // Close the workbook ON poiExecutor so it serializes AFTER any in-flight build/save — never
-        // racing workbook.write on the same non-thread-safe workbook. shutdown() (not shutdownNow)
-        // lets those queued tasks drain on the daemon thread; an in-flight save's bytes are dropped
-        // by the disposed check in saveAsync's invokeLater, so nothing reaches disk after dispose.
-        if (future != null) {
-            poiExecutor.execute {
-                try {
-                    withPoiClassLoader { future.get().close() }
-                } catch (e: Exception) {
-                    // ignore on close
-                }
-            }
-        }
-        poiExecutor.shutdown()
     }
 }
