@@ -8,6 +8,9 @@ out/
 # IntelliJ Platform plugin sandbox + caches — large (GBs), machine-specific. MUST be ignored.
 .intellijPlatform/
 
+# Large load-test datasets (generated; never commit — GitHub blocks >100MB files)
+samples/loadtest-*
+
 # IDE
 .idea/
 *.iml

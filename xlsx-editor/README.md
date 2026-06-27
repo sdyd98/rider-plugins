@@ -82,26 +82,47 @@ xlsx-editor/
   `p`/`P` **paste the yanked row(s) as new rows below/above**, `u` **undo** (cell edits, row
   insert/delete, paste — per-sheet undo stack), `.` **repeat last change** (`x`/`dd`/`p`/`P`, with a
   count), `V` **visual-line mode** (then `j`/`k` extend the row range, `d`/`x` delete, `y` yank, Esc
-  cancel), `gt`/`gT` **next/previous sheet**, `/` focus filter. (`Ctrl+D`/`U`/`E`/`Y` and `Ctrl+Alt+F`
-  use `registerCustomShortcutSet` to beat IDE-global bindings.) Insert mode is just the native cell editor (focus moves to it; Esc/Enter returns to Normal)
+  cancel), `gt`/`gT` **next/previous sheet**, `/` focus filter, `?` **show a shortcut cheat-sheet
+  popup**. (`Ctrl+D`/`U`/`E`/`Y` and `Ctrl+Alt+F` use `registerCustomShortcutSet` to beat IDE-global
+  bindings.) Insert mode is just the native cell editor (focus moves to it; Esc/Enter returns to Normal)
   — no mode indicator. Row insert/delete are recorded as an ordered op log; on save a sheet that had
   any row insert/delete is rebuilt from the model (fast, value-only — see *Known limitations*), while
   cell-only sheets and live-formula files replay edits onto the workbook (`shiftRows`). IdeaVim
   can't be reused — it targets text editors, not a grid.
 
+- **Frozen header rows + column jump:** press **`Alt+Shift+F`** to freeze the top rows through the
+  cursor (model rows `0..current`); press it again to **unfreeze**. Frozen rows pin to the top while
+  scrolling **and** stay visible through filtering. Frozen rows live in a separate `frozenTable` placed in the scroll pane's column-header
+  view, sharing the main table's column model so widths stay in sync; the main table's `RowFilter`
+  excludes them. One frozen row is the **key row** (`Alt+K` cycles it) whose values name the columns
+  in the **`Alt+\`** jump popup (type to filter, choose to move the cursor to that column). Editing a
+  frozen header value is done by unfreezing first.
+
 - **Grid styling** (`GridStyling.kt`): an Excel-style row-number gutter (`RowNumberHeader`, painted
   from live table geometry so it tracks scroll/filter/edits), a `GridCellRenderer` (zebra striping,
   right-aligned numbers, bold first/header row), column auto-sizing from a row sample, and a status
-  bar showing the current cell reference (e.g. `C5`), visible/total row counts, and active filters.
+  bar showing the current cell reference (e.g. `C5`), visible/total row counts, active filters, and
+  the freeze/key-row state.
 
 ### Performance note (measured)
 
-For this data (numeric, single sheet) streaming is **not faster in raw parse time** than the full
-usermodel (100k rows ≈ 0.8–1.5 s either way; tiny files are slightly slower due to package-open
-overhead). The wins are: lower **memory** (compact strings vs ~600k POI cell objects), faster
-**perceived** open (skeleton + first rows in tens of ms instead of a ~1 s spinner), and **parallel
-per-sheet** parsing for multi-sheet workbooks. Multithreading a single sheet's XML cannot help —
-it is one sequential inflate + SAX stream (Amdahl), and POI workbooks are not thread-safe to share.
+The wins of streaming are: lower **memory** (compact strings vs ~600k POI cell objects), faster
+**perceived** open, and **parallel per-sheet** parsing for multi-sheet workbooks.
+
+For **large files** the open path is tuned to show content fast (measured on a 100 MB / 20-sheet /
+1.06 M-row `.xlsx`, first paint ~1.8 s → **~0.3 s**):
+
+- Open the OPC package from the local **io File** (`VfsUtilCore.virtualToIoFile`) — random access via
+  the zip central directory is ~67 ms vs ~1.5 s when inflating a 100 MB byte stream.
+- `open()` reads only shared strings + styles + sheet **names**; each sheet's XML is decompressed
+  **lazily** (active sheet first) on a background thread and parsed in parallel, so the tabs appear
+  before the (~1.6 s) decompression of every sheet. The editable workbook's bytes are read lazily on
+  the first edit, not 100 MB up front.
+- `.xls` has no streaming (HSSF builds the whole workbook ~1.8 s), but the tabs show right after the
+  build and sheets render incrementally (active first), so first paint is ~2.3 s rather than ~4.4 s.
+
+Large `.xls`/`.xlsx` also need the IDE's heap raised (Help → Change Memory Settings) and the plugin
+lifts POI's anti-DoS array cap + bypasses the IDE's ~20 MB content-load limit so big files open.
 
 ## Build & run
 

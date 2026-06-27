@@ -1,6 +1,7 @@
 package com.example.xlsx
 
 import org.apache.poi.openxml4j.opc.OPCPackage
+import org.apache.poi.openxml4j.opc.PackageAccess
 import org.apache.poi.ss.usermodel.DataFormatter
 import org.apache.poi.ss.util.CellReference
 import org.apache.poi.util.XMLHelper
@@ -22,31 +23,61 @@ import java.io.ByteArrayInputStream
  */
 object XlsxStreamingReader {
 
-    /** Everything needed to parse sheets, fully detached from the (already closed) package. */
+    /**
+     * Sheet names + the (immutable) shared strings & styles, with the package still **open** so each
+     * sheet's XML can be read lazily — see [readSheets]. This lets the tabs show before the (slow)
+     * decompression of every sheet's XML.
+     */
     class Source(
         val names: List<String>,
-        val sheetXml: List<ByteArray>,
         val sst: SharedStrings,
         val styles: StylesTable,
-    )
-
-    /** Opens the package, loads shared strings + styles, and reads each sheet's raw XML bytes. */
-    fun open(bytes: ByteArray): Source = withPoiClassLoader {
-        OPCPackage.open(ByteArrayInputStream(bytes)).use { pkg ->
-            val sst = ReadOnlySharedStringsTable(pkg)
-            val reader = XSSFReader(pkg)
-            val styles = reader.stylesTable
-            val names = ArrayList<String>()
-            val xmls = ArrayList<ByteArray>()
-            val sheets = reader.sheetsData as XSSFReader.SheetIterator
-            while (sheets.hasNext()) {
-                val input = sheets.next()
-                val name = sheets.sheetName
-                input.use { xmls.add(it.readBytes()) }
-                names.add(name)
+        private val pkg: OPCPackage,
+    ) {
+        /**
+         * Read each sheet's XML in document order (sheet 0 — the initially-shown tab — first),
+         * invoking [onSheet] per sheet, then close the package. Run on a single background thread
+         * (the package/iterator isn't safe for concurrent reads); callers parse each XML in parallel.
+         */
+        fun readSheets(onSheet: (index: Int, xml: ByteArray) -> Unit) = withPoiClassLoader {
+            try {
+                val sheets = XSSFReader(pkg).sheetsData as XSSFReader.SheetIterator
+                var i = 0
+                while (sheets.hasNext()) {
+                    val xml = sheets.next().use { it.readBytes() }
+                    onSheet(i, xml)
+                    i++
+                }
+            } finally {
+                try {
+                    pkg.close()
+                } catch (ignored: Exception) {
+                }
             }
-            Source(names, xmls, sst, styles)
         }
+    }
+
+    /**
+     * Opens the package **from the file** (random access — ~67 ms vs ~1.5 s from a byte stream) and
+     * reads only the shared strings, styles, and sheet **names**, NOT each sheet's XML. First paint
+     * then needs only ~0.2 s; sheet XML is decompressed lazily via [Source.readSheets].
+     */
+    fun open(file: java.io.File): Source = withPoiClassLoader { openPackage(OPCPackage.open(file, PackageAccess.READ)) }
+
+    /** Fallback for when the file isn't a plain local path: open from the in-memory bytes. */
+    fun open(bytes: ByteArray): Source = withPoiClassLoader { openPackage(OPCPackage.open(ByteArrayInputStream(bytes))) }
+
+    private fun openPackage(pkg: OPCPackage): Source {
+        val sst = ReadOnlySharedStringsTable(pkg)
+        val reader = XSSFReader(pkg)
+        val styles = reader.stylesTable
+        val names = ArrayList<String>()
+        val sheets = reader.sheetsData as XSSFReader.SheetIterator
+        while (sheets.hasNext()) {
+            sheets.next().close() // get the name without decompressing the sheet body
+            names.add(sheets.sheetName)
+        }
+        return Source(names, sst, styles, pkg)
     }
 
     /** SAX-parses one sheet's XML, delivering rows (as display strings) in [batchSize] batches. */

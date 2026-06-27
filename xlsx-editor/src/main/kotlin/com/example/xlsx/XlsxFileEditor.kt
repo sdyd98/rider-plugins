@@ -93,27 +93,48 @@ class XlsxFileEditor(
         val app = ApplicationManager.getApplication()
         app.executeOnPooledThread {
             val started = System.currentTimeMillis()
-            val bytes: ByteArray
+            // Raise POI's anti-DoS per-record array cap (default ~5M) so large legacy .xls files can
+            // be read — a user-opened spreadsheet is trusted; the real limit then becomes heap.
             try {
-                bytes = file.contentsToByteArray()
-            } catch (e: Throwable) {
-                fail(e)
-                return@executeOnPooledThread
+                org.apache.poi.util.IOUtils.setByteArrayMaxOverride(500_000_000)
+            } catch (ignored: Throwable) {
             }
-            originalBytes = bytes
             if (file.extension?.equals("xls", ignoreCase = true) == true) {
+                // .xls (HSSF) needs the whole workbook in memory — read the bytes now (from the local
+                // io file when possible; stream read, not contentsToByteArray(), bypasses the IDE's
+                // ~20MB FileTooBigException limit).
+                val bytes = try {
+                    val io = try { com.intellij.openapi.vfs.VfsUtilCore.virtualToIoFile(file) } catch (e: Exception) { null }
+                    if (io != null && io.isFile) java.nio.file.Files.readAllBytes(io.toPath())
+                    else file.inputStream.use { it.readBytes() }
+                } catch (e: Throwable) {
+                    fail(e)
+                    return@executeOnPooledThread
+                }
+                originalBytes = bytes
                 openLegacyXls(bytes, started)
             } else {
-                openStreamingXlsx(bytes, started)
+                // .xlsx: stream straight from the file — don't load the (possibly 100 MB) bytes
+                // upfront; they're read lazily only if the user edits (for the editable workbook).
+                openStreamingXlsx(started)
             }
         }
     }
 
-    private fun openStreamingXlsx(bytes: ByteArray, started: Long) {
+    private fun openStreamingXlsx(started: Long) {
         val app = ApplicationManager.getApplication()
         val source: XlsxStreamingReader.Source
         try {
-            source = XlsxStreamingReader.open(bytes)
+            // Open from the local file (random access — ~16 ms vs ~1.5 s from a byte stream for a
+            // 100 MB file, and avoids loading the whole file into memory just to open it). Use
+            // VfsUtilCore (NOT toNioPath().toFile(), which throws under the IDE's custom nio FS).
+            val localFile = try { com.intellij.openapi.vfs.VfsUtilCore.virtualToIoFile(file) } catch (e: Exception) { null }
+            source = if (localFile != null && localFile.isFile) {
+                XlsxStreamingReader.open(localFile)
+            } else {
+                // Non-local file: fall back to the in-memory bytes (also kept for editing).
+                XlsxStreamingReader.open(file.inputStream.use { it.readBytes() }.also { originalBytes = it })
+            }
         } catch (e: Throwable) {
             fail(e)
             return
@@ -124,17 +145,22 @@ class XlsxFileEditor(
                 LOG.info("XLSX first paint: ${file.name} — ${source.names.size} sheet(s) in ${System.currentTimeMillis() - started} ms")
             }
         }, ModalityState.any())
-        for (i in source.names.indices) {
-            app.executeOnPooledThread { parseOneSheet(source, i) }
-            app.executeOnPooledThread { scanFormulas(source, i) } // in parallel with the value parse
+        // Read each sheet's XML lazily on one background thread (the active sheet — index 0 — first);
+        // parse + scan each sheet in parallel as its XML arrives, so rows show without waiting for
+        // every sheet's XML to be decompressed up front (~1.6 s for a 100 MB / 20-sheet file).
+        app.executeOnPooledThread {
+            source.readSheets { i, xml ->
+                app.executeOnPooledThread { parseOneSheet(i, xml, source.sst, source.styles) }
+                app.executeOnPooledThread { scanFormulas(i, xml) }
+            }
         }
     }
 
-    private fun scanFormulas(source: XlsxStreamingReader.Source, index: Int) {
+    private fun scanFormulas(index: Int, xml: ByteArray) {
         val map = try {
-            FormulaScanner.scan(source.sheetXml[index])
+            FormulaScanner.scan(xml)
         } catch (e: Throwable) {
-            LOG.warn("XLSX formula scan failed: ${source.names[index]} — ${e.message}")
+            LOG.warn("XLSX formula scan failed: sheet $index — ${e.message}")
             emptyMap()
         }
         if (map.isEmpty()) return
@@ -149,49 +175,66 @@ class XlsxFileEditor(
         )
     }
 
-    private fun parseOneSheet(source: XlsxStreamingReader.Source, index: Int) {
+    private fun parseOneSheet(index: Int, xml: ByteArray, sst: org.apache.poi.xssf.model.SharedStrings, styles: org.apache.poi.xssf.model.StylesTable) {
         val app = ApplicationManager.getApplication()
         val started = System.currentTimeMillis()
         try {
-            XlsxStreamingReader.parseSheet(source.sheetXml[index], source.sst, source.styles, BATCH_SIZE) { batch ->
+            XlsxStreamingReader.parseSheet(xml, sst, styles, BATCH_SIZE) { batch ->
                 app.invokeLater(Runnable { if (!disposed) panels.getOrNull(index)?.model?.appendBatch(batch) }, ModalityState.any())
             }
         } catch (e: Throwable) {
-            LOG.warn("XLSX sheet parse failed: ${source.names[index]} — ${e.message}")
+            LOG.warn("XLSX sheet parse failed: sheet $index — ${e.message}")
         } finally {
             app.invokeLater(Runnable {
                 if (disposed) return@Runnable
                 val panel = panels.getOrNull(index) ?: return@Runnable
                 panel.onStreamingFinished()
-                LOG.info("XLSX sheet loaded: ${source.names[index]} — ${panel.model.loadedRowCount()} row(s) in ${System.currentTimeMillis() - started} ms")
+                LOG.info("XLSX sheet loaded: ${panel.model.sheetName} — ${panel.model.loadedRowCount()} row(s) in ${System.currentTimeMillis() - started} ms")
             }, ModalityState.any())
         }
     }
 
     private fun openLegacyXls(bytes: ByteArray, started: Long) {
         val app = ApplicationManager.getApplication()
-        val sheets: List<XlsWorkbookReader.SheetData>
-        try {
-            sheets = XlsWorkbookReader.read(bytes)
+        // Build the whole workbook (HSSF can't stream) — then show the tabs immediately, before
+        // rendering every sheet's cells (which is the larger cost for a big .xls).
+        val wb = try {
+            XlsWorkbookReader.open(bytes)
         } catch (e: Throwable) {
             fail(e)
             return
         }
+        val names = XlsWorkbookReader.sheetNames(wb)
         app.invokeLater(Runnable {
-            if (disposed) return@Runnable
-            buildTabs(sheets.map { it.name })
-            LOG.info("XLS first paint: ${file.name} — ${sheets.size} sheet(s) in ${System.currentTimeMillis() - started} ms")
-            sheets.forEachIndexed { i, sheet ->
-                val panel = panels.getOrNull(i) ?: return@forEachIndexed
-                for (chunk in sheet.rows.chunked(BATCH_SIZE)) panel.model.appendBatch(chunk)
-                panel.onStreamingFinished()
-                if (sheet.formulas.isNotEmpty()) {
-                    panel.applyFormulas(sheet.formulas)
-                    ensureLiveMode()
-                }
-                LOG.info("XLS sheet loaded: ${sheet.name} — ${panel.model.loadedRowCount()} row(s)")
+            if (!disposed) {
+                buildTabs(names)
+                LOG.info("XLS first paint: ${file.name} — ${names.size} sheet(s) in ${System.currentTimeMillis() - started} ms")
             }
         }, ModalityState.any())
+        // Render sheets one at a time (the active sheet — index 0 — first) and fill each model as it
+        // finishes, so the visible sheet appears right after the build instead of after all 20.
+        app.executeOnPooledThread {
+            try {
+                for (i in names.indices) {
+                    if (disposed) break
+                    val data = XlsWorkbookReader.renderSheet(wb, i)
+                    val sheetStarted = System.currentTimeMillis()
+                    app.invokeLater(Runnable {
+                        if (disposed) return@Runnable
+                        val panel = panels.getOrNull(i) ?: return@Runnable
+                        for (chunk in data.rows.chunked(BATCH_SIZE)) panel.model.appendBatch(chunk)
+                        panel.onStreamingFinished()
+                        if (data.formulas.isNotEmpty()) {
+                            panel.applyFormulas(data.formulas)
+                            ensureLiveMode()
+                        }
+                        LOG.info("XLS sheet loaded: ${data.name} — ${panel.model.loadedRowCount()} row(s) in ${System.currentTimeMillis() - sheetStarted} ms")
+                    }, ModalityState.any())
+                }
+            } finally {
+                withPoiClassLoader { try { wb.close() } catch (ignored: Exception) {} }
+            }
+        }
     }
 
     private fun fail(e: Throwable) {
@@ -256,9 +299,15 @@ class XlsxFileEditor(
         if (editableWorkbookFuture != null || disposed) return
         synchronized(this) {
             if (editableWorkbookFuture != null || disposed) return
-            val bytes = originalBytes ?: return
             editableWorkbookFuture = CompletableFuture.supplyAsync(
-                { withPoiClassLoader { WorkbookFactory.create(ByteArrayInputStream(bytes)) } },
+                {
+                    // Read the original bytes lazily — the .xlsx open path skips them for speed, so
+                    // the (possibly 100 MB) read only happens here, on first edit.
+                    val bytes = originalBytes ?: java.nio.file.Files.readAllBytes(
+                        com.intellij.openapi.vfs.VfsUtilCore.virtualToIoFile(file).toPath(),
+                    ).also { originalBytes = it }
+                    withPoiClassLoader { WorkbookFactory.create(ByteArrayInputStream(bytes)) }
+                },
                 poiExecutor,
             )
         }
