@@ -1,5 +1,8 @@
 package com.example.xlsx
 
+import androidx.compose.foundation.text.input.TextFieldState
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.ui.focus.FocusRequester
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.application.ModalityState
 import com.intellij.openapi.diagnostic.logger
@@ -17,6 +20,8 @@ import java.awt.BorderLayout
 import java.beans.PropertyChangeListener
 import java.beans.PropertyChangeSupport
 import javax.swing.JComponent
+import javax.swing.JPanel
+import javax.swing.Timer
 
 /** Rows per streamed batch pushed to the EDT. */
 private const val BATCH_SIZE = 2000
@@ -47,6 +52,17 @@ class XlsxFileEditor(
     private var tabbedPane: JBTabbedPane? = null
 
     @Volatile private var disposed = false
+
+    // Shared Compose (Jewel) chrome — ONE filter bar + ONE status bar for the whole editor, bound to
+    // the active sheet's tab (see ComposeChrome.kt). One Compose surface pair, not one per sheet, so a
+    // 20-sheet workbook doesn't pay 40 Compose-panel setups on open.
+    private val filterQuery = TextFieldState()
+    private val filterFocus = FocusRequester()
+    private val statusText = mutableStateOf(" ")
+    private var activeSheet: SheetPanel? = null
+    // Debounce so a keystroke at 100k rows doesn't re-filter on every char.
+    private val filterDebounce = Timer(150) { activeSheet?.applyFilter(filterQuery.text.toString()) }
+        .apply { isRepeats = false }
 
     init {
         LOG.info("XLSX editor opening: ${file.name}")
@@ -213,6 +229,7 @@ class XlsxFileEditor(
                 SheetTableModel(name),
                 onNextSheet = { switchSheet(1) },
                 onPrevSheet = { switchSheet(-1) },
+                onFocusFilter = { focusSharedFilter() },
             )
         }
         panels = built
@@ -222,12 +239,50 @@ class XlsxFileEditor(
         } else {
             JBTabbedPane().also { tabs ->
                 built.forEach { tabs.addTab(it.model.sheetName, it.component) }
+                tabs.addChangeListener { panels.getOrNull(tabs.selectedIndex)?.let { setActiveSheet(it) } }
                 tabbedPane = tabs
             }
         }
-        loadingPanel.add(center, BorderLayout.CENTER)
+        // Wrap the grid(s) with ONE shared Compose filter bar (top) + status bar (bottom).
+        val chrome = JPanel(BorderLayout()).apply {
+            add(
+                createFilterBar(
+                    filterQuery,
+                    filterFocus,
+                    onQueryChanged = { filterDebounce.restart() },
+                    onEnter = {
+                        filterDebounce.stop()
+                        activeSheet?.applyFilter(filterQuery.text.toString())
+                        activeSheet?.focusGrid()
+                    },
+                ),
+                BorderLayout.NORTH,
+            )
+            add(center, BorderLayout.CENTER)
+            add(createStatusBar(statusText), BorderLayout.SOUTH)
+        }
+        loadingPanel.add(chrome, BorderLayout.CENTER)
+        built.firstOrNull()?.let { setActiveSheet(it) }
         loadingPanel.revalidate()
         loadingPanel.repaint()
+    }
+
+    /** Point the shared filter + status bars at [panel] (the active tab). */
+    private fun setActiveSheet(panel: SheetPanel) {
+        if (activeSheet === panel) return
+        activeSheet?.statusSink = null
+        activeSheet = panel
+        panel.statusSink = { text -> statusText.value = text }
+        // Show this sheet's own filter query in the shared bar, then refresh its status line.
+        filterQuery.edit { replace(0, length, panel.filterText()) }
+        panel.refreshStatus()
+    }
+
+    private fun focusSharedFilter() {
+        try {
+            filterFocus.requestFocus()
+        } catch (ignored: Exception) {
+        }
     }
 
     /** vim `gt`/`gT`: cycle to the next/previous sheet and focus its grid. */
@@ -265,5 +320,6 @@ class XlsxFileEditor(
 
     override fun dispose() {
         disposed = true
+        filterDebounce.stop()
     }
 }

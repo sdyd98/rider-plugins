@@ -7,24 +7,16 @@ import com.intellij.openapi.ui.popup.JBPopupFactory
 import com.intellij.openapi.util.text.StringUtil
 import com.intellij.ui.ColorUtil
 import com.intellij.ui.JBColor
-import com.intellij.ui.SearchTextField
-import com.intellij.ui.components.JBLabel
 import com.intellij.ui.components.JBScrollPane
 import com.intellij.ui.table.JBTable
 import com.intellij.util.ui.JBUI
-import com.intellij.util.ui.UIUtil
 import org.apache.poi.ss.util.CellReference
 import java.awt.BorderLayout
 import java.awt.Component
-import java.awt.event.KeyAdapter
-import java.awt.event.KeyEvent
 import javax.swing.JComponent
 import javax.swing.JPanel
 import javax.swing.JTable
 import javax.swing.RowFilter
-import javax.swing.Timer
-import javax.swing.event.DocumentEvent
-import javax.swing.event.DocumentListener
 import javax.swing.event.ListSelectionListener
 import javax.swing.table.TableRowSorter
 
@@ -43,6 +35,7 @@ class SheetPanel(
     val model: SheetTableModel,
     onNextSheet: () -> Unit = {},
     onPrevSheet: () -> Unit = {},
+    onFocusFilter: () -> Unit = {},
 ) {
 
     val table: JBTable = object : JBTable(model) {
@@ -86,17 +79,15 @@ class SheetPanel(
 
     private val scrollPane = JBScrollPane(table)
     private val rowHeader = RowNumberHeader(table)
-    private val statusBar = JBLabel(" ").apply {
-        border = JBUI.Borders.compound(JBUI.Borders.customLineTop(JBColor.border()), JBUI.Borders.empty(3, 8))
-        foreground = UIUtil.getContextHelpForeground()
-    }
+
+    // The filter bar + status bar are owned by the editor (one shared Compose pair, not one per
+    // sheet — see XlsxFileEditor). This sheet holds its own filter query and a status sink that the
+    // editor points at the active sheet so its status drives the shared status bar.
+    private var filterQueryText: String = ""
+    var statusSink: ((String) -> Unit)? = null
+    private var ready = false
 
     private var sorter: TableRowSorter<SheetTableModel>? = null
-
-    private val filterField = SearchTextField().apply {
-        isEnabled = false
-        textEditor.emptyText.text = "Filter rows (regex) across all columns…"
-    }
 
     private val columnFilter = ColumnFilterController(table, model) {
         rebuildRowFilter()
@@ -104,21 +95,16 @@ class SheetPanel(
         table.tableHeader.repaint()
     }
 
-    // Vim mode is always on; mode is not displayed.
+    // Vim mode is always on; mode is not displayed. `/` focuses the editor's shared filter bar.
     private val vim = VimGridController(
         table,
-        onFocusFilter = { if (filterField.isEnabled) filterField.requestFocusInWindow() },
+        onFocusFilter = onFocusFilter,
         onNextSheet = onNextSheet,
         onPrevSheet = onPrevSheet,
     )
 
-    // Debounce so a keystroke at 100k rows doesn't re-filter on every char.
-    private val debounce = Timer(150) { rebuildRowFilter(); updateStatus() }.apply { isRepeats = false }
-
     val component: JComponent = JPanel(BorderLayout()).apply {
-        add(buildToolbar(), BorderLayout.NORTH)
         add(scrollPane, BorderLayout.CENTER)
-        add(statusBar, BorderLayout.SOUTH)
     }
 
     init {
@@ -170,30 +156,28 @@ class SheetPanel(
         }.registerCustomShortcutSet(CustomShortcutSet.fromString(shortcut), table)
     }
 
-    private fun buildToolbar(): JComponent {
-        filterField.addDocumentListener(object : DocumentListener {
-            override fun insertUpdate(e: DocumentEvent) = debounce.restart()
-            override fun removeUpdate(e: DocumentEvent) = debounce.restart()
-            override fun changedUpdate(e: DocumentEvent) = debounce.restart()
-        })
-        // Enter in the filter applies immediately and returns focus to the grid (for vim navigation).
-        filterField.textEditor.addKeyListener(object : KeyAdapter() {
-            override fun keyPressed(e: KeyEvent) {
-                if (e.keyCode == KeyEvent.VK_ENTER) {
-                    debounce.stop()
-                    rebuildRowFilter()
-                    updateStatus()
-                    if (table.rowCount > 0 && table.selectedRow < 0) table.changeSelection(0, 0, false, false)
-                    table.requestFocusInWindow()
-                    e.consume()
-                }
-            }
-        })
-        return JPanel(BorderLayout()).apply {
-            border = JBUI.Borders.empty(2, 6)
-            add(JBLabel("Filter: "), BorderLayout.WEST)
-            add(filterField, BorderLayout.CENTER)
-        }
+    // ---- Shared filter / status (driven by the editor's chrome) ----
+
+    /** Apply a filter query (from the shared bar). Safe before streaming finishes — [rebuildRowFilter]
+     *  no-ops until the sorter exists. */
+    fun applyFilter(query: String) {
+        filterQueryText = query
+        rebuildRowFilter()
+        updateStatus()
+    }
+
+    fun filterText(): String = filterQueryText
+
+    /** True once streaming finished and the filter sorter is attached. */
+    fun isReady(): Boolean = ready
+
+    /** Recompute the status line and push it to the sink (e.g. when this sheet becomes active). */
+    fun refreshStatus() = updateStatus()
+
+    /** Focus the grid and ensure a selection (called after Enter in the shared filter). */
+    fun focusGrid() {
+        if (table.rowCount > 0 && table.selectedRow < 0) table.changeSelection(0, 0, false, false)
+        table.requestFocusInWindow()
     }
 
     /** Called on the EDT once the sheet has finished streaming. */
@@ -209,7 +193,7 @@ class SheetPanel(
         sorter = s
         columnFilter.install()
         autoSizeColumns(table)
-        filterField.isEnabled = true
+        ready = true
         rowHeader.revalidate(); rowHeader.repaint()
         updateStatus()
     }
@@ -316,7 +300,7 @@ class SheetPanel(
     /** Combine the global text query, the per-column value filters, and the frozen-row exclusion. */
     private fun rebuildRowFilter() {
         val s = sorter ?: return
-        val query = filterField.text.trim()
+        val query = filterQueryText.trim()
         val columns = columnFilter.activeFilters()
         val frozen = frozenRowCount
         if (query.isEmpty() && columns.isEmpty() && frozen == 0) {
@@ -371,7 +355,7 @@ class SheetPanel(
         val visible = table.rowCount
         val total = model.loadedRowCount()
         val rowsText = if (visible == total) "%,d rows".format(total) else "%,d / %,d rows".format(visible, total)
-        val filters = columnFilter.activeFilters().size + (if (filterField.text.isNotBlank()) 1 else 0)
+        val filters = columnFilter.activeFilters().size + (if (filterQueryText.isNotBlank()) 1 else 0)
         val formula = if (valid) {
             val mr = table.convertRowIndexToModel(r)
             val mc = table.convertColumnIndexToModel(c)
@@ -386,6 +370,6 @@ class SheetPanel(
             if (filters > 0) add("$filters filter(s)")
             if (frozenRowCount > 0) add("❄ $frozenRowCount frozen · key r${keyRow + 1}")
         }
-        statusBar.text = parts.joinToString("   •   ")
+        statusSink?.invoke(parts.joinToString("   •   "))
     }
 }
