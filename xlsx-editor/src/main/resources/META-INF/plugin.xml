@@ -35,6 +35,9 @@
 
         <!-- The custom grid editor for .xlsx files. -->
         <fileEditorProvider implementation="com.example.xlsx.XlsxFileEditorProvider"/>
+
+        <!-- Balloon notifications (e.g. when a save fails because the file is read-only). -->
+        <notificationGroup id="XLSX Grid Editor" displayType="BALLOON"/>
     </extensions>
 
     <!-- App-level hook so Ctrl+S / Save All reaches our non-text editor and writes the file. -->

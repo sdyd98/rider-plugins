@@ -1,5 +1,7 @@
 package com.example.xlsx
 
+import com.intellij.notification.NotificationGroupManager
+import com.intellij.notification.NotificationType
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.application.ModalityState
 import com.intellij.openapi.diagnostic.logger
@@ -8,6 +10,7 @@ import com.intellij.openapi.fileEditor.FileEditorState
 import com.intellij.openapi.fileEditor.FileEditorStateLevel
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.util.UserDataHolderBase
+import com.intellij.openapi.vfs.ReadonlyStatusHandler
 import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.ui.components.JBLabel
 import com.intellij.ui.components.JBLoadingPanel
@@ -574,8 +577,7 @@ class XlsxFileEditor(
         // also avoids racing live activation against a background save during the workbook build.
         if (liveRequested) {
             val bytes = serializeBytes() ?: return
-            writeToFile(bytes)
-            markSaved()
+            if (writeToFile(bytes)) markSaved()
         } else {
             saveAsync()
         }
@@ -625,20 +627,50 @@ class XlsxFileEditor(
                 null
             }
             app.invokeLater(Runnable {
-                if (!disposed && bytes != null) {
-                    writeToFile(bytes)
-                    if (panels.none { it.model.hasEdits() }) markSaved() // keep "modified" if edited during save
+                // writeToFile never throws, so `saving` is always cleared (no stuck save state). Only
+                // mark saved when the write succeeded AND no new edits landed during the save.
+                if (!disposed && bytes != null && writeToFile(bytes) && panels.none { it.model.hasEdits() }) {
+                    markSaved()
                 }
                 saving = false
             }, ModalityState.any())
         }
     }
 
-    private fun writeToFile(bytes: ByteArray) {
-        ApplicationManager.getApplication().runWriteAction {
-            file.setBinaryContent(bytes, -1L, -1L, this)
+    /**
+     * Write [bytes] back to the file. Returns false — and leaves the editor "modified" — if the file
+     * can't be written: it's read-only and the user declined to clear that (or VCS check-out failed),
+     * or the write itself errored. Never throws, so the caller's save bookkeeping always completes.
+     */
+    private fun writeToFile(bytes: ByteArray): Boolean {
+        // Make the file writable first: clears an OS read-only flag (prompting the user) or checks it
+        // out from VCS. If it's still read-only afterward the user opted out, so don't write.
+        if (!file.isWritable) {
+            ReadonlyStatusHandler.getInstance(project).ensureFilesWritable(listOf(file))
+            if (!file.isWritable) {
+                LOG.info("XLSX save skipped — read-only: ${file.name}")
+                notifyWarn("저장하지 못했습니다 — '${file.name}'은(는) 읽기 전용입니다.")
+                return false
+            }
         }
-        LOG.info("XLSX saved: ${file.name} (${bytes.size} bytes)")
+        return try {
+            ApplicationManager.getApplication().runWriteAction {
+                file.setBinaryContent(bytes, -1L, -1L, this)
+            }
+            LOG.info("XLSX saved: ${file.name} (${bytes.size} bytes)")
+            true
+        } catch (e: Throwable) {
+            LOG.warn("XLSX write failed: ${file.name} — ${e.message}")
+            notifyWarn("저장하지 못했습니다 — '${file.name}': ${e.message}")
+            false
+        }
+    }
+
+    private fun notifyWarn(message: String) {
+        NotificationGroupManager.getInstance()
+            .getNotificationGroup("XLSX Grid Editor")
+            .createNotification(message, NotificationType.WARNING)
+            .notify(project)
     }
 
     private class SavePlan(val name: String, val ops: List<EditOp>, val snapshot: List<Array<String?>>?)
