@@ -10,7 +10,9 @@ import com.intellij.openapi.fileEditor.FileEditorState
 import com.intellij.openapi.fileEditor.FileEditorStateLevel
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.util.UserDataHolderBase
+import com.intellij.openapi.util.io.FileTooBigException
 import com.intellij.openapi.vfs.ReadonlyStatusHandler
+import com.intellij.openapi.vfs.VfsUtilCore
 import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.ui.components.JBLabel
 import com.intellij.ui.components.JBLoadingPanel
@@ -654,14 +656,22 @@ class XlsxFileEditor(
             }
         }
         return try {
-            ApplicationManager.getApplication().runWriteAction {
-                file.setBinaryContent(bytes, -1L, -1L, this)
+            try {
+                ApplicationManager.getApplication().runWriteAction {
+                    file.setBinaryContent(bytes, -1L, -1L, this)
+                }
+            } catch (tooBig: FileTooBigException) {
+                // The IDE's VFS refuses to write very large files (same guard as the read side) — write
+                // straight to disk, then refresh the VFS so the IDE sees the new content. The refresh
+                // is outside the write action: a synchronous VFS refresh isn't allowed inside one.
+                java.nio.file.Files.write(VfsUtilCore.virtualToIoFile(file).toPath(), bytes)
+                file.refresh(false, false)
             }
             LOG.info("XLSX saved: ${file.name} (${bytes.size} bytes)")
             true
         } catch (e: Throwable) {
-            LOG.warn("XLSX write failed: ${file.name} — ${e.message}")
-            notifyWarn("저장하지 못했습니다 — '${file.name}': ${e.message}")
+            LOG.warn("XLSX write failed: ${file.name} [${e.javaClass.name}]", e)
+            notifyWarn("저장하지 못했습니다 — '${file.name}': ${e.message ?: e.javaClass.simpleName}")
             false
         }
     }
