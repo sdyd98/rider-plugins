@@ -18,8 +18,6 @@ import com.intellij.ui.components.JBLabel
 import com.intellij.ui.components.JBLoadingPanel
 import com.intellij.ui.components.JBTabbedPane
 import com.intellij.ui.table.JBTable
-import org.apache.poi.ss.usermodel.DataFormatter
-import org.apache.poi.ss.usermodel.FormulaEvaluator
 import org.apache.poi.ss.usermodel.Sheet
 import org.apache.poi.ss.usermodel.Workbook
 import org.apache.poi.ss.usermodel.WorkbookFactory
@@ -79,13 +77,8 @@ class XlsxFileEditor(
         Thread(r, "xlsx-poi").apply { isDaemon = true }
     }
 
-    // Live formula evaluation: for files with formulas the editable workbook becomes the live source —
-    // edits apply to it directly, dependents recompute, and results are pushed back to the grid.
-    @Volatile private var liveRequested = false
-    private var liveWorkbook: Workbook? = null
-    private var liveEvaluator: FormulaEvaluator? = null
-    private var liveActive = false
-    private val liveFormatter = DataFormatter()
+    // Shown once per editor: formulas are not evaluated in-IDE; Excel recalculates them on open.
+    private var formulaNoticeShown = false
 
     init {
         LOG.info("XLSX editor opening: ${file.name}")
@@ -173,7 +166,6 @@ class XlsxFileEditor(
             Runnable {
                 if (!disposed) {
                     panels.getOrNull(index)?.applyFormulas(map)
-                    ensureLiveMode()
                 }
             },
             ModalityState.any(),
@@ -231,7 +223,6 @@ class XlsxFileEditor(
                         panel.onStreamingFinished()
                         if (data.formulas.isNotEmpty()) {
                             panel.applyFormulas(data.formulas)
-                            ensureLiveMode()
                         }
                         LOG.info("XLS sheet loaded: ${data.name} — ${panel.model.loadedRowCount()} row(s) in ${System.currentTimeMillis() - sheetStarted} ms")
                     }, ModalityState.any())
@@ -296,7 +287,12 @@ class XlsxFileEditor(
             changeSupport.firePropertyChange(PROP_MODIFIED, false, true)
         }
         ensureEditableWorkbookStarted()
-        if (panels.any { it.model.hasFormulas() }) ensureLiveMode() // a formula was typed → go live
+        // Formula results aren't recomputed in-IDE (POI can't evaluate many of them) — they recalc
+        // when the file is opened in Excel. Tell the user once so a stale result isn't surprising.
+        if (!formulaNoticeShown && panels.any { it.model.hasFormulas() }) {
+            formulaNoticeShown = true
+            notifyInfo("수식 결과는 IDE에서 재계산되지 않습니다 — 저장 후 Excel에서 열 때 재계산됩니다.")
+        }
     }
 
     /** Kick off building the full editable workbook in the background (once). */
@@ -315,42 +311,6 @@ class XlsxFileEditor(
                 },
                 poiExecutor,
             )
-        }
-    }
-
-    /**
-     * Apply the edit overlay to the editable workbook and serialize it (preserving the original
-     * format). Used by [requestSave] for live-formula files (runs on the EDT); may block briefly if
-     * the background build is unfinished. The non-live path serializes inline in [saveAsync] instead.
-     */
-    private fun serializeBytes(): ByteArray? {
-        if (!modified && panels.none { it.model.hasEdits() }) return null
-        ensureEditableWorkbookStarted()
-        val workbook = try {
-            editableWorkbookFuture?.get()
-        } catch (e: Exception) {
-            LOG.warn("XLSX workbook build failed: ${file.name} — ${e.message}")
-            null
-        } ?: return null
-
-        return withPoiClassLoader {
-            for (panel in panels) {
-                val model = panel.model
-                if (!model.hasEdits()) continue
-                if (liveActive) {
-                    model.drainOps() // already applied to the live workbook during editing
-                } else {
-                    val sheet = workbook.getSheet(model.sheetName) ?: continue
-                    replayOps(sheet, model.drainOps())
-                }
-            }
-            recalcFormulas(workbook)
-            // Pre-size: zipped (.xlsx) / BIFF (.xls) output is roughly the original file size, so
-            // this avoids the doubling reallocations a default ByteArrayOutputStream would do.
-            ByteArrayOutputStream(maxOf(originalBytes?.size ?: 0, 64 * 1024)).use { out ->
-                workbook.write(out)
-                out.toByteArray()
-            }
         }
     }
 
@@ -414,18 +374,20 @@ class XlsxFileEditor(
         }
     }
 
-    /** Recalculate dependent formulas so edits propagate — only when there are formulas at all. */
+    /**
+     * We don't evaluate formulas in-IDE (POI can't compute many of them, and per-edit recalc froze
+     * the UI). Instead flag the workbook so Excel recomputes every formula when the file is opened.
+     */
     private fun recalcFormulas(workbook: Workbook) {
-        if (!liveActive && panels.none { it.model.hasFormulas() }) return // no formulas: skip (don't scan the workbook)
+        if (panels.none { it.model.hasFormulas() }) return
         try {
-            workbook.creationHelper.createFormulaEvaluator().evaluateAll()
-        } catch (e: Exception) {
-            // Some Excel functions aren't implemented by POI — fall back to "Excel recalcs on open".
-            LOG.warn("XLSX formula recalc failed (${e.message}); flagging recalc-on-open")
-            try {
-                workbook.setForceFormulaRecalculation(true)
-            } catch (ignored: Exception) {
+            // .xlsx (XSSF) honors the workbook-level flag; .xls (HSSF) ignores it and needs the flag
+            // set per sheet — set both so Excel recalculates on open for either format.
+            workbook.setForceFormulaRecalculation(true)
+            for (i in 0 until workbook.numberOfSheets) {
+                workbook.getSheetAt(i).forceFormulaRecalculation = true
             }
+        } catch (ignored: Exception) {
         }
     }
 
@@ -441,124 +403,6 @@ class XlsxFileEditor(
         }
     }
 
-    // ---- Live formula evaluation ----
-
-    /** Build the editable workbook eagerly and activate live evaluation once it's ready. */
-    private fun ensureLiveMode() {
-        if (liveRequested || disposed) return
-        liveRequested = true
-        ensureEditableWorkbookStarted()
-        val app = ApplicationManager.getApplication()
-        // Non-blocking: activate when the build completes (don't tie up a thread on get()).
-        editableWorkbookFuture?.thenAccept { wb ->
-            app.invokeLater(Runnable { if (!disposed) activateLive(wb) }, ModalityState.any())
-        }
-    }
-
-    private fun activateLive(wb: Workbook) {
-        if (liveActive || disposed) return
-        liveWorkbook = wb
-        withPoiClassLoader {
-            liveEvaluator = wb.creationHelper.createFormulaEvaluator()
-            for (panel in panels) {
-                val sheet = wb.getSheet(panel.model.sheetName) ?: continue
-                replayOps(sheet, panel.model.drainOps()) // catch up edits made before the workbook was ready
-            }
-            refreshAllFormulaDisplays()
-        }
-        liveActive = true
-        // Defer live work to the next EDT cycle so it never fires table events re-entrantly inside
-        // the edit that triggered it (which desyncs the row sorter -> "Invalid range").
-        val app = ApplicationManager.getApplication()
-        for (panel in panels) {
-            panel.model.liveHandler = { r, c ->
-                app.invokeLater(Runnable { if (!disposed) onLiveCellEdit(panel, r, c) }, ModalityState.any())
-            }
-            panel.model.liveStructuralHandler = { op ->
-                app.invokeLater(Runnable { if (!disposed) onLiveStructural(panel, op) }, ModalityState.any())
-            }
-        }
-    }
-
-    private fun onLiveCellEdit(panel: SheetPanel, row: Int, col: Int) {
-        val wb = liveWorkbook ?: return
-        val eval = liveEvaluator ?: return
-        withPoiClassLoader {
-            val sheet = wb.getSheet(panel.model.sheetName) ?: return@withPoiClassLoader
-            val poiRow = sheet.getRow(row) ?: sheet.createRow(row)
-            val cell = poiRow.getCell(col) ?: poiRow.createCell(col)
-            val formula = panel.model.formulaText(row, col)
-            if (formula != null) {
-                try {
-                    cell.setCellFormula(formula.removePrefix("="))
-                } catch (e: Exception) {
-                    LOG.warn("XLSX invalid formula at ${panel.model.sheetName} $row,$col: ${e.message}")
-                    cell.setCellValue(formula)
-                }
-            } else {
-                applyCellValue(cell, panel.model.getValueAt(row, col).toString())
-            }
-            eval.clearAllCachedResultValues()
-            refreshAllFormulaDisplays()
-        }
-    }
-
-    private fun onLiveStructural(panel: SheetPanel, op: EditOp) {
-        val wb = liveWorkbook ?: return
-        withPoiClassLoader {
-            val sheet = wb.getSheet(panel.model.sheetName) ?: return@withPoiClassLoader
-            when (op) {
-                is EditOp.InsertRow -> {
-                    val last = sheet.lastRowNum
-                    if (op.row <= last) sheet.shiftRows(op.row, last, 1)
-                }
-                is EditOp.DeleteRow -> {
-                    val last = sheet.lastRowNum
-                    if (op.row in 0..last) {
-                        sheet.getRow(op.row)?.let { sheet.removeRow(it) }
-                        if (op.row < last) sheet.shiftRows(op.row + 1, last, -1)
-                    }
-                }
-                else -> {}
-            }
-            liveEvaluator?.clearAllCachedResultValues()
-            refreshAllFormulaDisplays()
-        }
-    }
-
-    /** Re-evaluate formula cells (all sheets, for cross-sheet refs) and push results to the grid. */
-    private fun refreshAllFormulaDisplays() {
-        val wb = liveWorkbook ?: return
-        val eval = liveEvaluator ?: return
-        for (panel in panels) {
-            val sheet = wb.getSheet(panel.model.sheetName) ?: continue
-            for (key in panel.model.formulaKeys()) {
-                val r = SheetTableModel.rowOf(key)
-                val c = SheetTableModel.colOf(key)
-                val cell = sheet.getRow(r)?.getCell(c) ?: continue
-                val display = try {
-                    eval.evaluateFormulaCell(cell)
-                    formatCached(cell)
-                } catch (e: Exception) {
-                    null // unsupported function etc. — keep the previous (cached) display
-                }
-                if (display != null) panel.model.setDisplayValue(r, c, display)
-            }
-        }
-    }
-
-    private fun applyCellValue(cell: org.apache.poi.ss.usermodel.Cell, text: String) {
-        if (text.isEmpty()) {
-            cell.setBlank()
-            return
-        }
-        val number = text.toDoubleOrNull()
-        if (number != null) cell.setCellValue(number) else cell.setCellValue(text)
-    }
-
-    private fun formatCached(cell: org.apache.poi.ss.usermodel.Cell): String =
-        formatCachedFormulaResult(cell, liveFormatter)
-
     private fun markSaved() {
         if (modified) {
             modified = false
@@ -567,22 +411,13 @@ class XlsxFileEditor(
     }
 
     /**
-     * Persist the edits. Called from the save hook ([XlsxSaveListener]) on the EDT. Formula files
-     * (live mode) serialize synchronously — their workbook is EDT-confined and they are small;
-     * everything else serializes the heavy `workbook.write` on the background [poiExecutor] so the UI
-     * never freezes (safe because non-live edits only touch the model + op log, not the workbook).
+     * Persist the edits. Called from the save hook ([XlsxSaveListener]) on the EDT. Always serializes
+     * the heavy `workbook.write` on the background [poiExecutor] so the UI never freezes (edits only
+     * touch the model + op log, not the workbook, until this runs).
      */
     fun requestSave() {
         if (disposed || saving) return
-        // Branch on liveRequested (set synchronously when a formula file is first edited), not the
-        // async liveActive flag, so a formula file always takes the EDT-confined sync path — this
-        // also avoids racing live activation against a background save during the workbook build.
-        if (liveRequested) {
-            val bytes = serializeBytes() ?: return
-            if (writeToFile(bytes)) markSaved()
-        } else {
-            saveAsync()
-        }
+        saveAsync()
     }
 
     private fun saveAsync() {
@@ -680,6 +515,13 @@ class XlsxFileEditor(
         NotificationGroupManager.getInstance()
             .getNotificationGroup("XLSX Grid Editor")
             .createNotification(message, NotificationType.WARNING)
+            .notify(project)
+    }
+
+    private fun notifyInfo(message: String) {
+        NotificationGroupManager.getInstance()
+            .getNotificationGroup("XLSX Grid Editor")
+            .createNotification(message, NotificationType.INFORMATION)
             .notify(project)
     }
 

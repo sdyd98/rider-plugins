@@ -382,7 +382,7 @@ class SheetPanel(
         }
         val parts = buildList {
             add(ref)
-            if (formula != null) add("ƒ $formula")
+            if (formula != null) add("ƒ $formula · Excel에서 계산")
             add(rowsText)
             if (filters > 0) add("$filters filter(s)")
             if (frozenRowCount > 0) add("❄ $frozenRowCount frozen · key r${keyRow + 1}")

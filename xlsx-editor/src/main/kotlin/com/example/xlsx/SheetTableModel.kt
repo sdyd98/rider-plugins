@@ -31,9 +31,6 @@ class SheetTableModel(
     private val formulas = HashMap<Long, String>()
     private val undoStack = ArrayDeque<() -> Unit>()
 
-    var liveHandler: ((row: Int, col: Int) -> Unit)? = null
-    var liveStructuralHandler: ((EditOp) -> Unit)? = null
-
     override fun getRowCount(): Int = rows.size
     override fun getColumnCount(): Int = maxOf(maxCol, MIN_COLS) + EXTRA_COLS
     override fun getColumnName(column: Int): String = CellReference.convertNumToColString(column)
@@ -62,14 +59,6 @@ class SheetTableModel(
         } else {
             setCellInternal(rowIndex, columnIndex, text, null)
         }
-    }
-
-    /** Push an evaluated display value (no op, no formula change, no undo). Used by the live engine. */
-    fun setDisplayValue(rowIndex: Int, columnIndex: Int, value: String) {
-        if (rowIndex < 0 || rowIndex >= rows.size || columnIndex < 0) return
-        ensureColumns(rowIndex, columnIndex)
-        rows[rowIndex][columnIndex] = value
-        fireTableCellUpdated(rowIndex, columnIndex)
     }
 
     fun insertRow(at: Int) {
@@ -126,7 +115,6 @@ class SheetTableModel(
             ops.add(EditOp.SetCell(r, c, display))
         }
         onEdit()
-        liveHandler?.invoke(r, c)
         fireTableCellUpdated(r, c)
     }
 
@@ -137,7 +125,6 @@ class SheetTableModel(
         shiftFormulas(idx, +1)
         onEdit()
         fireTableRowsInserted(idx, idx)
-        liveStructuralHandler?.invoke(EditOp.InsertRow(idx))
     }
 
     private fun deleteRowInternal(at: Int) {
@@ -147,7 +134,6 @@ class SheetTableModel(
         shiftFormulas(at, -1)
         onEdit()
         fireTableRowsDeleted(at, at)
-        liveStructuralHandler?.invoke(EditOp.DeleteRow(at))
     }
 
     private fun pushUndo(action: () -> Unit) {
