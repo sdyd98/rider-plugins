@@ -39,5 +39,18 @@
 
         <!-- Relationship view: table-level ER map, record-level lineage explorer, and integrity check. -->
         <toolWindow id="관계도" anchor="right" factoryClass="com.example.xlsx.RefGraphToolWindow"/>
+
+        <!-- Balloons from the relationship feature (refs.json draft generation, etc.). -->
+        <notificationGroup id="관계도" displayType="BALLOON"/>
     </extensions>
+
+    <actions>
+        <!-- Infer a refs.json relationship-schema draft from the open workbook's data. -->
+        <action id="com.example.xlsx.GenerateRefsAction"
+                class="com.example.xlsx.GenerateRefsAction"
+                text="refs.json 초안 생성"
+                description="Infer a refs.json relationship-schema draft from the workbook data by sampling each sheet">
+            <add-to-group group-id="ToolsMenu" anchor="last"/>
+        </action>
+    </actions>
 </idea-plugin>
