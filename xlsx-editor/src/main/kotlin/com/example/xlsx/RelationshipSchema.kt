@@ -116,7 +116,9 @@ class IndexRecordGraph(private val schema: RefSchema, private val index: GameInd
     private val loaded = object : LinkedHashMap<String, TableData?>(8, 0.75f, true) {
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, TableData?>) = size > 6
     }
-    private fun table(tableId: String): TableData? = loaded.getOrPut(tableId) { GameDataLoader.loadTable(schema, tableId) }
+    // out() may run from a background thread (the view loads neighbourhoods off the EDT); guard the LRU.
+    private fun table(tableId: String): TableData? =
+        synchronized(loaded) { loaded.getOrPut(tableId) { GameDataLoader.loadTable(schema, tableId) } }
 
     private fun isGroupRef(ref: SchemaRef): Boolean {
         val target = schema.table(ref.toTable) ?: return false
@@ -175,6 +177,13 @@ class IndexRecordGraph(private val schema: RefSchema, private val index: GameInd
             ?: return RefRecord("", "", "")
         val (t, id) = splitKey(best)
         return RefRecord(t, id, index.idName[best].orEmpty())
+    }
+
+    /** Resolve a record by table + display id (full composite id) or by group key — O(1), no row reads. */
+    override fun find(table: String, id: String): RefRecord? {
+        index.idName["$table|$id"]?.let { return RefRecord(table, id, it) }
+        index.groupMembers["$table|$id"]?.let { return RefRecord(table, id, "", isGroup = true, members = it) }
+        return null
     }
 
     /** Dangling refs + orphans — computed entirely from the indices (no row reads). */

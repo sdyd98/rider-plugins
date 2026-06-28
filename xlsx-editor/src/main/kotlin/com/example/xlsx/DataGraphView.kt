@@ -27,6 +27,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
@@ -55,6 +56,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import org.jetbrains.jewel.ui.component.Text
 
 /** One expandable field row of a node: a reference [column] → its [targets] (empty = a group member). */
@@ -66,27 +69,46 @@ private fun groupRows(links: List<RefLink>): List<RowInfo> {
     return map.map { (col, v) -> RowInfo(col, v.first, v.second) }
 }
 
+/** Pre-computed neighbourhood for one centre — built off the EDT (db.out streams tables from disk). */
+private class GraphData(
+    val center: RefRecord,
+    val outLinks: List<RefLink>,
+    val inLinks: List<RefLink>,
+    val outNodes: List<RefRecord>,
+    val inNodes: List<RefRecord>,
+    val nodes: List<RefRecord>,
+    val nodeRows: Map<RefRecord, List<RowInfo>>,
+)
+
 /** Tool-window content: switch between the table-level ER map and the record-level data explorer. */
 @Composable
 fun RelationshipTabs(project: com.intellij.openapi.project.Project, fgArgb: Int, bgArgb: Int) {
     // Schema from refs.json next to the OPEN workbook (works on any machine / any project). When the
     // project ships no refs.json we fall back to mock data — never to a hardcoded sample path.
     val schema = remember { resolveSchema(project) }
-    val loaded = remember {
-        schema?.let { runCatching { buildRefGraph(it) to IndexRecordGraph(it, GameDataLoader.loadOrBuildIndex(it)) }.getOrNull() }
+    // Build the index OFF the EDT — first open streams every workbook, which must not freeze the UI.
+    val loaded by produceState<Pair<RefGraph, RecordSource>?>(null, schema) {
+        value = if (schema == null) mockRefGraph() to mockDb()
+        else withContext(Dispatchers.Default) {
+            runCatching { buildRefGraph(schema) to IndexRecordGraph(schema, GameDataLoader.loadOrBuildIndex(schema)) }.getOrNull()
+                ?: (mockRefGraph() to mockDb())
+        }
     }
-    val graph = loaded?.first ?: mockRefGraph()
-    val db = loaded?.second ?: mockDb()
-    val onOpenTable: (String) -> Unit = { id -> schema?.let { openTableInEditor(project, it, id) } }
-    val onOpenRecord: (RefRecord) -> Unit = { rec -> schema?.let { openRecordInEditor(project, it, rec) } }
     var mode by remember { mutableStateOf(0) }
-    val report = remember(db) { runCatching { db.validate() }.getOrNull() } // workbook integrity scan
     // The grid (Ctrl+R) can request a specific record → switch to the data view + centre on it.
     val req = RelationshipBus.request.value
     LaunchedEffect(req) { if (req != null) mode = 1 }
-    val requested = req?.let { r ->
-        db.records.firstOrNull { it.table == r.table && (it.id == r.id || it.id.substringBefore('·') == r.id) }
+
+    val pair = loaded
+    if (pair == null) {
+        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text("관계도 로딩 중…", color = Color(fgArgb).copy(alpha = 0.55f)) }
+        return
     }
+    val (graph, db) = pair
+    val onOpenTable: (String) -> Unit = { id -> schema?.let { openTableInEditor(project, it, id) } }
+    val onOpenRecord: (RefRecord) -> Unit = { rec -> schema?.let { openRecordInEditor(project, it, rec) } }
+    val report = remember(db) { runCatching { db.validate() }.getOrNull() } // workbook integrity scan
+    val requested = req?.let { r -> db.find(r.table, r.id) ?: db.find(r.table, r.id.substringBefore('·')) }
     Column(Modifier.fillMaxSize()) {
         Row(Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 5.dp), verticalAlignment = Alignment.CenterVertically) {
             Text((if (mode == 0) "● " else "○ ") + "테이블 관계도", Modifier.clickable { mode = 0 })
@@ -220,9 +242,8 @@ private fun ValOrphanRow(o: RefRecord, bgArgb: Int, fg: Color, muted: Color, onO
 fun DataGraphView(db: RecordSource, fgArgb: Int, bgArgb: Int, onOpen: (RefRecord) -> Unit = {}, requested: RefRecord? = null) {
     val HEADER = 28f; val SUBH = 16f; val ROWH = 20f
 
-    var center by remember { mutableStateOf(requested ?: db.defaultCenter()) }
-    LaunchedEffect(requested) { if (requested != null) center = requested } // grid Ctrl+R re-centres here
-    var expanded by remember(center) { mutableStateOf(setOf(center)) } // the centre starts expanded
+    var target by remember { mutableStateOf(requested ?: db.defaultCenter()) } // requested centre — drives the async load
+    LaunchedEffect(requested) { if (requested != null) target = requested } // grid Ctrl+R re-centres here
     var hovered by remember { mutableStateOf<RefRecord?>(null) }
     var lastHovered by remember { mutableStateOf<RefRecord?>(null) }
     var hoveredKey by remember { mutableStateOf<Pair<RefRecord, String>?>(null) } // (node, ref column) under the cursor
@@ -247,14 +268,29 @@ fun DataGraphView(db: RecordSource, fgArgb: Int, bgArgb: Int, onOpen: (RefRecord
     val colorCache = remember(bgArgb) { HashMap<String, Color>() } // table id -> identity colour (visited tables only)
     fun hueOf(t: String): Color = colorCache.getOrPut(t) { tableColor(t, bgArgb) }
 
-    val outLinks = remember(center) { db.out(center) }
-    val inLinks = remember(center) { db.inbound(center) }
-    val outNodes = remember(center) { outLinks.map { it.to }.distinct() }
-    val inNodes = remember(center) { inLinks.map { it.from }.distinct() }
-    val nodes = remember(center) { (listOf(center) + outNodes + inNodes).distinct() }
-    val nodeRows = remember(center) {
-        nodes.associateWith { r -> if (r.isGroup) r.members.map { RowInfo(it, emptyList(), false) } else groupRows(db.out(r)) }
+    // Build the centre's neighbourhood OFF the EDT — db.out() streams the table from disk, so a re-center
+    // must not block the UI. The previously-loaded graph stays on screen until the new one is ready.
+    val graphData by produceState<GraphData?>(null, target, db) {
+        value = withContext(Dispatchers.Default) {
+            val out = db.out(target)
+            val inb = db.inbound(target)
+            val outN = out.map { it.to }.distinct()
+            val inN = inb.map { it.from }.distinct()
+            val ns = (listOf(target) + outN + inN).distinct()
+            val rows = ns.associateWith { r -> if (r.isGroup) r.members.map { RowInfo(it, emptyList(), false) } else groupRows(db.out(r)) }
+            GraphData(target, out, inb, outN, inN, ns, rows)
+        }
     }
+    val gd = graphData
+    if (gd == null) {
+        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text("관계도 로딩 중…", color = fg.copy(alpha = 0.55f)) }
+        return
+    }
+    val center = gd.center // the centre actually on screen (lags `target` only while a load is in flight)
+    val outLinks = gd.outLinks; val inLinks = gd.inLinks
+    val outNodes = gd.outNodes; val inNodes = gd.inNodes
+    val nodes = gd.nodes; val nodeRows = gd.nodeRows
+    var expanded by remember(center) { mutableStateOf(setOf(center)) } // the centre starts expanded
     fun rowsOf(r: RefRecord): List<RowInfo> = nodeRows[r].orEmpty()
     fun isExpanded(r: RefRecord) = r in expanded && rowsOf(r).isNotEmpty()
 
@@ -419,7 +455,7 @@ fun DataGraphView(db: RecordSource, fgArgb: Int, bgArgb: Int, onOpen: (RefRecord
             when {
                 inChevron -> expanded = if (node in expanded) expanded - node else expanded + node
                 node == center -> onOpen(node)
-                else -> center = node
+                else -> target = node
             }
         }
     })

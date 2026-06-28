@@ -124,6 +124,9 @@ interface RecordSource {
 
     /** A good record to centre on first (cheap — must NOT force [records] to materialise). */
     fun defaultCenter(): RefRecord
+
+    /** Resolve one record by table + display id (or group key) — O(1), without materialising [records]. */
+    fun find(table: String, id: String): RefRecord?
 }
 
 /** Eager in-memory graph (all links precomputed) — used by the mock fallback. */
@@ -132,6 +135,7 @@ class MockDb(override val records: List<RefRecord>, val links: List<RefLink>) : 
     override fun inbound(r: RefRecord): List<RefLink> = links.filter { it.to == r }
     override fun usageCount(r: RefRecord): Int = links.count { it.to == r }
     override fun defaultCenter(): RefRecord = records.firstOrNull() ?: RefRecord("", "", "")
+    override fun find(table: String, id: String): RefRecord? = records.firstOrNull { it.table == table && it.id == id }
     override fun validate(): ValidationReport = ValidationReport(
         broken = links.filter { it.broken }.map { BrokenRef(it.from, it.column, it.to.id, it.to.table) },
         orphans = records.filter { rec -> !rec.isGroup && links.none { it.to == rec } },
