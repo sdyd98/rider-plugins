@@ -76,10 +76,42 @@ object SchemaInferencer {
 
     private fun collect(stream: InputStream, file: String, sheet: String, styles: StylesTable?, strings: ReadOnlySharedStringsTable?, fmt: DataFormatter): TableSample {
         val collector = SampleCollector()
+        parseSheet(stream, collector, styles, strings, fmt)
+        return collector.toSample(file, sheet)
+    }
+
+    private fun parseSheet(stream: InputStream, collector: SampleCollector, styles: StylesTable?, strings: ReadOnlySharedStringsTable?, fmt: DataFormatter) {
         val xml = XMLHelper.newXMLReader().apply { contentHandler = XSSFSheetXMLHandler(styles, strings, collector, fmt, false) }
         runCatching { stream.use { xml.parse(InputSource(it)) } }
             .exceptionOrNull()?.let { if (it !is StopParsing) throw it } // StopParsing = sample cap reached
-        return collector.toSample(file, sheet)
+    }
+
+    /** Preview the first [limit] data rows of [sheet] (all columns) — for the MCP sample_rows tool. */
+    fun previewRows(baseDir: File, sheet: String, limit: Int): Pair<List<String>, List<Map<String, String>>> = withPoiClassLoader {
+        val files = baseDir.listFiles { f -> f.isFile && f.name.endsWith(".xlsx", true) && !f.name.startsWith("~") }.orEmpty()
+        files.sortedBy { it.name }.forEach { file ->
+            val hit = runCatching {
+                OPCPackage.open(file, PackageAccess.READ).use { pkg ->
+                    val reader = XSSFReader(pkg)
+                    val styles = reader.stylesTable
+                    val strings = runCatching { ReadOnlySharedStringsTable(pkg) }.getOrNull()
+                    val fmt = DataFormatter()
+                    val sheets = reader.sheetsData as XSSFReader.SheetIterator
+                    while (sheets.hasNext()) {
+                        val stream = sheets.next()
+                        if (sheets.sheetName == sheet) {
+                            val c = SampleCollector(limit.coerceIn(1, MAX_ROWS))
+                            parseSheet(stream, c, styles, strings, fmt)
+                            return@use c.preview()
+                        }
+                        stream.close()
+                    }
+                    null
+                }
+            }.getOrNull()
+            if (hit != null) return@withPoiClassLoader hit
+        }
+        emptyList<String>() to emptyList()
     }
 
     // ---- 2. infer references by value overlap ----
@@ -165,7 +197,7 @@ private class StopParsing : RuntimeException()
 
 /** SAX collector: reads the field-code header row, samples up to [MAX_ROWS] data rows (all columns), and
  *  detects id columns. Aborts the parse via [StopParsing] once the sample cap is hit. */
-private class SampleCollector : XSSFSheetXMLHandler.SheetContentsHandler {
+private class SampleCollector(private val maxRows: Int = MAX_ROWS) : XSSFSheetXMLHandler.SheetContentsHandler {
     private val headerIdx = HEADER_ROW - 1
     private val firstDataIdx = DATA_START_ROW - 1
     private val cols = sortedMapOf<Int, String>()
@@ -185,7 +217,7 @@ private class SampleCollector : XSSFSheetXMLHandler.SheetContentsHandler {
     override fun endRow(rowNum: Int) {
         if (rowNum >= firstDataIdx && cur.isNotEmpty()) {
             rows.add(cur)
-            if (rows.size >= MAX_ROWS) throw StopParsing()
+            if (rows.size >= maxRows) throw StopParsing()
         }
     }
 
@@ -197,6 +229,9 @@ private class SampleCollector : XSSFSheetXMLHandler.SheetContentsHandler {
         rows.forEach { row -> row.forEach { (k, v) -> colValues.getOrPut(k) { LinkedHashSet() }.let { if (it.size < MAX_DISTINCT) it.add(v) } } }
         return TableSample(sheet, file, sheet, columns, detectIdCols(columns, rows), columns.firstOrNull { it.equals("Name", true) }, colValues)
     }
+
+    /** (columns, rows) preview for the sample_rows tool — the raw sampled rows, undiscarded. */
+    fun preview(): Pair<List<String>, List<Map<String, String>>> = cols.values.toList() to rows.toList()
 
     /** Id columns = an explicit unique "Id", else the shortest leftmost prefix of columns that is unique
      *  across the sample (so composite keys like [GroupId, Slot] are recovered). Empty if none is clear. */

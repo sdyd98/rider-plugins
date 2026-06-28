@@ -1,0 +1,7 @@
+<idea-plugin>
+    <!-- Loaded only when com.intellij.mcpServer is present (see the optional <depends> in plugin.xml).
+         Registers our MCP tools with the IDE's integrated MCP server via its mcpToolset extension point. -->
+    <extensions defaultExtensionNs="com.intellij">
+        <mcpServer.mcpToolset implementation="com.example.xlsx.RefsMcpToolset"/>
+    </extensions>
+</idea-plugin>
