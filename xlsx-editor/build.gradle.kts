@@ -40,6 +40,10 @@ dependencies {
         bundledLibrary("lib/intellij.platform.jewel.foundation.jar")
         bundledLibrary("lib/intellij.platform.jewel.ui.jar")
         bundledLibrary("lib/intellij.platform.jewel.ideLafBridge.jar")
+
+        // Gson is bundled with the IDE (used to parse the refs.json relationship schema). IDE provides
+        // it at runtime, so it is NOT shipped in the plugin ZIP.
+        bundledLibrary("lib/intellij.libraries.gson.jar")
     }
 
     // Shared helpers (POI classloader swap, cached-formula formatting). Bundled into the plugin.

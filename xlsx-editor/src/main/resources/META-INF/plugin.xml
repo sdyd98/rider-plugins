@@ -36,5 +36,8 @@
 
         <!-- The custom grid editor for .xlsx / .xls files (read-only viewer). -->
         <fileEditorProvider implementation="com.example.xlsx.XlsxFileEditorProvider"/>
+
+        <!-- Relationship view: table-level ER map, record-level lineage explorer, and integrity check. -->
+        <toolWindow id="관계도" anchor="right" factoryClass="com.example.xlsx.RefGraphToolWindow"/>
     </extensions>
 </idea-plugin>

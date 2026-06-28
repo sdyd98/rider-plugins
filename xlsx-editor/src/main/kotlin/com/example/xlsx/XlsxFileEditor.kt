@@ -324,6 +324,19 @@ class XlsxFileEditor(
         }
     }
 
+    /**
+     * Switch to the [sheetName] tab and select the row whose [columnHeader] field == [value]. Called by
+     * the relationship graph (double-click a node). Returns false until the sheets are built / the row
+     * exists, so the caller can retry while the file is still streaming open.
+     */
+    fun revealSheetRow(sheetName: String, columnHeader: String, value: String): Boolean {
+        if (disposed) return true
+        val idx = panels.indexOfFirst { it.model.sheetName == sheetName }
+        if (idx < 0) return false
+        tabbedPane?.let { if (it.selectedIndex != idx) it.selectedIndex = idx } // ChangeListener → setActiveSheet
+        return panels[idx].revealRow(columnHeader, value)
+    }
+
     /** vim `gt`/`gT`: cycle to the next/previous sheet and focus its grid. */
     private fun switchSheet(delta: Int) {
         val tp = tabbedPane ?: return

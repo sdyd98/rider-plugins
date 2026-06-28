@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "_note": "Reference schema for the gamedata sample. Normally produced by the AI-from-code / MCP step; here authored by hand to match the generator's conventions. Columns are keyed by FIELD CODE (header row 1). A ref whose 'by' is a strict subset of the target's 'id' is a GROUP reference.",
+  "tables": {
+    "Item":   { "file": "gamedata_core.xlsx",  "sheet": "Item",   "headerRow": 1, "dataStartRow": 4, "id": ["Id"], "display": "Name" },
+    "Effect": { "file": "gamedata_core.xlsx",  "sheet": "Effect", "headerRow": 1, "dataStartRow": 4, "id": ["Id"], "display": "Name" },
+    "Skill":  { "file": "gamedata_core.xlsx",  "sheet": "Skill",  "headerRow": 1, "dataStartRow": 4, "id": ["Id"], "display": "Name",
+      "refs": [
+        { "from": ["RewardItemId"], "to": "Item" },
+        { "from": ["EffectIds"], "to": "Effect", "split": ";" }
+      ] },
+    "DropTable": { "file": "gamedata_core.xlsx", "sheet": "DropTable", "headerRow": 1, "dataStartRow": 4, "id": ["GroupId", "Slot"],
+      "refs": [ { "from": ["ItemId"], "to": "Item" } ] },
+
+    "Map":    { "file": "gamedata_world.xlsx", "sheet": "Map",    "headerRow": 1, "dataStartRow": 4, "id": ["Id"], "display": "Name",
+      "refs": [ { "from": ["NextMapId"], "to": "Map" } ] },
+    "Monster": { "file": "gamedata_world.xlsx", "sheet": "Monster", "headerRow": 1, "dataStartRow": 4, "id": ["Id"], "display": "Name",
+      "refs": [
+        { "from": ["SkillIds"], "to": "Skill", "split": ";" },
+        { "from": ["DropGroupId"], "to": "DropTable", "by": ["GroupId"] }
+      ] },
+    "MonsterSpawn": { "file": "gamedata_world.xlsx", "sheet": "MonsterSpawn", "headerRow": 1, "dataStartRow": 4, "id": ["MapId", "Index"],
+      "refs": [
+        { "from": ["MapId"], "to": "Map" },
+        { "from": ["MonsterId"], "to": "Monster" }
+      ] },
+    "Quest":  { "file": "gamedata_world.xlsx", "sheet": "Quest", "headerRow": 1, "dataStartRow": 4, "id": ["Id"], "display": "Name",
+      "refs": [
+        { "from": ["MapId"], "to": "Map" },
+        { "from": ["TargetMonsterId"], "to": "Monster" },
+        { "from": ["RequiredItemIds"], "to": "Item", "split": ";" },
+        { "from": ["RewardItemIds"], "to": "Item", "split": ";" },
+        { "from": ["RewardSkillId"], "to": "Skill" },
+        { "from": ["PrereqQuestId"], "to": "Quest" }
+      ] }
+  }
+}
