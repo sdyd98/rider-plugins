@@ -58,6 +58,9 @@ class LogViewerPanel(
     // The decoding charset for this source; changing it re-reads from scratch (see reopenWith).
     private var charset: java.nio.charset.Charset = LogCharsets.DEFAULT
     private var reader: LogReader = makeReader(charset)
+    // Bumped on every reopen (charset change); batches tagged with a stale generation are dropped so a
+    // superseded reader can't append into the freshly-cleared model.
+    @Volatile private var readerGeneration = 0
 
     private val table = object : JBTable(model) {
         // AUTO_RESIZE_OFF already makes this false; explicit for clarity. The Message column is sized to
@@ -258,13 +261,17 @@ class LogViewerPanel(
     private fun reopenWith(cs: java.nio.charset.Charset) {
         if (cs == charset) return
         charset = cs
-        runCatching { reader.close() }
+        val old = reader
+        readerGeneration++ // invalidate any in-flight batches from the old reader
         tailing = false
         streaming = true
         statusError = null
         model.clear()
-        reader = makeReader(charset)
+        reader = makeReader(charset) // new reader acquires its host BEFORE old releases → SSH session stays warm
         pushChrome()
+        // Close the previous reader OFF the EDT: RemoteLogReader.close() does SSH channel/session
+        // disconnects (network I/O) that would otherwise freeze the UI thread.
+        ApplicationManager.getApplication().executeOnPooledThread { runCatching { old.close() } }
         start()
     }
 
@@ -303,14 +310,17 @@ class LogViewerPanel(
 
     /** Begin reading (off-EDT). Streams the initial content, then tails appended lines. */
     fun start() {
+        val gen = readerGeneration
+        val r = reader
         ApplicationManager.getApplication().executeOnPooledThread {
             try {
-                reader.readInitial { batch -> appendOnEdt(batch) }
+                r.readInitial { batch -> appendOnEdt(batch, gen) }
             } catch (e: Throwable) {
                 LOG.warn("Log initial read failed: $sourceLabel — ${e.message}")
-                onEdt { setStatusError(e) }
+                onEdt { if (gen == readerGeneration) setStatusError(e) }
             }
             onEdt {
+                if (gen != readerGeneration) return@onEdt // superseded by a newer reopen (charset change)
                 streaming = false
                 sizeContentColumn()
                 pushChrome()
@@ -322,13 +332,15 @@ class LogViewerPanel(
     private fun ensureFollow() {
         if (tailing) return
         tailing = true
+        val gen = readerGeneration
         reader.startTail(
-            onAppend = { batch -> appendOnEdt(batch) },
+            onAppend = { batch -> appendOnEdt(batch, gen) },
             onError = { e -> onEdt { LOG.info("Log tail ended: $sourceLabel — ${e.message}") } },
         )
     }
 
-    private fun appendOnEdt(batch: List<String>) = onEdt {
+    private fun appendOnEdt(batch: List<String>, gen: Int) = onEdt {
+        if (gen != readerGeneration) return@onEdt // stale batch from a superseded reader (charset change)
         val atBottom = isViewAtBottom()
         model.appendRaw(batch)
         if (following && atBottom) scrollToBottom()
