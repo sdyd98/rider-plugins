@@ -29,10 +29,10 @@ class ParsedRow(
  * links + inserts. Parse on the ANSI-STRIPPED text: codes like `…[32m` glue onto the level word and
  * break `\b` level detection; `clean == raw` for the common no-ANSI case.
  */
-fun parseLogRow(raw: String): ParsedRow {
+fun parseLogRow(raw: String, formats: List<LineFormat> = emptyList()): ParsedRow {
     val hasAnsi = AnsiText.hasAnsi(raw)
     val clean = if (hasAnsi) AnsiText.strip(raw) else raw
-    val parsed = LogParser.parse(clean)
+    val parsed = LogParser.parse(clean, formats)
     val contCandidate = parsed.timestampMillis == LogLine.NO_TIME && LogParser.looksLikeContinuation(clean)
     return ParsedRow(raw, clean, parsed.level, parsed.timestampMillis, parsed.messageStart, hasAnsi, contCandidate)
 }

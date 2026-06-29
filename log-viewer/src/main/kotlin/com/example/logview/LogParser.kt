@@ -63,8 +63,33 @@ object LogParser {
 
     private val zone: ZoneId get() = ZoneId.systemDefault()
 
-    fun parse(raw: String): ParsedLine {
+    fun parse(raw: String): ParsedLine = parse(raw, emptyList())
+
+    /**
+     * Parse [raw], trying user [formats] (in order) BEFORE the built-in heuristic. The first format that
+     * matches wins; any column it doesn't capture (or that fails to map) falls back to the heuristic for
+     * this line, so a partial format still benefits from the heuristic. No format matches → pure heuristic.
+     */
+    fun parse(raw: String, formats: List<LineFormat>): ParsedLine {
         val head = if (raw.length > HEAD) raw.substring(0, HEAD) else raw
+        for (fmt in formats) {
+            val m = fmt.apply(head) ?: continue
+            var level = m.level?.let { mapLevel(it) } ?: LogLevel.OTHER
+            var time = m.time?.let { parseTimestamp(it) } ?: LogLine.NO_TIME
+            var messageStart = m.messageStart
+            // Fill any gap from the heuristic (computed only when something is missing).
+            if (level == LogLevel.OTHER || time == LogLine.NO_TIME || messageStart < 0) {
+                val h = parseHeuristic(head)
+                if (level == LogLevel.OTHER) level = h.level
+                if (time == LogLine.NO_TIME) time = h.timestampMillis
+                if (messageStart < 0) messageStart = h.messageStart
+            }
+            return ParsedLine(level, time, messageStart.coerceAtLeast(0))
+        }
+        return parseHeuristic(head)
+    }
+
+    private fun parseHeuristic(head: String): ParsedLine {
         val lm = LEVEL.matcher(head)
         val level = if (lm.find()) mapLevel(lm.group(1)) else LogLevel.OTHER
         // Message starts just after the level token (the timestamp + thread before it move to the Time

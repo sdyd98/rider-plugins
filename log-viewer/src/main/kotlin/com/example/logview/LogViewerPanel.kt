@@ -225,8 +225,10 @@ class LogViewerPanel(
             DisplayToggle("긴 줄 자르기", "가로 스크롤 끄고 잘라 보기", truncateLines) { setTruncate(it) },
             DisplayToggle("디테일 패널", "선택한 줄의 상세를 오른쪽에", detailVisible) { setDetailVisible(it) },
         )
+        val formatCount = LineFormatStore.getInstance().sources().size
         val choices = listOf(
             DisplayChoice("인코딩", LogCharsets.label(charset)) { showCharsetChooser() },
+            DisplayChoice("줄 형식", if (formatCount == 0) "자동" else "${formatCount}개") { showFormatSettings() },
         )
         val panel = createDisplayOptionsPanel(toggles, choices)
         val popup = JBPopupFactory.getInstance()
@@ -270,10 +272,46 @@ class LogViewerPanel(
         }
     }
 
-    /** Re-read the source under [cs]: close the old reader, clear the grid, rebuild, and stream again. */
+    private val lineFormatState = androidx.compose.foundation.text.input.TextFieldState()
+
+    /** ⚙ → "줄 형식": edit user line-format rules with a live preview; re-read on close if they changed. */
+    private fun showFormatSettings() {
+        displayPopup?.cancel()
+        val store = LineFormatStore.getInstance()
+        lineFormatState.edit { replace(0, length, store.sources().joinToString("\n")) }
+        val sample = (0 until minOf(model.loadedRowCount(), 8)).map { model.rawAt(it) }
+        val panel = createLineFormatSettings(lineFormatState, sample)
+        val popup = JBPopupFactory.getInstance()
+            .createComponentPopupBuilder(panel, panel)
+            .setRequestFocus(true)
+            .setResizable(true)
+            .setMovable(true)
+            .setTitle("줄 형식")
+            .createPopup()
+        popup.addListener(object : com.intellij.openapi.ui.popup.JBPopupListener {
+            override fun onClosed(event: com.intellij.openapi.ui.popup.LightweightWindowEvent) {
+                val newFormats = lineFormatState.text.lineSequence().map { it.trim() }.filter { it.isNotEmpty() }.toList()
+                if (newFormats != store.sources()) {
+                    store.replaceAll(newFormats)
+                    reparse()
+                }
+            }
+        })
+        popup.showInCenterOf(component)
+    }
+
+    /** Re-read the source under [cs] (charset change). No-op if unchanged. */
     private fun reopenWith(cs: java.nio.charset.Charset) {
         if (cs == charset) return
         charset = cs
+        reread()
+    }
+
+    /** Re-read the source with the current charset — e.g. after the line-format rules change. */
+    fun reparse() = reread()
+
+    /** Close the old reader, clear the grid, rebuild, and stream again (charset/format change). */
+    private fun reread() {
         val old = reader
         readerGeneration++ // invalidate any in-flight batches from the old reader
         tailing = false
@@ -359,7 +397,8 @@ class LogViewerPanel(
      */
     private fun onReaderBatch(batch: List<String>, gen: Int) {
         if (gen != readerGeneration || batch.isEmpty()) return
-        appendOnEdt(batch.map { parseLogRow(it) }, gen)
+        val formats = LineFormatStore.getInstance().active() // user line-formats, fetched once per batch
+        appendOnEdt(batch.map { parseLogRow(it, formats) }, gen)
     }
 
     private fun appendOnEdt(rows: List<ParsedRow>, gen: Int) = onEdt {
