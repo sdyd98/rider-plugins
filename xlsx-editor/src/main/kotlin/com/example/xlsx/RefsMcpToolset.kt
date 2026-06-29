@@ -64,8 +64,9 @@ class RefsMcpToolset : McpToolset {
         @McpDescription("Table id (sheet name).") table: String,
         @McpDescription("Max rows.") limit: Int = 10,
     ): String = io {
-        val (columns, rows) = SchemaInferencer.previewRows(File(dir), table, limit)
-        if (columns.isEmpty()) return@io err("no such table: $table")
+        val (relFile, sheet) = SchemaInferencer.locate(File(dir), table) ?: return@io err("no such table: $table")
+        val (columns, rows) = SchemaInferencer.previewRows(File(dir), relFile, sheet, limit)
+        if (columns.isEmpty()) return@io err("no readable columns/rows for table: $table")
         gson.toJson(JsonObject().apply {
             add("columns", arrayOf(columns))
             add("rows", JsonArray().apply { rows.forEach { r -> add(JsonObject().apply { r.forEach { (k, v) -> addProperty(k, v) } }) } })

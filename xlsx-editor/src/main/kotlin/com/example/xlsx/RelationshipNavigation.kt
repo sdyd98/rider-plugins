@@ -10,13 +10,15 @@ import java.io.File
 import javax.swing.Timer
 
 /**
- * The reference schema for the project's currently-open workbook — read from `refs.json` next to it.
- * Single source of truth shared by the tool window and the grid's Ctrl+R, so both resolve the same
- * tables/ids. Returns null when no refs.json is present (callers fall back to mock data).
+ * The reference schema for the project's currently-open workbook. The data root is resolved from the roots
+ * the user designated in THIS checkout ([GameDataRoots]) — the nearest one containing the open file — so it
+ * works even when the workbook sits in a nested subfolder, and stays branch-local across simultaneous
+ * checkouts. refs.json is read from that root. Returns null when nothing resolves (callers fall back to mock).
  */
 fun resolveSchema(project: Project): RefSchema? {
-    val dir = FileEditorManager.getInstance(project).selectedFiles.firstOrNull()?.parent?.path ?: return null
-    return loadRefSchema(File(dir))
+    val open = FileEditorManager.getInstance(project).selectedFiles.firstOrNull()?.path ?: return null
+    val root = GameDataRoots.getInstance(project).rootFor(File(open)) ?: return null
+    return loadRefSchema(root)
 }
 
 /** Open the table that holds [record] and jump to that row (double-click in the data explorer). */

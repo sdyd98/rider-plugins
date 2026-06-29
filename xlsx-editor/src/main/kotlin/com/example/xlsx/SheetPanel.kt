@@ -2,6 +2,7 @@ package com.example.xlsx
 
 import com.intellij.openapi.actionSystem.AnActionEvent
 import com.intellij.openapi.actionSystem.CustomShortcutSet
+import com.intellij.openapi.fileEditor.FileEditorManager
 import com.intellij.openapi.project.DumbAwareAction
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.popup.JBPopupFactory
@@ -15,6 +16,7 @@ import com.intellij.util.ui.JBUI
 import org.apache.poi.ss.util.CellReference
 import java.awt.BorderLayout
 import java.awt.Component
+import java.io.File
 import javax.swing.JComponent
 import javax.swing.JPanel
 import javax.swing.JTable
@@ -187,7 +189,13 @@ class SheetPanel(
         if (project == null) return
         // Resolve against the workbook's refs.json — the SAME source the tool window uses (not a hardcoded
         // sample schema), so the published (table, id) actually matches a record in the explorer's graph.
-        val st = resolveSchema(project)?.tables?.firstOrNull { it.sheet == model.sheetName } ?: return
+        val schema = resolveSchema(project) ?: return
+        // Prefer the table from the OPEN workbook: recursion can surface the same sheet name in several files
+        // under the root (all sharing the plain `sheet`; only tableId is qualified), so match on file too.
+        val openRel = FileEditorManager.getInstance(project).selectedFiles.firstOrNull()
+            ?.let { runCatching { File(it.path).relativeTo(schema.baseDir).invariantSeparatorsPath }.getOrNull() }
+        val candidates = schema.tables.filter { it.sheet == model.sheetName }
+        val st = candidates.firstOrNull { it.file == openRel } ?: candidates.firstOrNull() ?: return
         val idColumns = st.idCols.map { columnForFieldCode(it) }
         if (idColumns.any { it < 0 }) return // a key field isn't in this sheet → can't identify the row
         val viewRow = table.selectedRow.takeIf { it >= 0 } ?: return

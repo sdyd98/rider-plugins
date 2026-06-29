@@ -13,27 +13,39 @@ import com.intellij.openapi.progress.ProgressManager
 import com.intellij.openapi.progress.Task
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.vfs.LocalFileSystem
+import com.intellij.openapi.vfs.VirtualFile
 import java.io.File
 
 /**
- * "refs.json 초안 생성" — infers a relationship-schema draft from the workbook data (see
- * [SchemaInferencer]) and writes it next to the data. An existing refs.json is never clobbered: the draft
- * goes to refs.draft.json so the user can diff/merge.
+ * "데이터 루트로 지정" — marks the selected folder (or the open workbook's folder) as a game-data ROOT for
+ * this checkout ([GameDataRoots], persisted per-checkout in workspace.xml) and infers a relationship-schema
+ * draft from the data under it (see [SchemaInferencer], which recurses into subfolders). An existing
+ * refs.json is never clobbered: the draft goes to refs.draft.json so the user can diff/merge.
  */
 class GenerateRefsAction : AnAction() {
     override fun getActionUpdateThread() = ActionUpdateThread.BGT
-    override fun update(e: AnActionEvent) { e.presentation.isEnabledAndVisible = e.project != null && dirOf(e) != null }
+
+    // Designating a root is a folder operation; only offer it on a directory or a spreadsheet so the item
+    // does not clutter every other file's Project-view context menu.
+    override fun update(e: AnActionEvent) {
+        val vf = sourceVf(e)
+        e.presentation.isEnabledAndVisible = e.project != null && vf != null &&
+            (vf.isDirectory || vf.extension.equals("xlsx", true) || vf.extension.equals("xls", true))
+    }
+
     override fun actionPerformed(e: AnActionEvent) {
         val project = e.project ?: return
         val dir = dirOf(e) ?: return
         generateRefsDraft(project, dir)
     }
 
-    private fun dirOf(e: AnActionEvent): File? {
+    private fun sourceVf(e: AnActionEvent): VirtualFile? {
         val project = e.project ?: return null
-        val vf = e.getData(CommonDataKeys.VIRTUAL_FILE)
-            ?: FileEditorManager.getInstance(project).selectedFiles.firstOrNull()
-            ?: return null
+        return e.getData(CommonDataKeys.VIRTUAL_FILE) ?: FileEditorManager.getInstance(project).selectedFiles.firstOrNull()
+    }
+
+    private fun dirOf(e: AnActionEvent): File? {
+        val vf = sourceVf(e) ?: return null
         val path = (if (vf.isDirectory) vf else vf.parent)?.path ?: return null
         return File(path)
     }
@@ -51,6 +63,9 @@ fun generateRefsDraft(project: Project, dir: File) {
             val target = if (existing.exists()) File(dir, "refs.draft.json") else existing
             runCatching { target.writeText(json) }
                 .onFailure { notify(project, "파일 쓰기 실패: ${it.message}", NotificationType.ERROR); return }
+            // Register the root only now that a refs.json exists at it — a failed generation must never leave a
+            // "designated but empty" root that would shadow a valid ancestor refs.json (see GameDataRoots.rootFor).
+            GameDataRoots.getInstance(project).add(dir)
             ApplicationManager.getApplication().invokeLater {
                 LocalFileSystem.getInstance().refreshAndFindFileByPath(target.path.replace('\\', '/'))?.let {
                     it.refresh(false, false)

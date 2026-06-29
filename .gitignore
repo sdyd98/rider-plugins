@@ -20,3 +20,7 @@ samples/loadtest-*
 # OS
 .DS_Store
 Thumbs.db
+
+# Local MCP client config — points Claude Code at this machine's running JetBrains IDE
+# (loopback SSE, http://127.0.0.1:64342/sse). Per-machine; not portable.
+.mcp.json

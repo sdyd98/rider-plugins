@@ -24,9 +24,11 @@ private const val HEADER_ROW = 1        // 1-based; matches the game-data conven
 private const val DATA_START_ROW = 4
 
 /** One sampled sheet: detected id column(s) + a capped distinct-value set per column. Raw rows are
- *  discarded after sampling, so only these compact sets are held while inferring across tables. */
+ *  discarded after sampling, so only these compact sets are held while inferring across tables.
+ *  [file] is the workbook path RELATIVE to the sampled root (e.g. `item/Item.xlsx`) so nested layouts
+ *  round-trip through refs.json. [tableId] is the sheet name, qualified only when it collides across files. */
 class TableSample(
-    val tableId: String,
+    var tableId: String,
     val file: String,
     val sheet: String,
     val columns: List<String>,
@@ -52,11 +54,11 @@ object SchemaInferencer {
 
     fun draftRefsJson(baseDir: File): String = toJson(infer(sample(baseDir)))
 
-    // ---- 1. sample every sheet (streaming, capped) ----
+    // ---- 1. sample every sheet (streaming, capped), recursing into subfolders ----
     fun sample(baseDir: File): List<TableSample> = withPoiClassLoader {
-        val files = baseDir.listFiles { f -> f.isFile && f.name.endsWith(".xlsx", true) && !f.name.startsWith("~") }.orEmpty()
         val out = ArrayList<TableSample>()
-        files.sortedBy { it.name }.forEach { file ->
+        xlsxFilesUnder(baseDir).forEach { file ->
+            val rel = file.relativeTo(baseDir).invariantSeparatorsPath // root-relative, '/'-joined for refs.json
             runCatching {
                 OPCPackage.open(file, PackageAccess.READ).use { pkg ->
                     val reader = XSSFReader(pkg)
@@ -66,12 +68,31 @@ object SchemaInferencer {
                     val sheets = reader.sheetsData as XSSFReader.SheetIterator
                     while (sheets.hasNext()) {
                         val stream = sheets.next()
-                        out.add(collect(stream, file.name, sheets.sheetName, styles, strings, fmt))
+                        out.add(collect(stream, rel, sheets.sheetName, styles, strings, fmt))
                     }
                 }
             }
         }
-        out
+        disambiguate(out)
+    }
+
+    private val IGNORED_DIRS = setOf(".git", ".idea", ".vs", ".gradle", "node_modules", "bin", "obj")
+
+    /** Every .xlsx under [baseDir] (recursive), skipping VCS/build/hidden dirs and Excel lock files. */
+    private fun xlsxFilesUnder(baseDir: File): List<File> =
+        baseDir.walkTopDown()
+            .onEnter { dir -> dir == baseDir || (!dir.name.startsWith(".") && dir.name.lowercase() !in IGNORED_DIRS) }
+            .filter { it.isFile && it.name.endsWith(".xlsx", true) && !it.name.startsWith("~") }
+            .sortedBy { it.invariantSeparatorsPath }
+            .toList()
+
+    /** Recursion can surface the same sheet name in different folders; the table id is the JSON key and a
+     *  ref target, so it must be unique. Keep the plain sheet name when it's unique; qualify collisions with
+     *  the workbook's relative path (always distinct across files). */
+    private fun disambiguate(samples: List<TableSample>): List<TableSample> {
+        val collides = samples.groupingBy { it.sheet }.eachCount().filterValues { it > 1 }.keys
+        samples.forEach { s -> if (s.sheet in collides) s.tableId = s.file.substringBeforeLast('.') + "#" + s.sheet }
+        return samples
     }
 
     private fun collect(stream: InputStream, file: String, sheet: String, styles: StylesTable?, strings: ReadOnlySharedStringsTable?, fmt: DataFormatter): TableSample {
@@ -86,32 +107,51 @@ object SchemaInferencer {
             .exceptionOrNull()?.let { if (it !is StopParsing) throw it } // StopParsing = sample cap reached
     }
 
-    /** Preview the first [limit] data rows of [sheet] (all columns) — for the MCP sample_rows tool. */
-    fun previewRows(baseDir: File, sheet: String, limit: Int): Pair<List<String>, List<Map<String, String>>> = withPoiClassLoader {
-        val files = baseDir.listFiles { f -> f.isFile && f.name.endsWith(".xlsx", true) && !f.name.startsWith("~") }.orEmpty()
-        files.sortedBy { it.name }.forEach { file ->
-            val hit = runCatching {
+    /** Resolve a table id to its (root-relative file, sheet) by reading only sheet NAMES — no row sampling —
+     *  applying the same collision-qualification as [disambiguate]. Lets sample_rows locate one table without
+     *  the full [sample] scan (which would parse every row of every workbook just to map id → file). */
+    fun locate(baseDir: File, tableId: String): Pair<String, String>? = withPoiClassLoader {
+        val entries = ArrayList<Pair<String, String>>() // relFile -> sheet
+        xlsxFilesUnder(baseDir).forEach { file ->
+            val rel = file.relativeTo(baseDir).invariantSeparatorsPath
+            runCatching {
                 OPCPackage.open(file, PackageAccess.READ).use { pkg ->
-                    val reader = XSSFReader(pkg)
-                    val styles = reader.stylesTable
-                    val strings = runCatching { ReadOnlySharedStringsTable(pkg) }.getOrNull()
-                    val fmt = DataFormatter()
-                    val sheets = reader.sheetsData as XSSFReader.SheetIterator
-                    while (sheets.hasNext()) {
-                        val stream = sheets.next()
-                        if (sheets.sheetName == sheet) {
-                            val c = SampleCollector(limit.coerceIn(1, MAX_ROWS))
-                            parseSheet(stream, c, styles, strings, fmt)
-                            return@use c.preview()
-                        }
-                        stream.close()
-                    }
-                    null
+                    val sheets = XSSFReader(pkg).sheetsData as XSSFReader.SheetIterator
+                    while (sheets.hasNext()) { sheets.next().close(); entries.add(rel to sheets.sheetName) }
                 }
-            }.getOrNull()
-            if (hit != null) return@withPoiClassLoader hit
+            }
         }
-        emptyList<String>() to emptyList()
+        val collides = entries.groupingBy { it.second }.eachCount().filterValues { it > 1 }.keys
+        entries.firstOrNull { (rel, sheet) ->
+            (if (sheet in collides) rel.substringBeforeLast('.') + "#" + sheet else sheet) == tableId
+        }
+    }
+
+    /** Preview the first [limit] data rows of [sheet] in the workbook at root-relative [relFile] (all
+     *  columns) — for the MCP sample_rows tool. [relFile]/[sheet] come from [locate]/[sample], so this is
+     *  collision-safe even when the same sheet name appears in several folders. */
+    fun previewRows(baseDir: File, relFile: String, sheet: String, limit: Int): Pair<List<String>, List<Map<String, String>>> = withPoiClassLoader {
+        val file = File(baseDir, relFile)
+        if (!file.isFile) return@withPoiClassLoader emptyList<String>() to emptyList()
+        runCatching {
+            OPCPackage.open(file, PackageAccess.READ).use { pkg ->
+                val reader = XSSFReader(pkg)
+                val styles = reader.stylesTable
+                val strings = runCatching { ReadOnlySharedStringsTable(pkg) }.getOrNull()
+                val fmt = DataFormatter()
+                val sheets = reader.sheetsData as XSSFReader.SheetIterator
+                while (sheets.hasNext()) {
+                    val stream = sheets.next()
+                    if (sheets.sheetName == sheet) {
+                        val c = SampleCollector(limit.coerceIn(1, MAX_ROWS))
+                        parseSheet(stream, c, styles, strings, fmt)
+                        return@use c.preview()
+                    }
+                    stream.close()
+                }
+                null
+            }
+        }.getOrNull() ?: (emptyList<String>() to emptyList())
     }
 
     // ---- 2. infer references by value overlap ----

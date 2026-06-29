@@ -49,12 +49,14 @@
     </extensions>
 
     <actions>
-        <!-- Infer a refs.json relationship-schema draft from the open workbook's data. -->
+        <!-- Designate the selected folder as a game-data root (per-checkout) and infer a refs.json draft
+             from the data under it. Available on the Tools menu and the Project-view folder context menu. -->
         <action id="com.example.xlsx.GenerateRefsAction"
                 class="com.example.xlsx.GenerateRefsAction"
-                text="refs.json 초안 생성"
-                description="Infer a refs.json relationship-schema draft from the workbook data by sampling each sheet">
+                text="데이터 루트로 지정 (refs.json 생성)"
+                description="Mark this folder as a game-data root and infer a refs.json relationship-schema draft from the data under it">
             <add-to-group group-id="ToolsMenu" anchor="last"/>
+            <add-to-group group-id="ProjectViewPopupMenu" anchor="last"/>
         </action>
     </actions>
 </idea-plugin>
