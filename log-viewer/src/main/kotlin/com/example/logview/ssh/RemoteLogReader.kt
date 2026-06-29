@@ -37,6 +37,7 @@ class RemoteLogReader(
         val t = Thread({
             var channel: ChannelExec? = null
             try {
+                if (closed) return@Thread // close() won the race before this thread ran — don't resurrect a session
                 val session = manager.session(profile)
                 val ch = session.openChannel("exec") as ChannelExec
                 channel = ch
@@ -45,12 +46,16 @@ class RemoteLogReader(
                 val ins = ch.inputStream
                 followChannel = ch // publish BEFORE connect so a concurrent close() can always reach it
                 ch.connect(CONNECT_TIMEOUT_MS)
-                if (!closed) pump(ins, onAppend) // blocks until the channel is disconnected by close()
-            } catch (e: Throwable) {
                 if (!closed) {
-                    manager.disconnect(profile.id) // a failed tail may mean a dead session — drop it so the next open reconnects
-                    onError(e)
+                    pump(ins, onAppend) // blocks until the channel is disconnected by close() or the stream dies
+                    // pump returned but we weren't closed → the remote stream died (channel/connection lost).
+                    if (!closed) onError(java.io.IOException("remote tail stream ended"))
                 }
+            } catch (e: Throwable) {
+                // Do NOT disconnect the shared session here: sibling tabs may be tailing the same host on it,
+                // and JSch Session.disconnect() would kill their channels too. A genuinely dead session is
+                // dropped by the keepalive (serverAliveInterval) and rebuilt by session()'s isConnected re-check.
+                if (!closed) onError(e)
             } finally {
                 runCatching { channel?.disconnect() } // always reclaim the channel (covers the close()-during-connect race)
             }

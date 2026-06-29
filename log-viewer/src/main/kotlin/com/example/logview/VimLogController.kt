@@ -166,8 +166,8 @@ class VimLogController(
             '`' -> { reset(); pendingMark = '`' }
             'J' -> { reset(); onShowJson() }
             'T' -> { val g = pending == 'g'; reset(); if (g) onSwitchTab(-1) else { onGotoTime(); reassertColumn() } }
-            '*' -> { reset(); onSearchWord(wordUnderCursor(), 1) }
-            '#' -> { reset(); onSearchWord(wordUnderCursor(), -1) }
+            '*' -> { reset(); onSearchWord(wordUnderCursor(), 1); reassertColumn() }
+            '#' -> { reset(); onSearchWord(wordUnderCursor(), -1); reassertColumn() }
             '/' -> { onFocusFilter(); reset() }
             '?' -> { reset(); showHelp() }
             else -> reset()
@@ -199,7 +199,10 @@ class VimLogController(
         if (charVisual && row != cursorRow) exitCharVisual() // char-wise selection is single-line
         cursorRow = row.coerceIn(0, maxOf(0, table.rowCount - 1))
         if (visual && table.rowCount > 0) {
-            table.setRowSelectionInterval(minOf(visualAnchor, cursorRow), maxOf(visualAnchor, cursorRow))
+            // Clamp the anchor: a live-tail front-trim can shrink the view below visualAnchor, and an
+            // out-of-range index would throw IllegalArgumentException from setRowSelectionInterval.
+            val anchor = visualAnchor.coerceIn(0, table.rowCount - 1)
+            table.setRowSelectionInterval(minOf(anchor, cursorRow), maxOf(anchor, cursorRow))
         } else {
             table.changeSelection(cursorRow, curCol.coerceIn(0, maxOf(0, table.columnCount - 1)), false, false)
         }
@@ -489,11 +492,17 @@ class VimLogController(
         val n = table.rowCount
         if (n == 0) return
         var r = curRow()
+        var prevLine = model.lineAt(table.convertRowIndexToModel(r)).lineNumber
         while (true) {
             r += dir
             if (r < 0 || r >= n) { gotoRow(if (dir > 0) n - 1 else 0); return }
-            val mr = table.convertRowIndexToModel(r)
-            if (model.rawAt(mr).isBlank()) { select(r); return }
+            val line = model.lineAt(table.convertRowIndexToModel(r)).lineNumber
+            // Blank rows are dropped from the view, so a paragraph boundary shows up as a gap in the stable
+            // source line number between two adjacent visible rows (a hidden line — blank or filtered — sat
+            // between them). Stop at the first such discontinuity rather than looking for a blank row that
+            // the filter guarantees can never be visible.
+            if (line - prevLine != dir) { select(r); return }
+            prevLine = line
         }
     }
 

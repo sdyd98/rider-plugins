@@ -77,7 +77,12 @@ class LogTableModel : AbstractTableModel() {
             val isCont = parsed.timestampMillis == LogLine.NO_TIME &&
                 lines.isNotEmpty() && currentBlockStart >= 0 && LogParser.looksLikeContinuation(clean)
             val level = if (isCont) lines[currentBlockStart].level else parsed.level
-            val line = LogLine(nextLineNumber++, raw, clean, level, parsed.timestampMillis, isCont, hasAnsi, parsed.messageStart)
+            // A continuation line (stack frame / payload fragment) is ALL body — it has no parsed
+            // level/timestamp prefix to strip. If LogParser found a stray level token inside it (e.g.
+            // `"level": "ERROR",`), messageStart would point past it and truncate the displayed text,
+            // so force messageStart = 0 for continuations.
+            val messageStart = if (isCont) 0 else parsed.messageStart
+            val line = LogLine(nextLineNumber++, raw, clean, level, parsed.timestampMillis, isCont, hasAnsi, messageStart)
             if (isCont) {
                 line.blockStart = currentBlockStart
             } else {

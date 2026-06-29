@@ -298,6 +298,8 @@ class LogViewerPanel(
         model.appendRaw(batch)
         if (following && atBottom) scrollToBottom()
         sizeContentColumnFor(batch)
+        // Data is flowing again → a prior initial-read error is stale; clear it so the bar shows LIVE.
+        if (batch.isNotEmpty() && statusError != null) statusError = null
         if (!streaming) pushChromeThrottled()
     }
 
@@ -314,10 +316,15 @@ class LogViewerPanel(
 
     private fun recompileSearch() {
         val q = queryText.trim()
+        // UNICODE_CHARACTER_CLASS so \b / \w honor non-ASCII letters — without it `\b한글\b` (built by the
+        // * / # word search) matches nothing because \b defaults to the ASCII word class. UNICODE_CASE
+        // makes case-insensitive matching Unicode-aware too.
+        val flags = Pattern.UNICODE_CHARACTER_CLASS or
+            (if (caseSensitive) 0 else Pattern.CASE_INSENSITIVE or Pattern.UNICODE_CASE)
         searchPattern = when {
             q.isEmpty() -> null
-            !useRegex -> Pattern.compile(Pattern.quote(q), if (caseSensitive) 0 else Pattern.CASE_INSENSITIVE)
-            else -> runCatching { Pattern.compile(q, if (caseSensitive) 0 else Pattern.CASE_INSENSITIVE) }.getOrNull()
+            !useRegex -> Pattern.compile(Pattern.quote(q), flags)
+            else -> runCatching { Pattern.compile(q, flags) }.getOrNull()
         }
         // In literal mode the pattern always compiles; in regex mode an invalid pattern falls back to literal contains.
         regexValid = q.isEmpty() || !useRegex || searchPattern != null
@@ -507,7 +514,14 @@ class LogViewerPanel(
         useRegex = true // \b word boundary needs regex mode (the word itself is alnum/_ — no escaping)
         val q = "\\b$word\\b"
         filterQuery.edit { replace(0, length, q) }
-        applyFilter(q)
+        // Apply directly rather than via applyFilter: applyFilter early-returns when the query text is
+        // unchanged, which would skip recompileSearch after we flipped useRegex and leave a stale
+        // (literal-quoted) pattern from a prior search of the same word.
+        queryText = q
+        recompileSearch()
+        sorter.rowFilter = buildRowFilter()
+        table.repaint()
+        pushChrome()
         repeatSearch(dir)
         focusGrid()
     }
@@ -522,7 +536,7 @@ class LogViewerPanel(
         repeat(n) {
             v = (v + dir + n) % n
             val raw = model.rawAt(table.convertRowIndexToModel(v))
-            val hit = if (pat != null) pat.matcher(raw).find() else raw.contains(q, ignoreCase = true)
+            val hit = if (pat != null) pat.matcher(raw).find() else raw.contains(q, ignoreCase = !caseSensitive)
             if (hit) { selectView(v); return }
         }
     }

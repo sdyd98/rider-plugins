@@ -117,4 +117,21 @@ class LogPipelineTest {
         assertEquals(3, model.rowCount)
         assertTrue(model.lineAt(1).raw.isBlank())
     }
+
+    @Test
+    fun `continuation line containing a stray level token is not truncated in the Message column`() {
+        val model = LogTableModel()
+        model.appendRaw(
+            listOf(
+                "2024-06-28 14:30:00.123 ERROR boom",
+                "    {\"level\": \"ERROR\", \"x\": 1}", // continuation whose body contains a level token
+            )
+        )
+        val cont = model.lineAt(1)
+        assertTrue(cont.isContinuation, "indented payload line should be a continuation")
+        // A continuation is all body (messageStart forced to 0) — the message must be the WHOLE line,
+        // not the truncated tail after the stray "ERROR" token.
+        assertTrue(cont.message.contains("\"level\""), "continuation message was truncated: '${cont.message}'")
+        assertTrue(cont.message.contains("\"x\": 1"), "continuation message was truncated: '${cont.message}'")
+    }
 }

@@ -40,16 +40,18 @@ class LocalLogReader(private val path: Path) : LogReader {
     override fun startTail(onAppend: (List<String>) -> Unit, onError: (Throwable) -> Unit) {
         if (closed || follow != null) return
         val t = Thread({
-            try {
-                while (!closed) {
+            while (!closed) {
+                try {
                     Thread.sleep(pollMs)
                     if (closed) break
                     pollOnce(onAppend)
+                } catch (ie: InterruptedException) {
+                    break // normal shutdown
+                } catch (e: Exception) {
+                    // Transient file error (e.g. FileNotFound / sharing violation during the log-rotation
+                    // rename window, common on Windows) — skip this poll and retry next tick rather than
+                    // killing the tail permanently. A genuine deletion is handled by file.exists() in pollOnce.
                 }
-            } catch (ie: InterruptedException) {
-                // normal shutdown
-            } catch (e: Throwable) {
-                if (!closed) onError(e)
             }
         }, "logview-tail-${file.name}")
         t.isDaemon = true
