@@ -57,6 +57,11 @@ class ComposeLogDetail {
             val json = LogStructure.extractJson(it.display)?.let { j -> runCatching { LogStructure.prettyJson(j) }.getOrNull() }
             LogDetailData(it.lineNumber, it.timeText, it.level, it.display, json)
         }
+        // This panel has no continuous animation, so its Compose frame loop can be idle when the row
+        // selection changes from EDT code → the state write isn't picked up and the previous render
+        // stays. Flush the snapshot and repaint to drive a frame so the new line actually renders.
+        androidx.compose.runtime.snapshots.Snapshot.sendApplyNotifications()
+        component.repaint()
     }
 }
 
