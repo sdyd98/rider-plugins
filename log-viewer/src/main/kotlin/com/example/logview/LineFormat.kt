@@ -58,7 +58,7 @@ class LineFormat private constructor(
         private fun defaultCapture(field: String): String = when (field) {
             "message" -> ".*"
             "time" -> TS
-            else -> "[^\\s\\]\\)]+" // level / thread: a token bounded by whitespace or a ] / ) literal
+            else -> "[^\\s\\[\\]{}()|]+" // level / thread: bounded by whitespace OR any delimiter ([](){}|)
         }
 
         /** Template if it contains a `%{…}` placeholder, else a raw regex. Blank text → an inert format. */
@@ -118,17 +118,27 @@ class LineFormat private constructor(
 
         private val BRACKETS = mapOf('[' to ']', '(' to ')', '{' to '}', '<' to '>')
 
-        /** Split [line] into its non-whitespace tokens with char offsets (for the visual region picker). */
+        /** Delimiters that also split tokens (so non-space-separated logs — `a|b`, `[x][y]` — are clickable).
+         *  Timestamp-internal chars (`: - . / ,`) are deliberately NOT here, so a stamp stays one field. */
+        private const val DELIMS = "[](){}|"
+
+        /** Split [line] into tokens at whitespace AND [DELIMS]; each delimiter char is its own token. */
         fun tokenize(line: String): List<FormatToken> {
             val toks = ArrayList<FormatToken>()
             var i = 0
             while (i < line.length) {
-                if (line[i].isWhitespace()) {
+                val c = line[i]
+                if (c.isWhitespace()) {
+                    i++
+                    continue
+                }
+                if (c in DELIMS) {
+                    toks.add(FormatToken(c.toString(), i, i + 1))
                     i++
                     continue
                 }
                 val start = i
-                while (i < line.length && !line[i].isWhitespace()) i++
+                while (i < line.length && !line[i].isWhitespace() && line[i] !in DELIMS) i++
                 toks.add(FormatToken(line.substring(start, i), start, i))
             }
             return toks
@@ -164,8 +174,10 @@ class LineFormat private constructor(
                         pos = tokens[j].end
                         i = j + 1
                     }
-                    else -> { // unassigned (or a duplicate/used field) → a wildcard token, so skipping a
-                        sb.append("\\S+") // field (e.g. thread) still generalizes instead of pinning a literal
+                    else -> { // unassigned (or a duplicate/used) token
+                        // A delimiter/punctuation token (e.g. `|` `[` `]`) is a literal; a value token is a
+                        // wildcard, so skipping a field (e.g. thread) still generalizes to other lines.
+                        if (tok.text.none { it.isLetterOrDigit() }) appendLiteral(sb, tok.text) else sb.append("\\S+")
                         pos = tok.end
                         i++
                     }

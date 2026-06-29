@@ -81,10 +81,12 @@ class LineFormatTest {
     fun `buildRegex from clicked token regions produces a working, generalizing format`() {
         val line = "2026-06-29 09:00:01.001 [worker-3] ERROR com.game.Db - refused"
         val toks = LineFormat.tokenize(line)
-        assertEquals("[worker-3]", toks[2].text) // brackets are part of the token
+        // Brackets are now their own tokens: 0=date 1=time 2=[ 3=worker-3 4=] 5=ERROR 6=com.game.Db …
+        assertEquals("[", toks[2].text)
+        assertEquals("worker-3", toks[3].text)
 
-        // Simulate clicks: tokens 0+1 = time, 2 = thread, 3 = level, 4 = message-start.
-        val assign = mapOf(0 to "time", 1 to "time", 2 to "thread", 3 to "level", 4 to "message")
+        // Simulate clicks: tokens 0+1 = time, 3 = thread, 5 = level, 6 = message-start.
+        val assign = mapOf(0 to "time", 1 to "time", 3 to "thread", 5 to "level", 6 to "message")
         val rx = LineFormat.buildRegex(line, toks, assign)
         val fmt = LineFormat.fromRegex(rx)
         assertTrue(fmt.valid, "generated regex should compile: $rx")
@@ -105,8 +107,8 @@ class LineFormatTest {
     fun `buildRegex wildcards an unassigned token so a skipped field still generalizes`() {
         val line = "2026-06-29 09:00:01.001 [worker-3] ERROR boot done"
         val toks = LineFormat.tokenize(line)
-        // Assign time (0,1), SKIP thread (2 unassigned → \S+), level (3), message (4).
-        val assign = mapOf(0 to "time", 1 to "time", 3 to "level", 4 to "message")
+        // Assign time (0,1), SKIP thread (3=worker-3 unassigned → \S+; brackets stay literal), level (5), message (6).
+        val assign = mapOf(0 to "time", 1 to "time", 5 to "level", 6 to "message")
         val fmt = LineFormat.fromRegex(LineFormat.buildRegex(line, toks, assign))
         assertTrue(fmt.valid)
         assertEquals("ERROR", fmt.apply(line)!!.level)
@@ -116,5 +118,26 @@ class LineFormatTest {
         val m2 = fmt.apply(line2)!!
         assertEquals("WARN", m2.level)
         assertEquals("low disk", line2.substring(m2.messageStart))
+    }
+
+    @Test
+    fun `delimiter tokenization makes a pipe-separated (no-space) line clickable`() {
+        val line = "2026-06-29 09:00:01|ERROR|worker-7|connection lost"
+        val toks = LineFormat.tokenize(line)
+        // 0=2026-06-29 1=09:00:01 2=| 3=ERROR 4=| 5=worker-7 6=| 7=connection 8=lost
+        assertEquals("|", toks[2].text)
+        assertEquals("ERROR", toks[3].text)
+
+        val assign = mapOf(0 to "time", 1 to "time", 3 to "level", 5 to "thread", 7 to "message")
+        val fmt = LineFormat.fromRegex(LineFormat.buildRegex(line, toks, assign))
+        assertTrue(fmt.valid)
+        val m = fmt.apply(line)!!
+        assertEquals("ERROR", m.level) // not over-matched across the pipes
+        assertEquals("connection lost", line.substring(m.messageStart))
+
+        val line2 = "2026-06-29 09:00:02|WARN|main|disk low"
+        val m2 = fmt.apply(line2)!!
+        assertEquals("WARN", m2.level)
+        assertEquals("disk low", line2.substring(m2.messageStart))
     }
 }
