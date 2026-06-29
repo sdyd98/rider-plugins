@@ -27,6 +27,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import org.jetbrains.jewel.bridge.JewelComposePanel
+import org.jetbrains.jewel.ui.component.Dropdown
 import org.jetbrains.jewel.ui.component.Text
 import org.jetbrains.jewel.ui.component.TextField
 import javax.swing.JComponent
@@ -63,35 +64,28 @@ fun createLineFormatSettings(sampleLines: List<String>, onApply: () -> Unit, onC
             Text("줄 형식 (Time · Level · Message 분리)", color = palette.text, fontWeight = FontWeight.Bold, fontSize = 13.sp)
 
             if (library.isNotEmpty()) {
-                Text("저장된 포맷 — 클릭해서 적용", color = palette.mutedText, fontWeight = FontWeight.Bold, fontSize = 11.sp)
-                Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                    library.forEach { name ->
-                        val isActive = name == activeName
-                        Row(
-                            Modifier.fillMaxWidth().clip(RoundedCornerShape(Radii.sm))
-                                .background(if (isActive) palette.accent.copy(alpha = 0.14f) else Color.Transparent)
-                                .padding(horizontal = Space.sm, vertical = 3.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(Space.sm),
-                        ) {
-                            Text(
-                                (if (isActive) "● " else "○ ") + name,
-                                color = if (isActive) palette.accent else palette.text,
-                                fontSize = 12.sp,
-                                modifier = Modifier.weight(1f).clickable { store.activate(name); changed() },
-                            )
-                            if (isActive) Text("적용중", color = palette.mutedText, fontSize = 10.sp)
-                            ToolButton("삭제", palette) { store.remove(name); changed() }
-                        }
+                Row(
+                    Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(Space.sm),
+                ) {
+                    Text("적용 형식", color = palette.mutedText, fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                    Dropdown(
+                        modifier = Modifier.weight(1f),
+                        menuContent = {
+                            selectableItem(selected = activeName == null, onClick = { store.activate(null); changed() }) {
+                                Text("자동 (형식 없음)")
+                            }
+                            library.forEach { name ->
+                                selectableItem(selected = name == activeName, onClick = { store.activate(name); changed() }) {
+                                    Text(name)
+                                }
+                            }
+                        },
+                    ) {
+                        Text(activeName ?: "자동 (형식 없음)")
                     }
-                    if (activeName != null) {
-                        Text(
-                            "형식 끄기 (자동 분석으로)",
-                            color = palette.mutedText,
-                            fontSize = 11.sp,
-                            modifier = Modifier.clickable { store.activate(null); changed() }.padding(horizontal = Space.sm, vertical = 2.dp),
-                        )
-                    }
+                    if (activeName != null) ToolButton("삭제", palette) { store.remove(activeName); changed() }
                 }
             }
 
@@ -181,7 +175,16 @@ private fun RegionPicker(line: String, sampleLines: List<String>, palette: LogPa
             }
         }
 
-        Text("미리보기 (현재 로그 앞부분)", color = palette.mutedText, fontWeight = FontWeight.Bold, fontSize = 11.sp)
+        Text("미리보기 — 현재 로그가 이 형식으로 이렇게 나뉩니다", color = palette.mutedText, fontWeight = FontWeight.Bold, fontSize = 11.sp)
+        // Column headers so it's clear what the three preview columns are.
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = Space.sm),
+            horizontalArrangement = Arrangement.spacedBy(Space.sm),
+        ) {
+            Text("시간", color = palette.mutedText, fontSize = 10.sp, fontWeight = FontWeight.Bold, modifier = Modifier.width(96.dp))
+            Text("레벨", color = palette.mutedText, fontSize = 10.sp, fontWeight = FontWeight.Bold, modifier = Modifier.width(56.dp))
+            Text("메시지", color = palette.mutedText, fontSize = 10.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+        }
         Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(2.dp)) {
             if (sampleLines.isEmpty()) {
                 Text("(로그가 비어 있어 미리보기 없음)", color = palette.mutedText, fontSize = 11.sp)
@@ -189,6 +192,7 @@ private fun RegionPicker(line: String, sampleLines: List<String>, palette: LogPa
                 sampleLines.forEach { PreviewRow(it, previewFormats, palette) }
             }
         }
+        Text("회색 줄 = 이 형식에 안 맞는 줄 (원본 그대로 표시)", color = palette.mutedText, fontSize = 10.sp)
 
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Space.sm)) {
             Text("이름", color = palette.mutedText, fontSize = 11.sp)
