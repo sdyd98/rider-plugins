@@ -73,7 +73,10 @@ class LogTableModel : AbstractTableModel() {
         else -> "Message"
     }
     override fun getValueAt(rowIndex: Int, columnIndex: Int): Any {
-        val l = lines[rowIndex]
+        // Tolerate a transient out-of-range row: Swing can paint via getValueAt with a stale row-sorter
+        // mapping in the brief window after clear()/refilter, before the sorter rebuilds — returning ""
+        // here avoids an IndexOutOfBounds flood on the EDT (which froze the UI on reparse/reopen).
+        val l = lines.getOrNull(rowIndex) ?: return ""
         return when (columnIndex) {
             COL_TIME -> l.timeText
             COL_LEVEL -> if (l.level == LogLevel.OTHER) "" else l.level.label

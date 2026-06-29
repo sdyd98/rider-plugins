@@ -278,18 +278,20 @@ class LogViewerPanel(
     private fun showFormatSettings() {
         displayPopup?.cancel()
         val store = LineFormatStore.getInstance()
-        // Pre-fill a sensible default template when the user has no formats yet (a starting point to edit).
-        val seed = store.sources().ifEmpty { listOf(LineFormat.DEFAULT_TEMPLATE) }.joinToString("\n")
-        lineFormatState.edit { replace(0, length, seed) }
+        // Seed with the current saved formats (none → empty); the region picker writes the generated rule in.
+        lineFormatState.edit { replace(0, length, store.sources().joinToString("\n")) }
         val sample = (0 until minOf(model.loadedRowCount(), 8)).map { model.rawAt(it) }
-        val panel = createLineFormatSettings(lineFormatState, sample)
+        var popupRef: com.intellij.openapi.ui.popup.JBPopup? = null
+        val panel = createLineFormatSettings(lineFormatState, sample) { popupRef?.cancel() }
         val popup = JBPopupFactory.getInstance()
             .createComponentPopupBuilder(panel, panel)
             .setRequestFocus(true)
             .setResizable(true)
             .setMovable(true)
+            .setCancelOnClickOutside(false) // accidental outside-clicks shouldn't close + re-read; use 적용하고 닫기 / Esc
             .setTitle("줄 형식")
             .createPopup()
+        popupRef = popup
         popup.addListener(object : com.intellij.openapi.ui.popup.JBPopupListener {
             override fun onClosed(event: com.intellij.openapi.ui.popup.LightweightWindowEvent) {
                 val newFormats = lineFormatState.text.lineSequence().map { it.trim() }.filter { it.isNotEmpty() }.toList()
