@@ -1,0 +1,7 @@
+2026-06-28 10:00:01.001 [main] [32mINFO [0m  com.game.server.Boot - [1mserver started[0m on port [36m7777[0m
+2026-06-28 10:00:02.014 [main] [33mWARN [0m  com.game.server.Pool - slow query [33m1240ms[0m on [35maccounts[0m
+2026-06-28 10:00:03.027 [worker-3] [31mERROR[0m com.game.server.Db - [1;31mconnection refused[0m to [36m10.0.0.5:5432[0m
+2026-06-28 10:00:04.033 [http] [32mINFO [0m  com.game.server.Api - [90mGET[0m /match [32m200[0m in [36m12ms[0m
+2026-06-28 10:00:05.041 [http] [32mINFO [0m  com.game.server.Api - [90mPOST[0m /login [31m401[0m in [36m8ms[0m
+2026-06-28 10:00:06.052 [main] [34mDEBUG[0m com.game.server.Cache - hit ratio [38;5;208m92%[0m keys=[36m1820[0m
+2026-06-28 10:00:07.061 [main] [32mINFO [0m  com.game.server.Match - [38;2;120;200;120mranked queue[0m mmr=[36m2100[0m

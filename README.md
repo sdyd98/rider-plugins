@@ -14,7 +14,11 @@ rider-plugins/
 ├─ gradle.properties            riderLocalPath + shared Gradle/Kotlin flags
 ├─ common/                      shared library (POI helpers; grid/vim infra will move here)
 │  └─ src/main/kotlin/…
-└─ xlsx-editor/                 plugin: in-IDE .xlsx/.xls grid viewer (see its own README)
+├─ xlsx-editor/                 plugin: in-IDE .xlsx/.xls grid viewer (see its own README)
+│  ├─ build.gradle.kts
+│  ├─ README.md
+│  └─ src/main/{kotlin,resources/META-INF/plugin.xml}
+└─ log-viewer/                  plugin: local + remote (SSH/SFTP) log viewer (see its own README)
    ├─ build.gradle.kts
    ├─ README.md
    └─ src/main/{kotlin,resources/META-INF/plugin.xml}

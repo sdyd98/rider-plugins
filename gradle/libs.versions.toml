@@ -1,6 +1,10 @@
 # Shared dependency versions for every plugin module in this repo.
 [versions]
 poi = "5.5.1"
+# Maintained fork of JSch (com.jcraft is abandoned): modern KEX/cipher support, single self-contained
+# jar, no BouncyCastle requirement for password / RSA / ECDSA auth — easy to bundle in a plugin.
+jsch = "0.2.21"
 
 [libraries]
 poi-ooxml = { module = "org.apache.poi:poi-ooxml", version.ref = "poi" }
+jsch = { module = "com.github.mwiede:jsch", version.ref = "jsch" }

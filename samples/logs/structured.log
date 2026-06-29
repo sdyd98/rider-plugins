@@ -1,0 +1,15 @@
+2026-06-29 09:00:01.001 INFO  host=in7 thread_id=217220 service=auth user=alice action=login result=ok
+2026-06-29 09:00:01.187 DEBUG host=in7 thread_id=217220 service=auth token=ey9.abc.def ttl=3600
+2026-06-29 09:00:01.250 WARN  host=in7 thread_id=217221 service=auth latency_ms=812 msg="slow upstream"
+2026-06-29 09:00:01.998 INFO  host=in8 thread_id=200044 service=catalog query="select * from items" rows=128
+2026-06-29 09:00:02.140 INFO  host=in8 thread_id=200045 service=catalog cache=hit key=items:page:1
+2026-06-29 09:00:02.512 ERROR host=in9 thread_id=300101 service=payment order=88213 error="card declined" code=402
+2026-06-29 09:00:02.515 INFO  host=in9 thread_id=300101 service=payment order=88213 retry=1 gateway=stripe
+2026-06-29 09:00:03.001 INFO  host=in7 thread_id=217230 service=auth user=bob action=logout result=ok
+2026-06-29 09:00:03.330 WARN  host=in8 thread_id=200050 service=catalog latency_ms=1502 msg="db pool exhausted"
+2026-06-29 09:00:03.880 ERROR host=in9 thread_id=300120 service=payment order=88240 error="timeout" code=504 gateway=stripe
+2026-06-29 09:00:04.010 INFO  host=in7 thread_id=217240 service=auth user=carol action=login result=ok mfa=true
+2026-06-29 09:00:04.221 DEBUG host=in8 thread_id=200061 service=catalog cache=miss key=items:page:9 fetch_ms=42
+2026-06-29 09:00:04.700 INFO  host=in9 thread_id=300130 service=payment order=88251 amount=19.99 currency=USD result=ok
+2026-06-29 09:00:05.120 WARN  host=in7 thread_id=217250 service=auth user=dave reason="rate limited" window_s=60
+2026-06-29 09:00:05.640 ERROR host=in8 thread_id=200070 service=catalog error="null pointer" span=catalog.render trace=ab12cd34

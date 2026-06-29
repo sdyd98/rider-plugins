@@ -1,0 +1,282 @@
+2026-06-28 10:00:01.099 [main] INFO  com.game.server.Module4 - Saved snapshot seq=6028
+2026-06-28 10:00:02.854 [main] INFO  com.game.server.Module4 - Matchmaking ticket queued mmr=7238
+2026-06-28 10:00:03.272 [main] INFO  com.game.server.Module8 - Player connected id=6934
+2026-06-28 10:00:04.910 [main] INFO  com.game.server.Module2 - Spawned npc#6292 in zone harbor
+2026-06-28 10:00:05.533 [main] INFO  com.game.server.Module3 - GC pause 1014ms
+2026-06-28 10:00:06.987 [main] TRACE com.game.server.Module1 - Heartbeat ok peers=5300
+2026-06-28 10:00:07.524 [main] INFO  com.game.server.Module3 - Auth token refreshed user=8759
+2026-06-28 10:00:08.071 [main] ERROR com.game.server.Module3 - Cache warmed keys=8857
+2026-06-28 10:00:09.172 [main] INFO  com.game.server.Module4 - Saved snapshot seq=9293
+2026-06-28 10:00:10.726 [main] INFO  com.game.server.Module4 - Spawned npc#9068 in zone harbor
+2026-06-28 10:00:11.304 [main] DEBUG com.game.server.Module4 - Player connected id=1123
+2026-06-28 10:00:12.694 [main] INFO  com.game.server.Module8 - Heartbeat ok peers=4442
+2026-06-28 10:00:13.071 [main] DEBUG com.game.server.Module5 - Spawned npc#5103 in zone harbor
+2026-06-28 10:00:14.591 [main] INFO  com.game.server.Module6 - Slow query took 4762ms
+2026-06-28 10:00:15.851 [main] INFO  com.game.server.Module3 - Loaded data table items rows=7871
+2026-06-28 10:00:16.804 [main] ERROR com.game.server.Module1 - Cache warmed keys=5777
+2026-06-28 10:00:17.155 [main] INFO  com.game.server.Module9 - Slow query took 3233ms
+2026-06-28 10:00:18.175 [main] INFO  com.game.server.Module2 - Loaded data table items rows=7782
+2026-06-28 10:00:19.282 [main] INFO  com.game.server.Module3 - GC pause 7279ms
+2026-06-28 10:00:20.614 [main] INFO  com.game.server.Module5 - Player connected id=5596
+2026-06-28 10:00:21.104 [main] INFO  com.game.server.Module4 - Slow query took 8357ms
+2026-06-28 10:00:22.758 [main] ERROR com.game.server.Module2 - GC pause 2724ms
+2026-06-28 10:00:23.779 [main] INFO  com.game.server.Module5 - Player connected id=6347
+2026-06-28 10:00:24.377 [main] INFO  com.game.server.Module4 - Saved snapshot seq=5629
+2026-06-28 10:00:25.279 [main] WARN  com.game.server.Module8 - GC pause 3058ms
+2026-06-28 10:00:26.230 [main] INFO  com.game.server.Module2 - Slow query took 6166ms
+2026-06-28 10:00:27.965 [main] INFO  com.game.server.Module5 - Matchmaking ticket queued mmr=7911
+2026-06-28 10:00:28.670 [main] DEBUG com.game.server.Module2 - Saved snapshot seq=6335
+2026-06-28 10:00:29.607 [main] INFO  com.game.server.Module2 - Player connected id=2196
+2026-06-28 10:00:30.033 [main] INFO  com.game.server.Module1 - GC pause 5174ms
+2026-06-28 10:00:31.202 [main] INFO  com.game.server.Module7 - Spawned npc#8671 in zone harbor
+2026-06-28 10:00:32.622 [main] INFO  com.game.server.Module3 - Matchmaking ticket queued mmr=5730
+2026-06-28 10:00:33.647 [main] INFO  com.game.server.Module4 - Cache warmed keys=6927
+2026-06-28 10:00:34.077 [main] INFO  com.game.server.Module3 - Spawned npc#5323 in zone harbor
+2026-06-28 10:00:35.010 [main] INFO  com.game.server.Module5 - Slow query took 4731ms
+2026-06-28 10:00:36.209 [main] INFO  com.game.server.Module2 - Slow query took 3667ms
+2026-06-28 10:00:37.283 [main] INFO  com.game.server.Module8 - Player connected id=1400
+2026-06-28 10:00:37.966 [http] INFO  com.game.server.Api - request {"path":"/match","userId":8207,"params":{"mode":"ranked","mmr":550},"ok":true}
+2026-06-28 10:00:38.000 [main] DEBUG com.game.server.Module8 - Cache warmed keys=7287
+2026-06-28 10:00:39.155 [main] INFO  com.game.server.Module8 - Cache warmed keys=6423
+2026-06-28 10:00:40.564 [main] ERROR com.game.server.Module4 - Saved snapshot seq=3517
+2026-06-28 10:00:41.366 [main] INFO  com.game.server.Module9 - Matchmaking ticket queued mmr=1611
+2026-06-28 10:00:42.414 [main] INFO  com.game.server.Module7 - Player connected id=1174
+2026-06-28 10:00:43.639 [main] INFO  com.game.server.Module9 - GC pause 6019ms
+2026-06-28 10:00:44.761 [main] TRACE com.game.server.Module6 - Saved snapshot seq=4769
+2026-06-28 10:00:45.750 [main] INFO  com.game.server.Module1 - Spawned npc#2226 in zone harbor
+2026-06-28 10:00:46.835 [main] INFO  com.game.server.Module3 - Cache warmed keys=4034
+2026-06-28 10:00:47.983 [main] INFO  com.game.server.Module4 - Matchmaking ticket queued mmr=2417
+2026-06-28 10:00:48.171 [main] WARN  com.game.server.Module9 - Auth token refreshed user=7057
+2026-06-28 10:00:49.409 [main] DEBUG com.game.server.Module1 - Slow query took 5075ms
+2026-06-28 10:00:50.714 [main] INFO  com.game.server.Module9 - Saved snapshot seq=4109
+2026-06-28 10:00:51.439 [main] INFO  com.game.server.Module6 - Saved snapshot seq=4190
+2026-06-28 10:00:52.842 [main] INFO  com.game.server.Module3 - Auth token refreshed user=4764
+2026-06-28 10:00:53.864 [main] INFO  com.game.server.Module6 - Slow query took 4207ms
+2026-06-28 10:00:53.286 [worker-3] ERROR com.game.server.Db - failed to persist match result
+java.sql.SQLException: connection timed out after 5000ms
+	at com.game.db.Pool.borrow(Pool.java:142)
+	at com.game.db.Pool.execute(Pool.java:88)
+	at com.game.server.Db.persist(Db.java:204)
+	at com.game.server.Worker.run(Worker.java:51)
+Caused by: java.net.SocketTimeoutException: connect timed out
+	at java.base/java.net.Socket.connect(Socket.java:633)
+	... 4 more
+2026-06-28 10:00:54.659 [main] INFO  com.game.server.Module6 - Cache warmed keys=7035
+2026-06-28 10:00:55.838 [main] INFO  com.game.server.Module3 - Player connected id=8841
+2026-06-28 10:00:56.795 [main] INFO  com.game.server.Module8 - GC pause 5483ms
+2026-06-28 10:00:57.926 [main] ERROR com.game.server.Module1 - Spawned npc#2792 in zone harbor
+2026-06-28 10:00:58.181 [main] TRACE com.game.server.Module8 - Loaded data table items rows=9289
+2026-06-28 10:00:59.794 [main] INFO  com.game.server.Module4 - Heartbeat ok peers=7172
+2026-06-28 10:01:00.534 [main] TRACE com.game.server.Module9 - Heartbeat ok peers=2583
+2026-06-28 10:01:01.478 [main] INFO  com.game.server.Module6 - GC pause 7796ms
+2026-06-28 10:01:02.886 [main] INFO  com.game.server.Module8 - Player connected id=6543
+2026-06-28 10:01:03.245 [main] INFO  com.game.server.Module9 - Cache warmed keys=1869
+2026-06-28 10:01:04.925 [main] DEBUG com.game.server.Module9 - Slow query took 3674ms
+2026-06-28 10:01:05.699 [main] INFO  com.game.server.Module6 - Cache warmed keys=2779
+2026-06-28 10:01:06.752 [main] DEBUG com.game.server.Module2 - Heartbeat ok peers=4434
+2026-06-28 10:01:07.603 [main] DEBUG com.game.server.Module5 - Cache warmed keys=7996
+2026-06-28 10:01:08.123 [main] DEBUG com.game.server.Module2 - Player connected id=2451
+2026-06-28 10:01:09.840 [main] INFO  com.game.server.Module4 - Auth token refreshed user=9857
+2026-06-28 10:01:10.752 [main] DEBUG com.game.server.Module4 - Loaded data table items rows=9717
+2026-06-28 10:01:11.599 [main] ERROR com.game.server.Module5 - Cache warmed keys=3140
+2026-06-28 10:01:12.770 [main] INFO  com.game.server.Module4 - Saved snapshot seq=3508
+2026-06-28 10:01:13.780 [main] ERROR com.game.server.Module6 - Auth token refreshed user=6431
+2026-06-28 10:01:14.323 [main] WARN  com.game.server.Module1 - Cache warmed keys=2091
+2026-06-28 10:01:14.316 [http] INFO  com.game.server.Api - request {"path":"/match","userId":7820,"params":{"mode":"ranked","mmr":2069},"ok":true}
+2026-06-28 10:01:15.264 [main] WARN  com.game.server.Module2 - Slow query took 1566ms
+2026-06-28 10:01:16.830 [main] INFO  com.game.server.Module1 - Player connected id=2744
+2026-06-28 10:01:17.799 [main] WARN  com.game.server.Module6 - Spawned npc#6852 in zone harbor
+2026-06-28 10:01:18.034 [main] INFO  com.game.server.Module3 - Matchmaking ticket queued mmr=6029
+2026-06-28 10:01:19.712 [main] INFO  com.game.server.Module8 - Spawned npc#3219 in zone harbor
+2026-06-28 10:01:20.273 [main] INFO  com.game.server.Module2 - Player connected id=7102
+2026-06-28 10:01:21.681 [main] WARN  com.game.server.Module1 - Matchmaking ticket queued mmr=8725
+2026-06-28 10:01:22.949 [main] WARN  com.game.server.Module6 - GC pause 7355ms
+2026-06-28 10:01:23.068 [main] INFO  com.game.server.Module5 - GC pause 3076ms
+2026-06-28 10:01:24.701 [main] INFO  com.game.server.Module2 - Heartbeat ok peers=1287
+2026-06-28 10:01:25.809 [main] INFO  com.game.server.Module5 - Auth token refreshed user=2411
+2026-06-28 10:01:26.520 [main] WARN  com.game.server.Module6 - Auth token refreshed user=9166
+2026-06-28 10:01:27.506 [main] WARN  com.game.server.Module4 - Loaded data table items rows=3066
+2026-06-28 10:01:28.854 [main] INFO  com.game.server.Module9 - Matchmaking ticket queued mmr=9758
+2026-06-28 10:01:29.761 [main] INFO  com.game.server.Module2 - Saved snapshot seq=9764
+2026-06-28 10:01:30.587 [main] ERROR com.game.server.Module6 - Auth token refreshed user=9830
+2026-06-28 10:01:31.084 [main] INFO  com.game.server.Module1 - Auth token refreshed user=4207
+2026-06-28 10:01:32.353 [main] INFO  com.game.server.Module3 - Matchmaking ticket queued mmr=3223
+2026-06-28 10:01:33.341 [main] INFO  com.game.server.Module5 - Loaded data table items rows=5896
+2026-06-28 10:01:34.084 [main] TRACE com.game.server.Module2 - Heartbeat ok peers=2631
+2026-06-28 10:01:35.448 [main] TRACE com.game.server.Module5 - Loaded data table items rows=6252
+2026-06-28 10:01:36.489 [main] DEBUG com.game.server.Module3 - Slow query took 3957ms
+2026-06-28 10:01:37.581 [main] WARN  com.game.server.Module9 - Auth token refreshed user=6533
+2026-06-28 10:01:38.699 [main] INFO  com.game.server.Module9 - Matchmaking ticket queued mmr=6087
+2026-06-28 10:01:39.505 [main] INFO  com.game.server.Module6 - Loaded data table items rows=1096
+2026-06-28 10:01:40.109 [main] INFO  com.game.server.Module1 - Cache warmed keys=1855
+2026-06-28 10:01:41.176 [main] DEBUG com.game.server.Module3 - Spawned npc#4260 in zone harbor
+2026-06-28 10:01:42.179 [main] WARN  com.game.server.Module2 - Player connected id=9179
+2026-06-28 10:01:43.864 [main] INFO  com.game.server.Module1 - Loaded data table items rows=3702
+2026-06-28 10:01:44.413 [main] INFO  com.game.server.Module4 - Loaded data table items rows=3225
+2026-06-28 10:01:45.310 [main] INFO  com.game.server.Module4 - Matchmaking ticket queued mmr=5743
+2026-06-28 10:01:46.857 [main] TRACE com.game.server.Module8 - Cache warmed keys=2038
+2026-06-28 10:01:46.512 [worker-3] ERROR com.game.server.Db - failed to persist match result
+java.sql.SQLException: connection timed out after 5000ms
+	at com.game.db.Pool.borrow(Pool.java:142)
+	at com.game.db.Pool.execute(Pool.java:88)
+	at com.game.server.Db.persist(Db.java:204)
+	at com.game.server.Worker.run(Worker.java:51)
+Caused by: java.net.SocketTimeoutException: connect timed out
+	at java.base/java.net.Socket.connect(Socket.java:633)
+	... 4 more
+2026-06-28 10:01:47.503 [main] INFO  com.game.server.Module9 - Slow query took 5154ms
+2026-06-28 10:01:48.489 [main] DEBUG com.game.server.Module3 - Auth token refreshed user=9314
+2026-06-28 10:01:49.359 [main] INFO  com.game.server.Module3 - Loaded data table items rows=6397
+2026-06-28 10:01:50.046 [main] WARN  com.game.server.Module4 - GC pause 8023ms
+2026-06-28 10:01:51.308 [main] INFO  com.game.server.Module4 - Auth token refreshed user=5169
+2026-06-28 10:01:51.684 [http] INFO  com.game.server.Api - request {"path":"/match","userId":4647,"params":{"mode":"ranked","mmr":1280},"ok":true}
+2026-06-28 10:01:52.992 [main] INFO  com.game.server.Module2 - Slow query took 8728ms
+2026-06-28 10:01:53.661 [main] INFO  com.game.server.Module1 - Loaded data table items rows=6554
+2026-06-28 10:01:54.798 [main] INFO  com.game.server.Module5 - Loaded data table items rows=8095
+2026-06-28 10:01:55.016 [main] TRACE com.game.server.Module7 - Saved snapshot seq=2126
+2026-06-28 10:01:56.596 [main] WARN  com.game.server.Module8 - Cache warmed keys=2805
+2026-06-28 10:01:57.369 [main] TRACE com.game.server.Module7 - Auth token refreshed user=8192
+2026-06-28 10:01:58.906 [main] ERROR com.game.server.Module7 - Matchmaking ticket queued mmr=5236
+2026-06-28 10:01:59.511 [main] INFO  com.game.server.Module3 - Cache warmed keys=2309
+2026-06-28 10:02:00.340 [main] TRACE com.game.server.Module5 - Saved snapshot seq=6907
+2026-06-28 10:02:01.609 [main] INFO  com.game.server.Module9 - Saved snapshot seq=8252
+2026-06-28 10:02:02.710 [main] DEBUG com.game.server.Module3 - Loaded data table items rows=7733
+2026-06-28 10:02:03.531 [main] DEBUG com.game.server.Module4 - Loaded data table items rows=3639
+2026-06-28 10:02:04.643 [main] WARN  com.game.server.Module2 - GC pause 5290ms
+2026-06-28 10:02:05.009 [main] INFO  com.game.server.Module8 - Slow query took 7983ms
+2026-06-28 10:02:06.189 [main] WARN  com.game.server.Module1 - Loaded data table items rows=3516
+2026-06-28 10:02:07.961 [main] TRACE com.game.server.Module7 - Heartbeat ok peers=4133
+2026-06-28 10:02:08.679 [main] ERROR com.game.server.Module5 - Heartbeat ok peers=4982
+2026-06-28 10:02:09.305 [main] INFO  com.game.server.Module6 - Spawned npc#2518 in zone harbor
+2026-06-28 10:02:10.700 [main] INFO  com.game.server.Module1 - Spawned npc#4047 in zone harbor
+2026-06-28 10:02:11.996 [main] DEBUG com.game.server.Module1 - Cache warmed keys=4519
+2026-06-28 10:02:12.752 [main] INFO  com.game.server.Module2 - Saved snapshot seq=9472
+2026-06-28 10:02:13.135 [main] TRACE com.game.server.Module4 - Saved snapshot seq=9177
+2026-06-28 10:02:14.703 [main] WARN  com.game.server.Module2 - Spawned npc#9457 in zone harbor
+2026-06-28 10:02:15.830 [main] INFO  com.game.server.Module6 - Auth token refreshed user=3629
+2026-06-28 10:02:16.388 [main] ERROR com.game.server.Module6 - Matchmaking ticket queued mmr=3937
+2026-06-28 10:02:17.721 [main] DEBUG com.game.server.Module4 - Saved snapshot seq=9906
+2026-06-28 10:02:18.847 [main] DEBUG com.game.server.Module1 - GC pause 8267ms
+2026-06-28 10:02:19.917 [main] INFO  com.game.server.Module3 - Saved snapshot seq=9415
+2026-06-28 10:02:20.729 [main] INFO  com.game.server.Module6 - Saved snapshot seq=1020
+2026-06-28 10:02:21.113 [main] WARN  com.game.server.Module2 - Slow query took 6719ms
+2026-06-28 10:02:22.450 [main] DEBUG com.game.server.Module1 - Cache warmed keys=3592
+2026-06-28 10:02:23.986 [main] WARN  com.game.server.Module6 - Loaded data table items rows=5726
+2026-06-28 10:02:24.149 [main] DEBUG com.game.server.Module6 - Player connected id=5557
+2026-06-28 10:02:25.302 [main] INFO  com.game.server.Module3 - Saved snapshot seq=9353
+2026-06-28 10:02:26.794 [main] WARN  com.game.server.Module5 - Slow query took 5122ms
+2026-06-28 10:02:27.028 [main] INFO  com.game.server.Module9 - Player connected id=4543
+2026-06-28 10:02:28.312 [main] INFO  com.game.server.Module3 - Spawned npc#6148 in zone harbor
+2026-06-28 10:02:28.842 [http] INFO  com.game.server.Api - request {"path":"/match","userId":3889,"params":{"mode":"ranked","mmr":899},"ok":true}
+2026-06-28 10:02:29.698 [main] DEBUG com.game.server.Module4 - GC pause 6325ms
+2026-06-28 10:02:30.657 [main] DEBUG com.game.server.Module5 - Player connected id=2263
+2026-06-28 10:02:31.714 [main] INFO  com.game.server.Module7 - Loaded data table items rows=4469
+2026-06-28 10:02:32.476 [main] INFO  com.game.server.Module9 - Spawned npc#5532 in zone harbor
+2026-06-28 10:02:33.305 [main] DEBUG com.game.server.Module8 - Slow query took 8472ms
+2026-06-28 10:02:34.180 [main] WARN  com.game.server.Module6 - Cache warmed keys=9876
+2026-06-28 10:02:35.567 [main] INFO  com.game.server.Module2 - Slow query took 2217ms
+2026-06-28 10:02:36.546 [main] INFO  com.game.server.Module3 - Heartbeat ok peers=4358
+2026-06-28 10:02:37.351 [main] INFO  com.game.server.Module1 - Loaded data table items rows=2671
+2026-06-28 10:02:38.011 [main] ERROR com.game.server.Module4 - Slow query took 9820ms
+2026-06-28 10:02:39.068 [main] INFO  com.game.server.Module9 - Loaded data table items rows=6272
+2026-06-28 10:02:39.380 [worker-3] ERROR com.game.server.Db - failed to persist match result
+java.sql.SQLException: connection timed out after 5000ms
+	at com.game.db.Pool.borrow(Pool.java:142)
+	at com.game.db.Pool.execute(Pool.java:88)
+	at com.game.server.Db.persist(Db.java:204)
+	at com.game.server.Worker.run(Worker.java:51)
+Caused by: java.net.SocketTimeoutException: connect timed out
+	at java.base/java.net.Socket.connect(Socket.java:633)
+	... 4 more
+2026-06-28 10:02:40.574 [main] ERROR com.game.server.Module5 - Auth token refreshed user=3066
+2026-06-28 10:02:41.562 [main] INFO  com.game.server.Module1 - Spawned npc#1893 in zone harbor
+2026-06-28 10:02:42.008 [main] WARN  com.game.server.Module1 - Slow query took 4565ms
+2026-06-28 10:02:43.077 [main] DEBUG com.game.server.Module3 - Saved snapshot seq=2716
+2026-06-28 10:02:44.563 [main] INFO  com.game.server.Module8 - Loaded data table items rows=6401
+2026-06-28 10:02:45.499 [main] TRACE com.game.server.Module1 - Saved snapshot seq=7524
+2026-06-28 10:02:46.027 [main] DEBUG com.game.server.Module7 - Player connected id=7796
+2026-06-28 10:02:47.077 [main] INFO  com.game.server.Module4 - GC pause 5164ms
+2026-06-28 10:02:48.542 [main] TRACE com.game.server.Module8 - Player connected id=2078
+2026-06-28 10:02:49.643 [main] ERROR com.game.server.Module8 - Saved snapshot seq=4370
+2026-06-28 10:02:50.852 [main] INFO  com.game.server.Module6 - Cache warmed keys=3828
+2026-06-28 10:02:51.598 [main] TRACE com.game.server.Module1 - Slow query took 2282ms
+2026-06-28 10:02:52.272 [main] INFO  com.game.server.Module7 - Slow query took 3226ms
+2026-06-28 10:02:53.873 [main] WARN  com.game.server.Module2 - Matchmaking ticket queued mmr=5140
+2026-06-28 10:02:54.033 [main] DEBUG com.game.server.Module9 - Cache warmed keys=2673
+2026-06-28 10:02:55.765 [main] INFO  com.game.server.Module1 - Matchmaking ticket queued mmr=1424
+2026-06-28 10:02:56.152 [main] INFO  com.game.server.Module7 - Heartbeat ok peers=3047
+2026-06-28 10:02:57.441 [main] DEBUG com.game.server.Module4 - Slow query took 5409ms
+2026-06-28 10:02:58.702 [main] WARN  com.game.server.Module5 - Heartbeat ok peers=5072
+2026-06-28 10:02:59.659 [main] INFO  com.game.server.Module7 - Slow query took 8959ms
+2026-06-28 10:03:00.194 [main] INFO  com.game.server.Module9 - Saved snapshot seq=8144
+2026-06-28 10:03:01.213 [main] TRACE com.game.server.Module4 - Loaded data table items rows=8750
+2026-06-28 10:03:02.238 [main] INFO  com.game.server.Module5 - Auth token refreshed user=5654
+2026-06-28 10:03:03.435 [main] INFO  com.game.server.Module7 - Saved snapshot seq=1581
+2026-06-28 10:03:04.780 [main] WARN  com.game.server.Module3 - Matchmaking ticket queued mmr=5834
+2026-06-28 10:03:05.274 [main] INFO  com.game.server.Module7 - Auth token refreshed user=3949
+2026-06-28 10:03:05.046 [http] INFO  com.game.server.Api - request {"path":"/match","userId":4601,"params":{"mode":"ranked","mmr":336},"ok":true}
+2026-06-28 10:03:06.620 [main] INFO  com.game.server.Module2 - GC pause 6161ms
+2026-06-28 10:03:07.433 [main] INFO  com.game.server.Module7 - Cache warmed keys=1881
+2026-06-28 10:03:08.382 [main] INFO  com.game.server.Module6 - Auth token refreshed user=3629
+2026-06-28 10:03:09.707 [main] INFO  com.game.server.Module7 - Heartbeat ok peers=8164
+2026-06-28 10:03:10.364 [main] TRACE com.game.server.Module1 - Auth token refreshed user=4227
+2026-06-28 10:03:11.100 [main] INFO  com.game.server.Module4 - Saved snapshot seq=3313
+2026-06-28 10:03:12.202 [main] DEBUG com.game.server.Module2 - Slow query took 2320ms
+2026-06-28 10:03:13.588 [main] INFO  com.game.server.Module8 - Player connected id=6368
+2026-06-28 10:03:14.731 [main] DEBUG com.game.server.Module2 - Spawned npc#2221 in zone harbor
+2026-06-28 10:03:15.324 [main] ERROR com.game.server.Module4 - GC pause 6438ms
+2026-06-28 10:03:16.858 [main] WARN  com.game.server.Module2 - Spawned npc#8091 in zone harbor
+2026-06-28 10:03:17.108 [main] INFO  com.game.server.Module3 - Player connected id=7818
+2026-06-28 10:03:18.369 [main] ERROR com.game.server.Module2 - Saved snapshot seq=8136
+2026-06-28 10:03:19.208 [main] INFO  com.game.server.Module6 - Slow query took 6175ms
+2026-06-28 10:03:20.730 [main] DEBUG com.game.server.Module1 - Saved snapshot seq=8778
+2026-06-28 10:03:21.541 [main] INFO  com.game.server.Module2 - Spawned npc#9453 in zone harbor
+2026-06-28 10:03:22.067 [main] INFO  com.game.server.Module4 - Auth token refreshed user=3960
+2026-06-28 10:03:23.391 [main] DEBUG com.game.server.Module9 - Auth token refreshed user=3982
+2026-06-28 10:03:24.414 [main] WARN  com.game.server.Module4 - Saved snapshot seq=8049
+2026-06-28 10:03:25.988 [main] WARN  com.game.server.Module5 - Cache warmed keys=7032
+2026-06-28 10:03:26.508 [main] INFO  com.game.server.Module9 - Auth token refreshed user=6331
+2026-06-28 10:03:27.848 [main] INFO  com.game.server.Module9 - Player connected id=2610
+2026-06-28 10:03:28.414 [main] INFO  com.game.server.Module9 - Slow query took 6662ms
+2026-06-28 10:03:29.872 [main] DEBUG com.game.server.Module9 - Cache warmed keys=2128
+2026-06-28 10:03:30.903 [main] INFO  com.game.server.Module8 - Matchmaking ticket queued mmr=1785
+2026-06-28 10:03:31.576 [main] INFO  com.game.server.Module7 - Matchmaking ticket queued mmr=4408
+2026-06-28 10:03:32.301 [main] WARN  com.game.server.Module5 - Matchmaking ticket queued mmr=4885
+2026-06-28 10:03:32.632 [worker-3] ERROR com.game.server.Db - failed to persist match result
+java.sql.SQLException: connection timed out after 5000ms
+	at com.game.db.Pool.borrow(Pool.java:142)
+	at com.game.db.Pool.execute(Pool.java:88)
+	at com.game.server.Db.persist(Db.java:204)
+	at com.game.server.Worker.run(Worker.java:51)
+Caused by: java.net.SocketTimeoutException: connect timed out
+	at java.base/java.net.Socket.connect(Socket.java:633)
+	... 4 more
+2026-06-28 10:03:33.722 [main] DEBUG com.game.server.Module8 - Player connected id=5936
+2026-06-28 10:03:34.040 [main] DEBUG com.game.server.Module6 - Player connected id=2297
+2026-06-28 10:03:35.899 [main] INFO  com.game.server.Module9 - Matchmaking ticket queued mmr=8741
+2026-06-28 10:03:36.415 [main] TRACE com.game.server.Module8 - Auth token refreshed user=1831
+2026-06-28 10:03:37.322 [main] INFO  com.game.server.Module1 - Loaded data table items rows=2367
+2026-06-28 10:03:38.227 [main] INFO  com.game.server.Module9 - Player connected id=5558
+2026-06-28 10:03:39.850 [main] INFO  com.game.server.Module7 - Heartbeat ok peers=9813
+2026-06-28 10:03:40.706 [main] INFO  com.game.server.Module5 - Heartbeat ok peers=8758
+2026-06-28 10:03:41.032 [main] INFO  com.game.server.Module7 - Slow query took 2088ms
+2026-06-28 10:03:42.541 [main] INFO  com.game.server.Module2 - Cache warmed keys=6550
+2026-06-28 10:03:42.159 [http] INFO  com.game.server.Api - request {"path":"/match","userId":1227,"params":{"mode":"ranked","mmr":76},"ok":true}
+2026-06-28 10:03:43.804 [main] INFO  com.game.server.Module7 - Matchmaking ticket queued mmr=6662
+2026-06-28 10:03:44.293 [main] ERROR com.game.server.Module1 - Spawned npc#9223 in zone harbor
+2026-06-28 10:03:45.718 [main] INFO  com.game.server.Module9 - Saved snapshot seq=6138
+2026-06-28 10:03:46.640 [main] INFO  com.game.server.Module5 - Player connected id=6187
+2026-06-28 10:03:47.548 [main] INFO  com.game.server.Module6 - Spawned npc#3726 in zone harbor
+2026-06-28 10:03:48.622 [main] INFO  com.game.server.Module5 - Spawned npc#8879 in zone harbor
+2026-06-28 10:03:49.120 [main] WARN  com.game.server.Module4 - Player connected id=2466
+2026-06-28 10:03:50.804 [main] DEBUG com.game.server.Module8 - Auth token refreshed user=3680
+2026-06-28 10:03:51.022 [main] INFO  com.game.server.Module7 - Auth token refreshed user=8208
+2026-06-28 10:03:52.151 [main] DEBUG com.game.server.Module1 - Player connected id=1379
+2026-06-28 10:03:53.811 [main] WARN  com.game.server.Module1 - Saved snapshot seq=7128
+2026-06-28 10:03:54.112 [main] WARN  com.game.server.Module7 - Loaded data table items rows=7821
+2026-06-28 10:03:55.314 [main] INFO  com.game.server.Module3 - Matchmaking ticket queued mmr=1548
+2026-06-28 10:03:56.595 [main] INFO  com.game.server.Module5 - Saved snapshot seq=1700
+2026-06-28 10:03:57.868 [main] DEBUG com.game.server.Module4 - Saved snapshot seq=9954
+2026-06-28 10:03:58.084 [main] INFO  com.game.server.Module4 - Auth token refreshed user=9842
+2026-06-28 10:03:59.216 [main] INFO  com.game.server.Module2 - Slow query took 1817ms
+2026-06-28 10:04:00.894 [main] ERROR com.game.server.Module9 - Saved snapshot seq=1959

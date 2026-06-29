@@ -1,0 +1,69 @@
+<idea-plugin>
+    <id>com.example.logviewer</id>
+    <name>Log Viewer</name>
+    <vendor>example</vendor>
+
+    <description><![CDATA[
+        A fast, read-only viewer for <b>local and remote (SSH/SFTP)</b> log files inside Rider.
+        Live <code>tail -F</code> follow, regex + log-level filtering, GrepConsole-style highlight
+        rules, stack-trace folding, JSON pretty-print, time navigation, and always-on vim
+        navigation. Remote logs are tailed over SSH; nothing is written back.
+    ]]></description>
+
+    <change-notes><![CDATA[
+        <b>0.1.0</b> — 첫 릴리스
+        <ul>
+            <li><b>로컬 &amp; 원격(SSH/SFTP)</b> 로그 뷰어 — 로컬 <code>.log</code> 파일과, Rider의 SSH 설정으로
+                연결한 원격 호스트의 로그를 봅니다.</li>
+            <li><b>라이브 follow</b> — <code>tail -F</code>/폴링으로 append를 따라가고, Follow 토글로 하단 고정.</li>
+            <li><b>필터 · 검색 · 하이라이트</b> — 정규식 필터, 레벨별 토글(ERROR/WARN/INFO/DEBUG/TRACE),
+                GrepConsole 스타일 색상 규칙, 검색 매치 인플레이스 하이라이트.</li>
+            <li><b>구조 분석</b> — 스택트레이스/들여쓰기 블록 접기, <code>J</code> JSON 정렬 보기, <code>T</code> 시각으로 이동.</li>
+            <li><b>3열 레이아웃</b>(Time · Level · Message) + ANSI 색상 렌더링, 원본 로그 보기 전환.</li>
+            <li><b>항상 켜진 vim 내비게이션</b> — hjkl(컬럼·문자), 단어 모션, 비주얼 선택·복사, gg/G,
+                Ctrl+D/U, n/N, <code>*</code>/<code>#</code>, gt/gT, <code>?</code> 도움말.</li>
+        </ul>
+        읽기 전용입니다 — 파일이나 원격 호스트에 아무것도 쓰지 않습니다.
+    ]]></change-notes>
+
+    <!-- Frontend-only plugin: the platform module is enough. It loads in Rider (and any other
+         IntelliJ-based IDE). Name / version / since-build come from build.gradle.kts. -->
+    <depends>com.intellij.modules.platform</depends>
+
+    <!-- Compose + Jewel are bundled with the IDE; declare the modules so the plugin's class loader
+         can see them at runtime (compile classpath comes from bundledLibrary in build.gradle.kts). -->
+    <dependencies>
+        <module name="intellij.libraries.skiko"/>
+        <module name="intellij.libraries.compose.runtime.desktop"/>
+        <module name="intellij.libraries.compose.foundation.desktop"/>
+        <module name="intellij.platform.compose"/>
+        <module name="intellij.platform.jewel.foundation"/>
+        <module name="intellij.platform.jewel.ui"/>
+        <module name="intellij.platform.jewel.ideLafBridge"/>
+    </dependencies>
+
+    <extensions defaultExtensionNs="com.intellij">
+        <!-- Persisted SSH connection profiles (secrets live in PasswordSafe, not here). -->
+        <applicationService serviceImplementation="com.example.logview.ssh.RemoteConnectionStore"/>
+        <!-- Live SSH sessions (JSch), reused across reads/tails; disposed on app shutdown. -->
+        <applicationService serviceImplementation="com.example.logview.ssh.SshConnectionManager"/>
+        <!-- Persisted highlight (coloring) rules, shared across projects. -->
+        <applicationService serviceImplementation="com.example.logview.rules.HighlightRulesStore"/>
+
+        <!-- Open .log files in the log viewer (as the default tab; the plain-text editor stays available). -->
+        <fileEditorProvider implementation="com.example.logview.LogFileEditorProvider"/>
+
+        <!-- The hub for remote connections + live-tail sessions. -->
+        <toolWindow id="로그 뷰어" anchor="bottom" factoryClass="com.example.logview.LogToolWindowFactory"/>
+    </extensions>
+
+    <actions>
+        <action id="LogViewer.OpenInLogViewer"
+                class="com.example.logview.OpenInLogViewerAction"
+                text="로그 뷰어로 열기"
+                description="이 파일을 로그 뷰어 툴윈도우에서 라이브 tail로 봅니다">
+            <add-to-group group-id="ProjectViewPopupMenu" anchor="last"/>
+            <add-to-group group-id="EditorTabPopupMenu" anchor="last"/>
+        </action>
+    </actions>
+</idea-plugin>
