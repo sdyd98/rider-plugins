@@ -34,6 +34,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import org.jetbrains.jewel.bridge.JewelComposePanel
 import org.jetbrains.jewel.ui.component.Text
+import java.nio.charset.Charset
 import javax.swing.JComponent
 
 /** One display option: a title, a one-line hint, the current value, and a setter. */
@@ -62,6 +63,56 @@ fun createDisplayOptionsPanel(
         )
         toggles.forEach { ToggleRow(it, palette) }
         choices.forEach { ChoiceRow(it, palette) }
+    }
+}
+
+/**
+ * The Compose/Jewel encoding picker, opened from the ⚙ menu's 인코딩 row. A list of charset rows with
+ * the current one check-marked; clicking one calls [onPick]. Built in Compose to match the rest of the
+ * chrome (no Swing list chooser).
+ */
+fun createCharsetMenu(
+    options: List<Pair<String, Charset>>,
+    current: Charset,
+    onPick: (Charset) -> Unit,
+): JComponent = JewelComposePanel {
+    val palette = rememberLogPalette()
+    Column(Modifier.width(260.dp).padding(Space.sm), verticalArrangement = Arrangement.spacedBy(Space.xxs)) {
+        Text(
+            "인코딩",
+            color = palette.mutedText,
+            fontWeight = FontWeight.Bold,
+            fontSize = 11.sp,
+            modifier = Modifier.padding(start = Space.sm, top = Space.xs, bottom = Space.xs),
+        )
+        options.forEach { (label, cs) -> CharsetRow(label, cs == current, palette) { onPick(cs) } }
+    }
+}
+
+@Composable
+private fun CharsetRow(label: String, selected: Boolean, palette: LogPalette, onClick: () -> Unit) {
+    val interaction = remember { MutableInteractionSource() }
+    val hovered by interaction.collectIsHoveredAsState()
+    val bg by animateColorAsState(if (hovered) palette.surfaceHover else Color.Transparent)
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(Radii.sm))
+            .background(bg)
+            .hoverable(interaction)
+            .clickable { onClick() }
+            .padding(horizontal = Space.sm, vertical = Space.sm),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(Space.sm),
+    ) {
+        Text(if (selected) "✓" else "", color = palette.accent, fontSize = 13.sp, modifier = Modifier.width(14.dp))
+        Text(
+            label,
+            color = palette.text,
+            fontSize = 13.sp,
+            fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
+            modifier = Modifier.weight(1f),
+        )
     }
 }
 

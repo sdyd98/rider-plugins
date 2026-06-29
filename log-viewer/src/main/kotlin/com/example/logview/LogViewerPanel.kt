@@ -246,15 +246,28 @@ class LogViewerPanel(
         }
     }
 
-    /** Pick the decoding charset (for CP949/EUC-KR Korean logs etc.) and re-read the source. */
+    private var charsetPopup: com.intellij.openapi.ui.popup.JBPopup? = null
+
+    /** Pick the decoding charset via a Compose/Jewel popup (CP949/EUC-KR Korean logs) and re-read. */
     private fun showCharsetChooser() {
-        displayPopup?.cancel() // close the ⚙ popup first so the chooser isn't nested under it
-        JBPopupFactory.getInstance()
-            .createPopupChooserBuilder(LogCharsets.OPTIONS.map { it.first })
-            .setTitle("인코딩 선택 (현재: ${LogCharsets.label(charset)})")
-            .setItemChosenCallback { label -> LogCharsets.byLabel(label)?.let { reopenWith(it) } }
+        displayPopup?.cancel() // close the ⚙ popup first so the picker isn't nested under it
+        val panel = createCharsetMenu(LogCharsets.OPTIONS, charset) { cs ->
+            charsetPopup?.cancel()
+            reopenWith(cs)
+        }
+        val popup = JBPopupFactory.getInstance()
+            .createComponentPopupBuilder(panel, panel)
+            .setRequestFocus(true)
+            .setResizable(false)
+            .setMovable(false)
             .createPopup()
-            .showInCenterOf(component)
+        charsetPopup = popup
+        val mouse = java.awt.MouseInfo.getPointerInfo()?.location
+        if (mouse != null) {
+            popup.showInScreenCoordinates(component, Point(mouse.x - JBUI.scale(250), mouse.y + JBUI.scale(12)))
+        } else {
+            popup.showInCenterOf(component)
+        }
     }
 
     /** Re-read the source under [cs]: close the old reader, clear the grid, rebuild, and stream again. */
@@ -314,7 +327,7 @@ class LogViewerPanel(
         val r = reader
         ApplicationManager.getApplication().executeOnPooledThread {
             try {
-                r.readInitial { batch -> appendOnEdt(batch, gen) }
+                r.readInitial { batch -> onReaderBatch(batch, gen) }
             } catch (e: Throwable) {
                 LOG.warn("Log initial read failed: $sourceLabel — ${e.message}")
                 onEdt { if (gen == readerGeneration) setStatusError(e) }
@@ -334,19 +347,29 @@ class LogViewerPanel(
         tailing = true
         val gen = readerGeneration
         reader.startTail(
-            onAppend = { batch -> appendOnEdt(batch, gen) },
+            onAppend = { batch -> onReaderBatch(batch, gen) },
             onError = { e -> onEdt { LOG.info("Log tail ended: $sourceLabel — ${e.message}") } },
         )
     }
 
-    private fun appendOnEdt(batch: List<String>, gen: Int) = onEdt {
+    /**
+     * Reader callback — runs on the reader's OFF-EDT thread. Do the heavy per-line parsing (5 regexes +
+     * ANSI strip) HERE, off the UI thread, then hop to the EDT to insert. This keeps the grid responsive
+     * during large initial loads and charset re-reads (re-parsing 50k lines on the EDT would freeze it).
+     */
+    private fun onReaderBatch(batch: List<String>, gen: Int) {
+        if (gen != readerGeneration || batch.isEmpty()) return
+        appendOnEdt(batch.map { parseLogRow(it) }, gen)
+    }
+
+    private fun appendOnEdt(rows: List<ParsedRow>, gen: Int) = onEdt {
         if (gen != readerGeneration) return@onEdt // stale batch from a superseded reader (charset change)
         val atBottom = isViewAtBottom()
-        model.appendRaw(batch)
+        model.appendParsed(rows)
         if (following && atBottom) scrollToBottom()
-        sizeContentColumnFor(batch)
+        sizeContentColumnFor(rows)
         // Data is flowing again → a prior initial-read error is stale; clear it so the bar shows LIVE.
-        if (batch.isNotEmpty() && statusError != null) statusError = null
+        if (rows.isNotEmpty() && statusError != null) statusError = null
         if (!streaming) pushChromeThrottled()
     }
 
@@ -614,10 +637,10 @@ class LogViewerPanel(
         fitColumnWidth()
     }
 
-    private fun sizeContentColumnFor(batch: List<String>) {
+    private fun sizeContentColumnFor(rows: List<ParsedRow>) {
         var w = maxLineWidth
         // Always measure (batches are small): a glyph-width heuristic would miss double-width CJK lines.
-        for (s in batch) w = maxOf(w, renderer.lineWidth(s))
+        for (p in rows) w = maxOf(w, renderer.lineWidth(p.raw))
         if (w != maxLineWidth) {
             maxLineWidth = w
             fitColumnWidth()

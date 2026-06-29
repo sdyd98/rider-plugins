@@ -152,4 +152,23 @@ class LogPipelineTest {
         assertEquals(1, bad.size)
         assertTrue(bad[0] != line, "CP949 bytes decoded as UTF-8 should not match the original Korean")
     }
+
+    @Test
+    fun `parseLogRow extracts level and time off-EDT and flags continuation candidates`() {
+        // parseLogRow is pure (no model/Swing state) so the heavy parse can run off the EDT.
+        val primary = parseLogRow("2024-06-28 14:30:00.123 ERROR boom")
+        assertEquals(LogLevel.ERROR, primary.level)
+        assertTrue(primary.timestampMillis != LogLine.NO_TIME, "timestamped line parses a time")
+        assertFalse(primary.continuationCandidate, "a timestamped primary is not a continuation")
+
+        val cont = parseLogRow("    at com.foo.Bar(Bar.kt:10)")
+        assertTrue(cont.continuationCandidate, "an indented, timeless stack frame is a continuation candidate")
+
+        // appendParsed(parseLogRow(...)) must match the eager appendRaw path (same blocks/levels).
+        val model = LogTableModel()
+        model.appendParsed(listOf(primary, cont))
+        assertEquals(2, model.rowCount)
+        assertEquals(LogLevel.ERROR, model.lineAt(1).level) // continuation inherits the block level
+        assertEquals(0, model.lineAt(1).blockStart)
+    }
 }

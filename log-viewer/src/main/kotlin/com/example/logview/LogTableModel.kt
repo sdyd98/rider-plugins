@@ -8,6 +8,36 @@ const val COL_LEVEL = 1
 const val COL_MSG = 2
 
 /**
+ * The per-line parse result, decided WITHOUT model state so it can be computed off the EDT (see
+ * [parseLogRow]). The final continuation/block decision needs the running model state and is made on
+ * the EDT in [LogTableModel.appendParsed].
+ */
+class ParsedRow(
+    val raw: String,
+    val clean: String,
+    val level: LogLevel,
+    val timestampMillis: Long,
+    val messageStart: Int,
+    val hasAnsi: Boolean,
+    /** No timestamp AND looks like a continuation — the model still gates this on having a prior block. */
+    val continuationCandidate: Boolean,
+)
+
+/**
+ * Parse one raw line into a [ParsedRow]. Pure + thread-safe (only [AnsiText]/[LogParser], no model
+ * state), so the heavy regex/ANSI-strip work runs OFF the EDT — the reader thread parses, the EDT only
+ * links + inserts. Parse on the ANSI-STRIPPED text: codes like `…[32m` glue onto the level word and
+ * break `\b` level detection; `clean == raw` for the common no-ANSI case.
+ */
+fun parseLogRow(raw: String): ParsedRow {
+    val hasAnsi = AnsiText.hasAnsi(raw)
+    val clean = if (hasAnsi) AnsiText.strip(raw) else raw
+    val parsed = LogParser.parse(clean)
+    val contCandidate = parsed.timestampMillis == LogLine.NO_TIME && LogParser.looksLikeContinuation(clean)
+    return ParsedRow(raw, clean, parsed.level, parsed.timestampMillis, parsed.messageStart, hasAnsi, contCandidate)
+}
+
+/**
  * The model behind the Time | Level | Message log grid: each row is one [LogLine] whose Message text
  * is the authentic [LogLine.raw]. Level/time are parsed at append time for coloring and filtering.
  * Multi-line records are grouped into blocks (see [LogLine.blockStart]) so [toggleFold] can collapse
@@ -64,25 +94,29 @@ class LogTableModel : AbstractTableModel() {
     /** The largest source line number seen so far (keeps growing across trims) — for gutter sizing. */
     fun maxLineNumber(): Int = nextLineNumber - 1
 
-    /** Parse [rawLines] into [LogLine]s (assigning block ownership) and append them. EDT only. */
-    fun appendRaw(rawLines: List<String>) {
-        if (rawLines.isEmpty()) return
+    /**
+     * Parse + append raw lines. EDT only. Convenience for tests and small appends — the live path
+     * parses OFF the EDT via [parseLogRow] and calls [appendParsed] directly so the heavy regex/ANSI
+     * work doesn't run on the UI thread (critical for large files / charset re-reads).
+     */
+    fun appendRaw(rawLines: List<String>) = appendParsed(rawLines.map { parseLogRow(it) })
+
+    /**
+     * Append already-parsed rows, assigning block ownership (the only step that needs sequential model
+     * state). EDT only. This is the cheap on-EDT half of the append pipeline.
+     */
+    fun appendParsed(rows: List<ParsedRow>) {
+        if (rows.isEmpty()) return
         val start = lines.size
-        for (raw in rawLines) {
-            // Parse on the ANSI-STRIPPED text: ANSI codes like `…[32m` glue onto the level word ("mINFO")
-            // and break the \b word-boundary level detection. clean == raw for the (common) no-ANSI case.
-            val hasAnsi = AnsiText.hasAnsi(raw)
-            val clean = if (hasAnsi) AnsiText.strip(raw) else raw
-            val parsed = LogParser.parse(clean)
-            val isCont = parsed.timestampMillis == LogLine.NO_TIME &&
-                lines.isNotEmpty() && currentBlockStart >= 0 && LogParser.looksLikeContinuation(clean)
-            val level = if (isCont) lines[currentBlockStart].level else parsed.level
-            // A continuation line (stack frame / payload fragment) is ALL body — it has no parsed
-            // level/timestamp prefix to strip. If LogParser found a stray level token inside it (e.g.
-            // `"level": "ERROR",`), messageStart would point past it and truncate the displayed text,
-            // so force messageStart = 0 for continuations.
-            val messageStart = if (isCont) 0 else parsed.messageStart
-            val line = LogLine(nextLineNumber++, raw, clean, level, parsed.timestampMillis, isCont, hasAnsi, messageStart)
+        for (p in rows) {
+            // The continuation candidacy (no timestamp + looks-like-continuation) is decided off the EDT;
+            // only the block-state part (there IS a prior block to attach to) is decided here.
+            val isCont = p.continuationCandidate && lines.isNotEmpty() && currentBlockStart >= 0
+            val level = if (isCont) lines[currentBlockStart].level else p.level
+            // A continuation line is ALL body — force messageStart = 0 so a stray level token inside it
+            // (e.g. `"level": "ERROR",`) doesn't truncate the displayed text.
+            val messageStart = if (isCont) 0 else p.messageStart
+            val line = LogLine(nextLineNumber++, p.raw, p.clean, level, p.timestampMillis, isCont, p.hasAnsi, messageStart)
             if (isCont) {
                 line.blockStart = currentBlockStart
             } else {
