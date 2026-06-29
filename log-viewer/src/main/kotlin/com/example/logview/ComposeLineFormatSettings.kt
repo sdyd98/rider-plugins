@@ -89,11 +89,11 @@ fun createLineFormatSettings(sampleLines: List<String>, onPreview: (LineFormat?)
                 }
             }
 
-            val pickerLine = sampleLines.firstOrNull { it.isNotBlank() }
-            if (pickerLine == null) {
+            val pickerLines = sampleLines.filter { it.isNotBlank() }
+            if (pickerLines.isEmpty()) {
                 Text("로그가 비어 있어 영역을 지정할 수 없습니다.", color = palette.mutedText, fontSize = 11.sp)
             } else {
-                RegionPicker(pickerLine, palette, onPreview) { name, pattern ->
+                RegionPicker(pickerLines, palette, onPreview) { name, pattern ->
                     store.save(name, pattern)
                     changed()
                 }
@@ -113,14 +113,22 @@ fun createLineFormatSettings(sampleLines: List<String>, onPreview: (LineFormat?)
  * the message. Name it + [onSave] to add it to the library.
  */
 @Composable
-private fun RegionPicker(line: String, palette: LogPalette, onPreview: (LineFormat?) -> Unit, onSave: (name: String, pattern: String) -> Unit) {
+private fun RegionPicker(sampleLines: List<String>, palette: LogPalette, onPreview: (LineFormat?) -> Unit, onSave: (name: String, pattern: String) -> Unit) {
+    var lineIndex by remember { mutableStateOf(0) }
+    val line = sampleLines.getOrElse(lineIndex) { sampleLines.first() }
     val tokens = remember(line) { LineFormat.tokenize(line) }
     var selectedField by remember { mutableStateOf("time") }
-    var assign by remember(line) { mutableStateOf<Map<Int, String>>(emptyMap()) }
+    var assign by remember { mutableStateOf<Map<Int, String>>(emptyMap()) }
     val nameState = remember { TextFieldState(LineFormatStore.getInstance().nextDefaultName()) }
 
     val msgStart = assign.filterValues { it == "message" }.keys.minOrNull()
     fun effectiveField(i: Int): String? = if (msgStart != null && i >= msgStart) "message" else assign[i]
+
+    fun gotoLine(delta: Int) {
+        lineIndex = (lineIndex + delta + sampleLines.size) % sampleLines.size
+        assign = emptyMap() // token positions differ per line → start fresh
+        onPreview(null) // clear the live grid preview
+    }
 
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(Space.xs)) {
         Text(
@@ -129,6 +137,13 @@ private fun RegionPicker(line: String, palette: LogPalette, onPreview: (LineForm
             fontWeight = FontWeight.Bold,
             fontSize = 11.sp,
         )
+        // The first line may not be representative — step through sample lines to pick a good one.
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Space.sm)) {
+            ToolButton("◀", palette) { gotoLine(-1) }
+            Text("샘플 줄 ${lineIndex + 1}/${sampleLines.size}", color = palette.mutedText, fontSize = 11.sp)
+            ToolButton("▶", palette) { gotoLine(1) }
+            Text("대표적인 로그 줄로 넘겨서 지정하세요", color = palette.mutedText, fontSize = 10.sp)
+        }
         Row(horizontalArrangement = Arrangement.spacedBy(Space.xs)) {
             FIELD_LABELS.forEach { (f, label) ->
                 val active = selectedField == f

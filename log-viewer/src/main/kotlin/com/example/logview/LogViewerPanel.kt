@@ -275,7 +275,7 @@ class LogViewerPanel(
     /** ⚙ → "줄 형식": pick a saved format or build one with the region picker; applying re-reads the grid. */
     private fun showFormatSettings() {
         displayPopup?.cancel()
-        val sample = (0 until minOf(model.loadedRowCount(), 8)).map { model.rawAt(it) }
+        val sample = (0 until minOf(model.loadedRowCount(), 60)).map { model.rawAt(it) }
         var popupRef: com.intellij.openapi.ui.popup.JBPopup? = null
         // onPreview applies a format LIVE to the real grid (token-building / picking a saved one).
         val panel = createLineFormatSettings(sample, onPreview = { fmt -> previewFormatLive(fmt) }) { popupRef?.cancel() }
