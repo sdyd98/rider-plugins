@@ -19,4 +19,4 @@
 ### 메모
 - 읽기 전용 — 파일이나 원격 호스트에 아무것도 쓰지 않습니다. SSH 비밀번호는 IDE의 PasswordSafe에만 저장되고
   직렬화된 프로필에는 남지 않습니다. Host-key 검사는 비활성(개발 도구, 직접 관리하는 머신 대상).
-- SSH는 JSch(mwiede 포크)를 플러그인 `lib/`에 번들. Compose/Jewel은 IDE 제공分이라 ZIP에 포함되지 않습니다.
+- SSH는 JSch(mwiede 포크)를 플러그인 `lib/`에 번들. Compose/Jewel은 IDE가 제공하므로 ZIP에 포함되지 않습니다.
