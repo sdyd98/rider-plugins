@@ -43,20 +43,6 @@
 
         <!-- Relationship view: table-level ER map, record-level lineage explorer, and integrity check. -->
         <toolWindow id="관계도" anchor="right" factoryClass="com.example.xlsx.RefGraphToolWindow"/>
-
-        <!-- Balloons from the relationship feature (refs.json draft generation, etc.). -->
-        <notificationGroup id="관계도" displayType="BALLOON"/>
     </extensions>
 
-    <actions>
-        <!-- Designate the selected folder as a game-data root (per-checkout) and infer a refs.json draft
-             from the data under it. Available on the Tools menu and the Project-view folder context menu. -->
-        <action id="com.example.xlsx.GenerateRefsAction"
-                class="com.example.xlsx.GenerateRefsAction"
-                text="데이터 루트로 지정 (refs.json 생성)"
-                description="Mark this folder as a game-data root and infer a refs.json relationship-schema draft from the data under it">
-            <add-to-group group-id="ToolsMenu" anchor="last"/>
-            <add-to-group group-id="ProjectViewPopupMenu" anchor="last"/>
-        </action>
-    </actions>
 </idea-plugin>

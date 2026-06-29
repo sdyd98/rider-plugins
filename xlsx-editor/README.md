@@ -45,11 +45,9 @@ xlsx-editor/
     RefGraphModel.kt          ER / record view-model (+ mock fallback) + TableColor.kt node colors
     RelationshipSchema.kt     refs.json parse + buildRefGraph + IndexRecordGraph (real data path)
     GameDataLoader.kt         streaming POI index (+ on-disk .idx cache)
-    GameDataRoots.kt          per-checkout designated data roots (workspace.xml)
-    RelationshipNavigation.kt graph→grid navigation (open workbook, reveal row)
+    RelationshipNavigation.kt schema resolution (nearest refs.json) + graph→grid navigation
     RelationshipBus.kt        grid→graph event bus (Ctrl+R)
     SchemaInferencer.kt       deterministic refs.json drafter (value-overlap FK inference)
-    GenerateRefsAction.kt     "데이터 루트로 지정 (refs.json 생성)" action (Tools + project view)
     RefsMcpToolset.kt         7 MCP tools for refs.json authoring (IDE built-in MCP server)
   (shared in ../common: PoiClassLoaders.kt, CellFormatting.kt)
 ```
@@ -169,21 +167,23 @@ multi-value refs). The graph reads workbooks with streaming POI and a compact in
 (`.idx`, keyed by file mtime/size + `refs.json`), so reopening is fast and nothing is held in memory
 whole. See `samples/gamedata/refs.json` for a worked example.
 
-**Authoring `refs.json`** — you rarely hand-write it:
+Keep **one `refs.json` at the top of your data tree**: the views use the nearest `refs.json` at or
+above the open workbook, and their cost scales with the table count in *that schema* — not the number
+of workbooks on disk — so a single top-level file scales to thousands of tables.
 
-- Right-click a folder (or use **Tools**) → **데이터 루트로 지정 (refs.json 생성)**
-  (`GenerateRefsAction`). This marks the folder as a per-checkout **data root** (stored in
-  `workspace.xml`, so parallel checkouts/worktrees stay independent) and runs `SchemaInferencer`,
-  which samples every workbook under the root (recursively) and proposes foreign keys by **value
-  overlap** — a column whose values are mostly covered by another table's id set. It writes
-  `refs.json`, or `refs.draft.json` if one already exists (it never clobbers), with a `_confidence`
-  per ref.
-- The same engine is exposed to AI clients as **MCP tools** (`RefsMcpToolset`, registered on the
-  IDE's built-in MCP server): `list_tables`, `column_values`, `sample_rows`, `suggest_refs`,
-  `read_refs`, `write_refs`, `validate_refs`. A client such as Claude Code connects via the
-  repo-local `.mcp.json` (loopback SSE to the running IDE) and can explore the data, draft, write,
-  and validate the schema. The MCP dependency is **optional**, so the viewer still loads on an IDE
-  without (or with a disabled) MCP server.
+**Authoring `refs.json`** — you author it through the IDE's MCP server with an AI client (e.g. Claude
+Code), not by hand. `RefsMcpToolset` exposes seven tools — `list_tables`, `column_values`,
+`sample_rows`, `suggest_refs`, `read_refs`, `write_refs`, `validate_refs` — and the AI drives them:
+`suggest_refs` runs `SchemaInferencer` over a folder (sampling each sheet, detecting id columns
+including composite keys, proposing foreign keys by **value overlap** with a `_confidence` per ref),
+then `write_refs` / `validate_refs` persist and check it. A client connects via the repo-local
+`.mcp.json` (loopback SSE to the running IDE); the MCP dependency is **optional**, so the viewer still
+loads on an IDE without (or with a disabled) MCP server.
+
+For a large multi-area dataset, grow the single top-level `refs.json` **incrementally**: scope
+`suggest_refs` to a subfolder that *encloses the tables that reference each other* (too narrow loses
+cross-area references; the whole tree is needlessly slow), then merge its draft into the top
+`refs.json`.
 
 ## Build & run
 

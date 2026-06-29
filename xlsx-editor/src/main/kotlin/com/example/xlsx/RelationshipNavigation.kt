@@ -10,14 +10,15 @@ import java.io.File
 import javax.swing.Timer
 
 /**
- * The reference schema for the project's currently-open workbook. The data root is resolved from the roots
- * the user designated in THIS checkout ([GameDataRoots]) — the nearest one containing the open file — so it
- * works even when the workbook sits in a nested subfolder, and stays branch-local across simultaneous
- * checkouts. refs.json is read from that root. Returns null when nothing resolves (callers fall back to mock).
+ * The reference schema for the project's currently-open workbook: the NEAREST `refs.json` at or above the
+ * open file's folder drives the relationship views. Walking up means one top-level refs.json covers a whole
+ * nested data tree (and the graph/validate cost scales with that schema's table count, not the number of
+ * workbooks on disk). Returns null when no refs.json is found (callers fall back to mock data).
  */
 fun resolveSchema(project: Project): RefSchema? {
     val open = FileEditorManager.getInstance(project).selectedFiles.firstOrNull()?.path ?: return null
-    val root = GameDataRoots.getInstance(project).rootFor(File(open)) ?: return null
+    val root = generateSequence(File(open).parentFile) { it.parentFile }
+        .firstOrNull { File(it, "refs.json").isFile } ?: return null
     return loadRefSchema(root)
 }
 
