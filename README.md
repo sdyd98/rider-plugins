@@ -1,64 +1,64 @@
 # rider-plugins
 
-A monorepo of JetBrains / Rider plugins (Kotlin), built with the IntelliJ Platform Gradle Plugin.
-Shared infrastructure lives in one module; each plugin is its own module that produces its own
-installable ZIP.
+JetBrains / Rider 플러그인(Kotlin) 모노레포입니다. IntelliJ Platform Gradle Plugin으로 빌드하며, 공용
+인프라는 한 모듈에 두고 각 플러그인은 자체 모듈로 각자의 설치용 ZIP을 만듭니다.
 
-## Layout
+## 구성
 
 ```
 rider-plugins/
-├─ settings.gradle.kts          registers the modules
-├─ build.gradle.kts             declares plugin versions (apply false) for all modules
-├─ gradle/libs.versions.toml    shared dependency versions (version catalog)
-├─ gradle.properties            riderLocalPath + shared Gradle/Kotlin flags
-├─ common/                      shared library (POI helpers; grid/vim infra will move here)
+├─ settings.gradle.kts          모듈 등록
+├─ build.gradle.kts             모든 모듈의 플러그인 버전 선언(apply false)
+├─ gradle/libs.versions.toml    공유 의존성 버전(버전 카탈로그)
+├─ gradle.properties            riderLocalPath + 공유 Gradle/Kotlin 플래그
+├─ common/                      공용 라이브러리(POI 헬퍼; 그리드/vim 인프라가 이쪽으로 이동 예정)
 │  └─ src/main/kotlin/…
-├─ xlsx-editor/                 plugin: in-IDE .xlsx/.xls grid viewer (see its own README)
+├─ xlsx-editor/                 플러그인: IDE 내장 .xlsx/.xls 그리드 뷰어 (자체 README 참고)
 │  ├─ build.gradle.kts
 │  ├─ README.md
 │  └─ src/main/{kotlin,resources/META-INF/plugin.xml}
-└─ log-viewer/                  plugin: local + remote (SSH/SFTP) log viewer (see its own README)
+└─ log-viewer/                  플러그인: 로컬 + 원격(SSH/SFTP) 로그 뷰어 (자체 README 참고)
    ├─ build.gradle.kts
    ├─ README.md
    └─ src/main/{kotlin,resources/META-INF/plugin.xml}
 ```
 
-- **`common`** — a plain Kotlin library for code shared across plugins (currently the POI
-  thread-context-classloader helper and cached-formula formatting). It has no `plugin.xml`; its
-  classes are bundled into whichever plugin depends on it (`implementation(project(":common"))`).
-  When shared UI (grid renderer, vim controller) moves here it will also apply
-  `org.jetbrains.intellij.platform.module` to compile against the platform.
-- **`xlsx-editor`** — the first plugin. Opens Excel files in a read-only in-IDE grid viewer
-  (vim navigation, filters, frozen headers). See
-  [`xlsx-editor/README.md`](xlsx-editor/README.md) for how it works.
+- **`common`** — 플러그인 간 공유 코드용 순수 Kotlin 라이브러리(현재 POI 스레드 컨텍스트 클래스로더 헬퍼와
+  캐시된 수식 포매팅). `plugin.xml`이 없고, 의존하는 플러그인에 클래스가 번들됩니다
+  (`implementation(project(":common"))`). 공유 UI(그리드 렌더러, vim 컨트롤러)가 이쪽으로 옮겨오면 플랫폼
+  컴파일을 위해 `org.jetbrains.intellij.platform.module`도 적용할 예정입니다.
+- **`xlsx-editor`** — 첫 번째 플러그인. Excel 파일을 IDE 내장 읽기 전용 그리드 뷰어로 엽니다(vim 내비게이션,
+  필터, 고정 헤더). 동작은 [`xlsx-editor/README.md`](xlsx-editor/README.md) 참고.
+- **`log-viewer`** — 두 번째 플러그인. 로컬 및 원격(SSH/SFTP) 로그 파일의 빠른 읽기 전용 뷰어(라이브 tail,
+  필터/검색/하이라이트, 인코딩 선택, vim 내비게이션). 자세한 내용은
+  [`log-viewer/README.md`](log-viewer/README.md) 참고.
 
-## Build & run
+## 빌드 & 실행
 
-A JDK 21 is required to *run* Gradle. This machine has no standalone JDK on PATH, so point
-`JAVA_HOME` at a JetBrains Runtime 21 first (PowerShell):
+Gradle 실행에는 JDK 21이 필요합니다. 이 머신엔 PATH에 독립 JDK가 없으므로 먼저 `JAVA_HOME`을 JetBrains
+Runtime 21로 지정하세요(PowerShell):
 
 ```powershell
 $env:JAVA_HOME = "C:\Program Files\JetBrains\PyCharm 2025.2.1.1\jbr"
 
 ./gradlew :xlsx-editor:buildPlugin   # -> xlsx-editor/build/distributions/xlsx-editor-<ver>.zip
-./gradlew :xlsx-editor:runIde        # launch a sandbox Rider with the plugin loaded
+./gradlew :xlsx-editor:runIde        # 플러그인이 로드된 샌드박스 Rider 실행
 ```
 
-`gradle.properties` sets `riderLocalPath` so the build compiles against the locally installed Rider
-instead of downloading the ~1.5 GB IDE. Each plugin module has its own `buildPlugin` / `runIde`
-tasks; `./gradlew buildPlugin` (no module prefix) builds every plugin.
+`gradle.properties`의 `riderLocalPath` 덕분에 ~1.5 GB IDE를 받지 않고 로컬에 설치된 Rider로 컴파일합니다.
+각 플러그인 모듈은 자체 `buildPlugin` / `runIde` 태스크가 있고, `./gradlew buildPlugin`(모듈 접두어 없이)은
+모든 플러그인을 빌드합니다.
 
-## Adding a new plugin
+## 새 플러그인 추가
 
-1. Create `<plugin>/build.gradle.kts` (copy `xlsx-editor/build.gradle.kts`, adjust `plugin.xml`).
-2. Add `src/main/kotlin` + `src/main/resources/META-INF/plugin.xml`.
-3. `include(":<plugin>")` in `settings.gradle.kts`.
-4. Reuse shared code via `implementation(project(":common"))`.
+1. `<plugin>/build.gradle.kts` 생성(`xlsx-editor/build.gradle.kts`를 복사해 `plugin.xml` 조정).
+2. `src/main/kotlin` + `src/main/resources/META-INF/plugin.xml` 추가.
+3. `settings.gradle.kts`에 `include(":<plugin>")`.
+4. 공유 코드는 `implementation(project(":common"))`로 재사용.
 
-## Distribution
+## 배포
 
-Each plugin ships as a self-contained ZIP (plugin + bundled libraries such as Apache POI). Install on
-another machine via **Settings → Plugins → ⚙ → Install Plugin from Disk…** (the target IDE must be a
-compatible build — `xlsx-editor` targets Rider 2026.1.x). Releases are published per plugin (e.g. a
-GitHub Release tagged `xlsx-editor-v0.3.0` with that module's ZIP attached).
+각 플러그인은 자체 완결 ZIP(플러그인 + Apache POI 같은 번들 라이브러리)으로 배포됩니다. 다른 머신엔
+**Settings → Plugins → ⚙ → Install Plugin from Disk…** 로 설치합니다(대상 IDE는 호환 빌드여야 함 —
+`xlsx-editor`/`log-viewer` 모두 Rider 2026.1.x 대상). 릴리스는 플러그인별로 게시합니다(예:
+`xlsx-editor-v0.3.0`, `log-viewer-v0.2.0` 태그의 GitHub Release에 해당 모듈 ZIP 첨부).
