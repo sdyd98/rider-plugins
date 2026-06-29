@@ -137,28 +137,43 @@ class RefsMcpToolset : McpToolset {
         val inferred = SchemaInferencer.infer(SchemaInferencer.sample(root))
         val draftTables = JsonParser.parseString(SchemaInferencer.toJson(inferred)).asJsonObject.getAsJsonObject("tables")
         val refsFile = File(root, "refs.json")
-        val rootObj = (if (refsFile.isFile) runCatching { JsonParser.parseString(refsFile.readText()).asJsonObject }.getOrNull() else null)
-            ?: JsonObject().apply { addProperty("version", 1) }
-        val tablesObj = if (rootObj.has("tables")) rootObj.getAsJsonObject("tables")
-            else JsonObject().also { rootObj.add("tables", it) }
-        var added = 0
-        draftTables.entrySet().forEach { (k, v) -> if (!tablesObj.has(k)) { tablesObj.add(k, v); added++ } }
+        val rootObj: JsonObject
+        if (refsFile.isFile) {
+            // Never clobber a present-but-broken file (it may hold manual refinements) — refuse instead.
+            val parsed = runCatching { JsonParser.parseString(refsFile.readText()) }.getOrNull()
+            if (parsed == null || !parsed.isJsonObject)
+                return@io err("existing refs.json does not parse as a JSON object — refusing to overwrite; fix or remove it first")
+            rootObj = parsed.asJsonObject
+        } else {
+            rootObj = JsonObject().apply { addProperty("version", 1) }
+        }
+        val tablesEl = rootObj.get("tables")
+        if (tablesEl != null && !tablesEl.isJsonObject)
+            return@io err("existing refs.json has a non-object \"tables\" — refusing to overwrite; fix or remove it first")
+        val tablesObj = tablesEl?.asJsonObject ?: JsonObject().also { rootObj.add("tables", it) }
+
+        val addedKeys = HashSet<String>()
+        draftTables.entrySet().forEach { (k, v) -> if (!tablesObj.has(k)) { tablesObj.add(k, v); addedKeys.add(k) } }
         refsFile.writeText(gson.toJson(rootObj))
 
-        val low = inferred.flatMap { t -> t.refs.filter { it.confidence < 1.0 }.map { t.sample.tableId to it } }
+        // counts/examples scope to tables ADDED this run (so a no-op re-run reports 0, not the dataset).
+        val addedTables = inferred.filter { it.sample.tableId in addedKeys }
+        val low = addedTables.flatMap { t -> t.refs.filter { it.confidence < 1.0 }.map { t.sample.tableId to it } }
         val summary = JsonObject().apply {
             addProperty("refs_json", refsFile.path.replace('\\', '/'))
             addProperty("tablesInSchema", tablesObj.size())
-            addProperty("tablesAddedThisRun", added)
-            addProperty("refsInferred", inferred.sumOf { it.refs.size })
+            addProperty("tablesAddedThisRun", addedKeys.size)
+            addProperty("refsAddedThisRun", addedTables.sumOf { it.refs.size })
             addProperty("lowConfidenceRefs", low.size)
             add("lowConfidenceSample", JsonArray().apply {
                 low.take(10).forEach { (tbl, r) -> add("$tbl.${r.from} -> ${r.to} (${Math.round(r.confidence * 100) / 100.0})") }
             })
-            addProperty("_note", "Schema written to disk. Review lowConfidenceRefs and add refs values alone can't decide (e.g. polymorphic columns) with read_refs/write_refs.")
+            addProperty("_note", "Re-runs only ADD new tables (existing entries are left untouched — delete a table from refs.json to re-infer it). Review lowConfidenceRefs + add refs values alone can't decide (e.g. polymorphic columns) via read_refs/write_refs.")
         }
         if (validate) {
-            loadRefSchema(root)?.let { schema ->
+            val schema = loadRefSchema(root)
+            if (schema == null) summary.addProperty("validation", "skipped — the written refs.json did not reload as a valid schema")
+            else {
                 val report = IndexRecordGraph(schema, GameDataLoader.buildIndex(schema)).validate()
                 summary.addProperty("broken", report.broken.size)
                 summary.addProperty("orphans", report.orphans.size)

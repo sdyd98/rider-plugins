@@ -158,7 +158,8 @@ object SchemaInferencer {
     // An inverted "id value -> tables that own it" index turns the match from O(tables² · tokens) into
     // ~O(total tokens): for a column we tally how many of its tokens any target table holds as an id,
     // instead of scanning every table. (Measured: a 7000-table draft's inference drops from minutes to
-    // well under a second.) Semantics are unchanged — split/group(by)/name-threshold/best-coverage.
+    // well under a second.) Behaviour matches the old all-pairs match, except equal-coverage ties now
+    // prefer the name-matched target (previously decided by arbitrary scan order).
     fun infer(samples: List<TableSample>): List<InferredTable> {
         val index = HashMap<String, MutableList<String>>()      // id value -> owning table ids
         val targetBy = HashMap<String, List<String>?>()         // target table -> group key (null = single id)
@@ -189,14 +190,23 @@ object SchemaInferencer {
                         if (!(owner == t.tableId && selfKey)) tally[owner] = (tally[owner] ?: 0) + 1
                     }
                 }
+                // best target: highest coverage; on a coverage TIE prefer the name-matched table (the
+                // column name points at it — e.g. MapId → Map over an unrelated table that happens to
+                // share the same small-int id space), then lexicographic for determinism.
                 var bestTable: String? = null
                 var bestCov = 0.0
+                var bestNamed = false
                 tally.forEach { (tbl, hits) ->
                     val cov = hits.toDouble() / tokens.size
-                    val min = if (namesMatch(col, tbl)) COVER_MIN_NAMED else COVER_MIN
-                    if (cov >= min && (cov > bestCov || (cov == bestCov && tbl < (bestTable ?: "￿")))) {
-                        bestCov = cov; bestTable = tbl
+                    val named = namesMatch(col, tbl)
+                    if (cov < (if (named) COVER_MIN_NAMED else COVER_MIN)) return@forEach
+                    val better = when {
+                        bestTable == null -> true
+                        cov != bestCov -> cov > bestCov
+                        named != bestNamed -> named
+                        else -> tbl < bestTable
                     }
+                    if (better) { bestCov = cov; bestTable = tbl; bestNamed = named }
                 }
                 bestTable?.let { refs.add(InferredRef(col, it, split, targetBy[it], bestCov)) }
             }
