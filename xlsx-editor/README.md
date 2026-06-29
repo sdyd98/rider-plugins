@@ -172,18 +172,19 @@ above the open workbook, and their cost scales with the table count in *that sch
 of workbooks on disk — so a single top-level file scales to thousands of tables.
 
 **Authoring `refs.json`** — you author it through the IDE's MCP server with an AI client (e.g. Claude
-Code), not by hand. `RefsMcpToolset` exposes seven tools — `list_tables`, `column_values`,
-`sample_rows`, `suggest_refs`, `read_refs`, `write_refs`, `validate_refs` — and the AI drives them:
-`suggest_refs` runs `SchemaInferencer` over a folder (sampling each sheet, detecting id columns
-including composite keys, proposing foreign keys by **value overlap** with a `_confidence` per ref),
-then `write_refs` / `validate_refs` persist and check it. A client connects via the repo-local
-`.mcp.json` (loopback SSE to the running IDE); the MCP dependency is **optional**, so the viewer still
-loads on an IDE without (or with a disabled) MCP server.
+Code), not by hand. `RefsMcpToolset` exposes eight tools — `build_refs`, `list_tables`, `column_values`,
+`sample_rows`, `suggest_refs`, `read_refs`, `write_refs`, `validate_refs` — and the AI drives them.
 
-For a large multi-area dataset, grow the single top-level `refs.json` **incrementally**: scope
-`suggest_refs` to a subfolder that *encloses the tables that reference each other* (too narrow loses
-cross-area references; the whole tree is needlessly slow), then merge its draft into the top
-`refs.json`.
+The primary path is **`build_refs(<top folder>)`**: it samples every sheet under the folder, infers
+foreign keys across all of them via an inverted value→table index (so cross-folder references are found
+and a multi-thousand-table tree drafts in **seconds**), writes one top-level `refs.json`, and returns a
+**summary** (counts + low-confidence refs to review) rather than the whole schema — so it never floods
+the AI's context. Re-runs only ADD newly-found tables, so manual refinements survive: point it at the
+top once, then refine the low-confidence refs (and any the value-overlap heuristic can't decide, e.g.
+polymorphic columns) with `read_refs` / `write_refs`. `suggest_refs` runs the same inference for a single
+folder without writing. A client connects via the repo-local `.mcp.json` (loopback SSE to the running
+IDE); the MCP dependency is **optional**, so the viewer still loads on an IDE without (or with a
+disabled) MCP server.
 
 ## Build & run
 

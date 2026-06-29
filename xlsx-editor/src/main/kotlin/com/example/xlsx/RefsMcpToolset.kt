@@ -120,6 +120,53 @@ class RefsMcpToolset : McpToolset {
         })
     }
 
+    @McpTool
+    @McpDescription(
+        "Build (or additively extend) the WHOLE relationship schema for a folder tree in one pass. Samples " +
+            "every sheet under <dir> (recursing), infers foreign keys by value overlap across ALL of them " +
+            "(so cross-folder references are found), and writes <dir>/refs.json. Tables already in an existing " +
+            "refs.json are kept as-is (re-runs only ADD newly-found tables, so manual refinements survive). " +
+            "Returns a SUMMARY (counts + low-confidence refs to review), never the full schema — point this at " +
+            "the top of a large dataset to draft the whole thing at once, then refine with read_refs/write_refs.",
+    )
+    suspend fun build_refs(
+        @McpDescription("Absolute path to the root data folder; its refs.json is written/extended here.") dir: String,
+        @McpDescription("Also validate the result against the data (broken/orphan counts). Slower on a huge schema.") validate: Boolean = false,
+    ): String = io {
+        val root = File(dir)
+        val inferred = SchemaInferencer.infer(SchemaInferencer.sample(root))
+        val draftTables = JsonParser.parseString(SchemaInferencer.toJson(inferred)).asJsonObject.getAsJsonObject("tables")
+        val refsFile = File(root, "refs.json")
+        val rootObj = (if (refsFile.isFile) runCatching { JsonParser.parseString(refsFile.readText()).asJsonObject }.getOrNull() else null)
+            ?: JsonObject().apply { addProperty("version", 1) }
+        val tablesObj = if (rootObj.has("tables")) rootObj.getAsJsonObject("tables")
+            else JsonObject().also { rootObj.add("tables", it) }
+        var added = 0
+        draftTables.entrySet().forEach { (k, v) -> if (!tablesObj.has(k)) { tablesObj.add(k, v); added++ } }
+        refsFile.writeText(gson.toJson(rootObj))
+
+        val low = inferred.flatMap { t -> t.refs.filter { it.confidence < 1.0 }.map { t.sample.tableId to it } }
+        val summary = JsonObject().apply {
+            addProperty("refs_json", refsFile.path.replace('\\', '/'))
+            addProperty("tablesInSchema", tablesObj.size())
+            addProperty("tablesAddedThisRun", added)
+            addProperty("refsInferred", inferred.sumOf { it.refs.size })
+            addProperty("lowConfidenceRefs", low.size)
+            add("lowConfidenceSample", JsonArray().apply {
+                low.take(10).forEach { (tbl, r) -> add("$tbl.${r.from} -> ${r.to} (${Math.round(r.confidence * 100) / 100.0})") }
+            })
+            addProperty("_note", "Schema written to disk. Review lowConfidenceRefs and add refs values alone can't decide (e.g. polymorphic columns) with read_refs/write_refs.")
+        }
+        if (validate) {
+            loadRefSchema(root)?.let { schema ->
+                val report = IndexRecordGraph(schema, GameDataLoader.buildIndex(schema)).validate()
+                summary.addProperty("broken", report.broken.size)
+                summary.addProperty("orphans", report.orphans.size)
+            }
+        }
+        gson.toJson(summary)
+    }
+
     private val gson = GsonBuilder().setPrettyPrinting().disableHtmlEscaping().create()
     private suspend fun <T> io(block: () -> T): T = withContext(Dispatchers.IO) { block() }
     private fun err(message: String): String = """{"error": ${JsonPrimitive(message)}}"""
