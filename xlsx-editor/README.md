@@ -5,6 +5,11 @@ A frontend-only JetBrains Rider plugin (Kotlin) that opens `.xlsx` and `.xls` fi
 **vim-style navigation**. Built for browsing large multi-sheet data tables; it reads with Apache
 POI (streaming) and never modifies the file.
 
+On top of the viewer it adds a **relationship-graph explorer** for game-data workbooks — an ER map,
+record-level data lineage, and an integrity check driven by a `refs.json` schema — plus a
+deterministic `refs.json` generator and MCP tools so an AI client can author that schema
+(see [Relationship graph & refs.json](#relationship-graph--refsjson-game-data) below).
+
 Target: **Rider 2026.1.3** (build 261) · **JDK 21** toolchain · IntelliJ Platform Gradle Plugin 2.16.0.
 
 This is the `xlsx-editor` module of the [`rider-plugins`](../README.md) monorepo. The Gradle build
@@ -33,6 +38,19 @@ xlsx-editor/
     ComposeChrome.kt          shared Compose/Jewel filter bar + status bar (editor-level)
     ComposeColumnFilter.kt    Compose popup for the per-column value filter
     ComposeHelp.kt            Compose `?` shortcut cheat-sheet popup
+    --- relationship graph / refs.json (game data) ---
+    RefGraphToolWindow.kt     "관계도" tool window factory (Compose host)
+    DataGraphView.kt          3 tabs: ER map · record lineage · integrity check (검사)
+    RefGraphPanel.kt          table-level ER map (Compose Canvas, force layout)
+    RefGraphModel.kt          ER / record view-model (+ mock fallback) + TableColor.kt node colors
+    RelationshipSchema.kt     refs.json parse + buildRefGraph + IndexRecordGraph (real data path)
+    GameDataLoader.kt         streaming POI index (+ on-disk .idx cache)
+    GameDataRoots.kt          per-checkout designated data roots (workspace.xml)
+    RelationshipNavigation.kt graph→grid navigation (open workbook, reveal row)
+    RelationshipBus.kt        grid→graph event bus (Ctrl+R)
+    SchemaInferencer.kt       deterministic refs.json drafter (value-overlap FK inference)
+    GenerateRefsAction.kt     "데이터 루트로 지정 (refs.json 생성)" action (Tools + project view)
+    RefsMcpToolset.kt         7 MCP tools for refs.json authoring (IDE built-in MCP server)
   (shared in ../common: PoiClassLoaders.kt, CellFormatting.kt)
 ```
 
@@ -123,6 +141,50 @@ For **large files** the open path is tuned to show content fast (measured on a 1
 Large `.xls`/`.xlsx` also need the IDE's heap raised (Help → Change Memory Settings) and the plugin
 lifts POI's anti-DoS array cap + bypasses the IDE's ~20 MB content-load limit so big files open.
 
+## Relationship graph & refs.json (game data)
+
+Game data is spread across many workbooks whose columns reference rows in other tables (an item
+points at a skill id, a monster points at a drop-table id, …). This module reads those
+cross-references and shows them as a graph, driven by a `refs.json` schema that sits at the data
+**root**.
+
+**Three views** (the right-hand **관계도** tool window, `RefGraphToolWindow`):
+
+- **테이블 관계도** — a table-level **ER map**: each table's id column(s) (◆) and reference columns
+  (→ with the target-table badge), and the foreign-key edges between them, laid out around the
+  most-connected table (`RefGraphPanel`, Compose `Canvas` + force layout; pan/zoom/drag/hover).
+- **데이터 연결** — record-level **data lineage**: centre on one row and see the rows it references
+  (outgoing) and the rows that reference it (incoming), with usage counts and group members
+  (`DataGraphView`).
+- **검사** — a workbook-wide **integrity check**: dangling/broken references (a cell points at an id
+  that has no row) and orphan records (rows nothing references); the tab badges the broken count.
+
+**Navigation is bidirectional:** press **`Ctrl+R`** on a grid row to centre the explorer on that
+record (`RelationshipBus` → tool window); click a graph node to open its workbook and select the
+row (`RelationshipNavigation` → `XlsxFileEditor.revealSheetRow`).
+
+**`refs.json`** describes each table (`file`, `sheet`, `headerRow`, `dataStartRow`, `id`, `display`)
+and its `refs` (a `from` column → a `to` table, with `by` / `split` for grouped or delimited
+multi-value refs). The graph reads workbooks with streaming POI and a compact index cached on disk
+(`.idx`, keyed by file mtime/size + `refs.json`), so reopening is fast and nothing is held in memory
+whole. See `samples/gamedata/refs.json` for a worked example.
+
+**Authoring `refs.json`** — you rarely hand-write it:
+
+- Right-click a folder (or use **Tools**) → **데이터 루트로 지정 (refs.json 생성)**
+  (`GenerateRefsAction`). This marks the folder as a per-checkout **data root** (stored in
+  `workspace.xml`, so parallel checkouts/worktrees stay independent) and runs `SchemaInferencer`,
+  which samples every workbook under the root (recursively) and proposes foreign keys by **value
+  overlap** — a column whose values are mostly covered by another table's id set. It writes
+  `refs.json`, or `refs.draft.json` if one already exists (it never clobbers), with a `_confidence`
+  per ref.
+- The same engine is exposed to AI clients as **MCP tools** (`RefsMcpToolset`, registered on the
+  IDE's built-in MCP server): `list_tables`, `column_values`, `sample_rows`, `suggest_refs`,
+  `read_refs`, `write_refs`, `validate_refs`. A client such as Claude Code connects via the
+  repo-local `.mcp.json` (loopback SSE to the running IDE) and can explore the data, draft, write,
+  and validate the schema. The MCP dependency is **optional**, so the viewer still loads on an IDE
+  without (or with a disabled) MCP server.
+
 ## Build & run
 
 A JDK 21 is required to *run* Gradle. This machine has no standalone JDK on PATH, so point
@@ -131,7 +193,7 @@ A JDK 21 is required to *run* Gradle. This machine has no standalone JDK on PATH
 Run from the **repo root** with the module prefix:
 
 ```powershell
-$env:JAVA_HOME = "C:\Program Files\JetBrains\PyCharm 2025.2.1.1\jbr"
+$env:JAVA_HOME = "<a JetBrains Runtime 21>"   # e.g. the jbr\ folder bundled with an installed JetBrains IDE
 ./gradlew :xlsx-editor:buildPlugin   # -> xlsx-editor/build/distributions/xlsx-editor-<ver>.zip
 ./gradlew :xlsx-editor:runIde        # launch Rider with the plugin loaded in a sandbox
 ```

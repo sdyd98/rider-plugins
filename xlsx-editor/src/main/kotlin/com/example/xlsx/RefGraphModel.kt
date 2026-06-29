@@ -3,9 +3,10 @@ package com.example.xlsx
 import androidx.compose.ui.geometry.Offset
 
 /**
- * Prototype model for the relationship-map view. This is **mock data** — it is NOT yet driven by a
- * real refs schema. Its only purpose is to render the diagram in Rider so we can decide the detail
- * level / interactions before locking the schema spec.
+ * View-model for the table-level relationship-map (ER) view. In production these are built from the
+ * workbook's refs.json by [buildRefGraph] (see RelationshipSchema.kt); [mockRefGraph]/[mockDb] below
+ * are only the fallback rendered when no refs.json is found (and were used to design the detail
+ * level / interactions before the schema spec was locked).
  *
  * @param refTo    target table id this column references (null = plain column).
  * @param embedded the reference lives inside a delimited/encoded string (shown as a badge).

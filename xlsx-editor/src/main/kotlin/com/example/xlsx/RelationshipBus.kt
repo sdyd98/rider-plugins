@@ -7,7 +7,7 @@ import androidx.compose.runtime.mutableStateOf
 data class RecordRef(val table: String, val id: String, val seq: Int = 0)
 
 /**
- * One-way bridge from the grid to the relationship tool window: the grid (Alt+R on a row) publishes the
+ * One-way bridge from the grid to the relationship tool window: the grid (Ctrl+R on a row) publishes the
  * record to show; [RelationshipTabs] observes [request] (a Compose state) and re-centres the explorer.
  */
 object RelationshipBus {
