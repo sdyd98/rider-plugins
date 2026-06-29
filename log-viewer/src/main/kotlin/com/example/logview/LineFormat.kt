@@ -115,5 +115,83 @@ class LineFormat private constructor(
                 }
             }
         }
+
+        // ---- Region picker: build a regex from clicked token → field assignments ----
+
+        private val BRACKETS = mapOf('[' to ']', '(' to ')', '{' to '}', '<' to '>')
+
+        /** Split [line] into its non-whitespace tokens with char offsets (for the visual region picker). */
+        fun tokenize(line: String): List<FormatToken> {
+            val toks = ArrayList<FormatToken>()
+            var i = 0
+            while (i < line.length) {
+                if (line[i].isWhitespace()) {
+                    i++
+                    continue
+                }
+                val start = i
+                while (i < line.length && !line[i].isWhitespace()) i++
+                toks.add(FormatToken(line.substring(start, i), start, i))
+            }
+            return toks
+        }
+
+        /**
+         * Build a named-capture regex from a sample [line] and a token→field [assign] map (field ∈
+         * time/level/thread/message), produced by clicking tokens in the region picker. Assigned tokens
+         * become captures (contiguous same-field tokens merge; a single bracket-wrapped token keeps its
+         * brackets as literals); gaps and unassigned tokens become literals; `message` captures to end.
+         */
+        fun buildRegex(line: String, tokens: List<FormatToken>, assign: Map<Int, String>): String {
+            val sb = StringBuilder("^")
+            val used = HashSet<String>()
+            var pos = 0
+            var i = 0
+            while (i < tokens.size) {
+                val tok = tokens[i]
+                appendLiteral(sb, line.substring(pos, tok.start)) // gap (whitespace/delimiters) before token
+                val field = assign[i]
+                when {
+                    field == "message" && "message" !in used -> {
+                        sb.append("(?<message>.*)")
+                        used.add("message")
+                        pos = line.length
+                        i = tokens.size
+                    }
+                    field != null && field !in used -> { // time / level / thread
+                        var j = i
+                        while (j + 1 < tokens.size && assign[j + 1] == field) j++ // merge contiguous same-field
+                        appendFieldCapture(sb, field, line.substring(tokens[i].start, tokens[j].end))
+                        used.add(field)
+                        pos = tokens[j].end
+                        i = j + 1
+                    }
+                    else -> { // unassigned (or a duplicate/used field) → literal text
+                        appendLiteral(sb, tok.text)
+                        pos = tok.end
+                        i++
+                    }
+                }
+            }
+            if (pos < line.length) appendLiteral(sb, line.substring(pos))
+            return sb.toString()
+        }
+
+        /** Emit one field capture for [span] (the joined text of the field's tokens). */
+        private fun appendFieldCapture(sb: StringBuilder, field: String, span: String) {
+            val open = span.firstOrNull()
+            val close = open?.let { BRACKETS[it] }
+            if (close != null && span.length >= 2 && span.last() == close) {
+                // a single bracket-wrapped token, e.g. [worker-3] / (INFO) → brackets stay literal
+                appendLiteral(sb, open.toString())
+                sb.append("(?<").append(field).append(">[^\\").append(close).append("]+)")
+                appendLiteral(sb, close.toString())
+            } else {
+                sb.append("(?<").append(field).append(">").append(defaultCapture(field)).append(")")
+            }
+        }
     }
 }
+
+/** One non-whitespace token of a sample line, with its char range — for the visual region picker. */
+data class FormatToken(val text: String, val start: Int, val end: Int)

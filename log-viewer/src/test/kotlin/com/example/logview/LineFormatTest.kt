@@ -76,4 +76,28 @@ class LineFormatTest {
         assertEquals(LogLine.NO_TIME, pb.timestampMillis)
         assertEquals(LogLevel.OTHER, pb.level)
     }
+
+    @Test
+    fun `buildRegex from clicked token regions produces a working, generalizing format`() {
+        val line = "2026-06-29 09:00:01.001 [worker-3] ERROR com.game.Db - refused"
+        val toks = LineFormat.tokenize(line)
+        assertEquals("[worker-3]", toks[2].text) // brackets are part of the token
+
+        // Simulate clicks: tokens 0+1 = time, 2 = thread, 3 = level, 4 = message-start.
+        val assign = mapOf(0 to "time", 1 to "time", 2 to "thread", 3 to "level", 4 to "message")
+        val rx = LineFormat.buildRegex(line, toks, assign)
+        val fmt = LineFormat.fromRegex(rx)
+        assertTrue(fmt.valid, "generated regex should compile: $rx")
+        assertTrue(setOf("time", "thread", "level", "message").all { it in fmt.groups })
+
+        val m = fmt.apply(line)!!
+        assertEquals("ERROR", m.level)
+        assertEquals("com.game.Db - refused", line.substring(m.messageStart))
+
+        // The generated format generalizes to another line of the SAME shape (different values/lengths).
+        val line2 = "2026-06-29 09:00:02.500 [main] WARN disk low"
+        val m2 = fmt.apply(line2)!!
+        assertEquals("WARN", m2.level)
+        assertEquals("disk low", line2.substring(m2.messageStart))
+    }
 }
