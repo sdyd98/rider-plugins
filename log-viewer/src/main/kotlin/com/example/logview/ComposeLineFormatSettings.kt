@@ -11,8 +11,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.input.TextFieldState
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.derivedStateOf
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -40,7 +38,7 @@ fun createLineFormatSettings(state: TextFieldState, sampleLines: List<String>): 
         Text("줄 형식 (Time · Level · Message 분리)", color = palette.text, fontWeight = FontWeight.Bold, fontSize = 13.sp)
         Text(
             "한 줄에 하나씩. 템플릿 예: %{time} [%{thread}] (%{level}) %{message}   ·   또는 정규식 (?<level>\\w+)…  " +
-                "위에서부터 시도하고, 안 맞으면 자동 분석으로 폴백합니다.",
+                "위에서부터 시도하며, 미리보기에서 안 맞는 줄은 원본 그대로 보입니다 (실제 그리드에선 자동 분석으로 폴백).",
             color = palette.mutedText,
             fontSize = 11.sp,
         )
@@ -51,12 +49,11 @@ fun createLineFormatSettings(state: TextFieldState, sampleLines: List<String>): 
         )
 
         Text("미리보기 (현재 로그 앞부분)", color = palette.mutedText, fontWeight = FontWeight.Bold, fontSize = 11.sp)
-        // Recompile the formats whenever the text changes; preview reflects the real parse pipeline.
-        val formats by remember {
-            derivedStateOf {
-                state.text.lineSequence().map { it.trim() }.filter { it.isNotEmpty() }
-                    .map { LineFormat.of(it) }.filter { it.valid }.toList()
-            }
+        // Read state.text directly so this recomposes on EVERY keystroke → the preview is real-time.
+        val text = state.text.toString()
+        val formats = remember(text) {
+            text.lineSequence().map { it.trim() }.filter { it.isNotEmpty() }
+                .map { LineFormat.of(it) }.filter { it.valid }.toList()
         }
         Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(2.dp)) {
             if (sampleLines.isEmpty()) {
@@ -70,6 +67,26 @@ fun createLineFormatSettings(state: TextFieldState, sampleLines: List<String>): 
 
 @Composable
 private fun PreviewRow(line: String, formats: List<LineFormat>, palette: LogPalette) {
+    // Did a user format actually match this line? If not (none / all cleared), show the ORIGINAL text so
+    // it's obvious which lines the format doesn't cover — rather than a heuristic guess.
+    val matched = remember(line, formats) { formats.any { it.apply(line) != null } }
+    if (!matched) {
+        Row(
+            Modifier.fillMaxWidth().clip(RoundedCornerShape(Radii.sm))
+                .background(palette.mutedText.copy(alpha = 0.06f)).padding(horizontal = Space.sm, vertical = 3.dp),
+        ) {
+            Text(
+                line,
+                color = palette.mutedText,
+                fontSize = 11.sp,
+                fontFamily = FontFamily.Monospace,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
+        return
+    }
     val parsed = remember(line, formats) { LogParser.parse(line, formats) }
     val time = if (parsed.timestampMillis != LogLine.NO_TIME) LogStructure.formatTime(parsed.timestampMillis) else ""
     val level = if (parsed.level != LogLevel.OTHER) parsed.level.label else ""

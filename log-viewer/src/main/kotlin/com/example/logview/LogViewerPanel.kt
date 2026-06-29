@@ -278,7 +278,9 @@ class LogViewerPanel(
     private fun showFormatSettings() {
         displayPopup?.cancel()
         val store = LineFormatStore.getInstance()
-        lineFormatState.edit { replace(0, length, store.sources().joinToString("\n")) }
+        // Pre-fill a sensible default template when the user has no formats yet (a starting point to edit).
+        val seed = store.sources().ifEmpty { listOf(LineFormat.DEFAULT_TEMPLATE) }.joinToString("\n")
+        lineFormatState.edit { replace(0, length, seed) }
         val sample = (0 until minOf(model.loadedRowCount(), 8)).map { model.rawAt(it) }
         val panel = createLineFormatSettings(lineFormatState, sample)
         val popup = JBPopupFactory.getInstance()

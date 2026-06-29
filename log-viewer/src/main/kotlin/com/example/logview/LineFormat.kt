@@ -47,6 +47,9 @@ class LineFormat private constructor(
     companion object {
         private val FIELD = Pattern.compile("%\\{(time|level|thread|message)}")
 
+        /** Pre-filled in the settings when the user has no formats yet — a common Logback-style template. */
+        const val DEFAULT_TEMPLATE = "%{time} [%{thread}] %{level} %{message}"
+
         // Common timestamp shapes (ISO / bare clock / syslog) so `%{time}` captures the whole stamp even
         // when it contains a space and isn't followed by a distinctive literal.
         private const val TS =
