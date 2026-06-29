@@ -4,8 +4,9 @@ import javax.swing.table.AbstractTableModel
 
 /** Column indices for the Better-Stack-style Time | Level | Message layout. */
 const val COL_TIME = 0
-const val COL_LEVEL = 1
-const val COL_MSG = 2
+const val COL_THREAD = 1
+const val COL_LEVEL = 2
+const val COL_MSG = 3
 
 /**
  * The per-line parse result, decided WITHOUT model state so it can be computed off the EDT (see
@@ -21,6 +22,8 @@ class ParsedRow(
     val hasAnsi: Boolean,
     /** No timestamp AND looks like a continuation — the model still gates this on having a prior block. */
     val continuationCandidate: Boolean,
+    /** Thread/context captured by a user format (Thread column); "" when none. */
+    val thread: String = "",
 )
 
 /**
@@ -34,7 +37,7 @@ fun parseLogRow(raw: String, formats: List<LineFormat> = emptyList()): ParsedRow
     val clean = if (hasAnsi) AnsiText.strip(raw) else raw
     val parsed = LogParser.parse(clean, formats)
     val contCandidate = parsed.timestampMillis == LogLine.NO_TIME && LogParser.looksLikeContinuation(clean)
-    return ParsedRow(raw, clean, parsed.level, parsed.timestampMillis, parsed.messageStart, hasAnsi, contCandidate)
+    return ParsedRow(raw, clean, parsed.level, parsed.timestampMillis, parsed.messageStart, hasAnsi, contCandidate, parsed.thread)
 }
 
 /**
@@ -51,6 +54,7 @@ class LogTableModel : AbstractTableModel() {
     private val lines = ArrayList<LogLine>()
     private var nextLineNumber = 1
     private var currentBlockStart = -1
+    private var anyThread = false // any loaded line has a thread value → show the Thread column
     private val counts = IntArray(LogLevel.entries.size)
 
     /** Model indices of currently-collapsed block-start lines (their continuation rows are hidden). */
@@ -66,9 +70,10 @@ class LogTableModel : AbstractTableModel() {
     var onTrim: ((dropped: Int) -> Unit)? = null
 
     override fun getRowCount(): Int = lines.size
-    override fun getColumnCount(): Int = 3 // Time | Level | Message (Better-Stack-style columns)
+    override fun getColumnCount(): Int = 4 // Time | Thread | Level | Message
     override fun getColumnName(column: Int): String = when (column) {
         COL_TIME -> "Time"
+        COL_THREAD -> "Thread"
         COL_LEVEL -> "Level"
         else -> "Message"
     }
@@ -79,6 +84,7 @@ class LogTableModel : AbstractTableModel() {
         val l = lines.getOrNull(rowIndex) ?: return ""
         return when (columnIndex) {
             COL_TIME -> l.timeText
+            COL_THREAD -> l.thread
             COL_LEVEL -> if (l.level == LogLevel.OTHER) "" else l.level.label
             else -> if (rawMode) l.display else l.message
         }
@@ -92,6 +98,9 @@ class LogTableModel : AbstractTableModel() {
     /** Just the message-column text (for sizing the Message column and search highlighting). */
     fun messageAt(row: Int): String = lines[row].message
     fun loadedRowCount(): Int = lines.size
+
+    /** True if any loaded line carries a thread value (→ show the Thread column; otherwise hide it). O(1). */
+    fun hasThread(): Boolean = anyThread
     fun countOf(level: LogLevel): Int = counts[level.ordinal]
 
     /** The largest source line number seen so far (keeps growing across trims) — for gutter sizing. */
@@ -125,7 +134,9 @@ class LogTableModel : AbstractTableModel() {
         // A continuation line is ALL body — force messageStart = 0 so a stray level token inside it
         // (e.g. `"level": "ERROR",`) doesn't truncate the displayed text.
         val messageStart = if (isCont) 0 else p.messageStart
-        val line = LogLine(nextLineNumber++, p.raw, p.clean, level, p.timestampMillis, isCont, p.hasAnsi, messageStart)
+        val thread = if (isCont) "" else p.thread
+        if (thread.isNotEmpty()) anyThread = true
+        val line = LogLine(nextLineNumber++, p.raw, p.clean, level, p.timestampMillis, isCont, p.hasAnsi, messageStart, thread)
         if (isCont) {
             line.blockStart = currentBlockStart
         } else {
@@ -149,6 +160,7 @@ class LogTableModel : AbstractTableModel() {
         foldedBlocks.clear()
         currentBlockStart = -1
         nextLineNumber = 1
+        anyThread = false
         for (p in rows) link(p)
         fireTableDataChanged()
     }
@@ -161,6 +173,7 @@ class LogTableModel : AbstractTableModel() {
         foldedBlocks.clear()
         currentBlockStart = -1
         nextLineNumber = 1
+        anyThread = false
         fireTableDataChanged()
     }
 

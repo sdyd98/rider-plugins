@@ -37,12 +37,13 @@ class LineFormat private constructor(
         return Match(
             time = if ("time" in groups) m.group("time") else null,
             level = if ("level" in groups) m.group("level") else null,
+            thread = if ("thread" in groups) m.group("thread") else null,
             messageStart = if (msgStart >= 0) msgStart else -1,
         )
     }
 
     /** Captured pieces for one line; nulls/-1 mean "not provided — use the heuristic for this part". */
-    class Match(val time: String?, val level: String?, val messageStart: Int)
+    class Match(val time: String?, val level: String?, val thread: String?, val messageStart: Int)
 
     companion object {
         private val FIELD = Pattern.compile("%\\{(time|level|thread|message)}")

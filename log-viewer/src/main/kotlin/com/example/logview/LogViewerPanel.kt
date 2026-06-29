@@ -413,7 +413,22 @@ class LogViewerPanel(
         val gen = readerGeneration
         ApplicationManager.getApplication().executeOnPooledThread {
             val rows = raws.map { parseLogRow(it, formats) }
-            onEdt { if (gen == readerGeneration) model.replaceAllParsed(rows) }
+            onEdt {
+                if (gen != readerGeneration) return@onEdt
+                model.replaceAllParsed(rows)
+                syncThreadColumn() // show/hide the Thread column for the new format
+                sizeContentColumn()
+            }
+        }
+    }
+
+    private var threadColShown = false
+
+    /** Re-lay-out columns only when the Thread column's visibility flips (cheap; preserves manual resizes). */
+    private fun syncThreadColumn() {
+        if (model.hasThread() != threadColShown) {
+            threadColShown = model.hasThread()
+            applyColumnLayout()
         }
     }
 
@@ -435,6 +450,7 @@ class LogViewerPanel(
         val atBottom = isViewAtBottom()
         model.appendParsed(rows)
         if (following && atBottom) scrollToBottom()
+        syncThreadColumn()
         sizeContentColumnFor(rows)
         // Data is flowing again → a prior initial-read error is stale; clear it so the bar shows LIVE.
         if (rows.isNotEmpty() && statusError != null) statusError = null
@@ -718,21 +734,28 @@ class LogViewerPanel(
     /** Install the per-column renderers once, then size the columns for the current view mode. */
     private fun setupColumns() {
         val cm = table.columnModel
-        if (cm.columnCount < 3) return
+        if (cm.columnCount < 4) return
         cm.getColumn(COL_TIME).cellRenderer = LogTimeRenderer(model)
+        cm.getColumn(COL_THREAD).cellRenderer = LogTimeRenderer(model) // reuse the muted-text renderer
         cm.getColumn(COL_LEVEL).cellRenderer = LogLevelRenderer(model)
         cm.getColumn(COL_MSG).cellRenderer = renderer
         applyColumnLayout()
     }
 
-    /** Parsed view = fixed Time + Level + flexible Message; raw view = Time/Level collapsed, Message only. */
+    /** Parsed view = fixed Time + (Thread) + Level + flexible Message; raw view = all collapsed but Message. */
     private fun applyColumnLayout() {
         val cm = table.columnModel
-        if (cm.columnCount < 3) return
+        if (cm.columnCount < 4) return
         if (rawMode) {
-            for (c in intArrayOf(COL_TIME, COL_LEVEL)) cm.getColumn(c).apply { minWidth = 0; maxWidth = 0; preferredWidth = 0 }
+            for (c in intArrayOf(COL_TIME, COL_THREAD, COL_LEVEL)) cm.getColumn(c).apply { minWidth = 0; maxWidth = 0; preferredWidth = 0 }
         } else {
             cm.getColumn(COL_TIME).apply { minWidth = JBUI.scale(70); maxWidth = JBUI.scale(190); preferredWidth = JBUI.scale(108) }
+            // Thread column only takes space when a format actually captures threads.
+            if (model.hasThread()) {
+                cm.getColumn(COL_THREAD).apply { minWidth = JBUI.scale(48); maxWidth = JBUI.scale(280); preferredWidth = JBUI.scale(120) }
+            } else {
+                cm.getColumn(COL_THREAD).apply { minWidth = 0; maxWidth = 0; preferredWidth = 0 }
+            }
             cm.getColumn(COL_LEVEL).apply { minWidth = JBUI.scale(56); maxWidth = JBUI.scale(120); preferredWidth = JBUI.scale(84) }
         }
         fitColumnWidth()
@@ -742,8 +765,8 @@ class LogViewerPanel(
      *  Truncate mode: exactly the remaining width so long lines clip instead of adding a horizontal scrollbar. */
     private fun fitColumnWidth() {
         val cm = table.columnModel
-        if (cm.columnCount < 3) return
-        val fixed = cm.getColumn(COL_TIME).preferredWidth + cm.getColumn(COL_LEVEL).preferredWidth
+        if (cm.columnCount < 4) return
+        val fixed = cm.getColumn(COL_TIME).preferredWidth + cm.getColumn(COL_THREAD).preferredWidth + cm.getColumn(COL_LEVEL).preferredWidth
         val viewport = maxOf(scrollPane.viewport.width - fixed, 1)
         val w = if (truncateLines) viewport else maxOf(maxLineWidth, viewport)
         val column = cm.getColumn(COL_MSG)

@@ -24,6 +24,8 @@ class LogLine(
     val hasAnsi: Boolean,
     /** Offset in [display] (the clean text) where the message body begins (see [ParsedLine.messageStart]). */
     messageStart: Int = 0,
+    /** Thread/context captured by a user format, shown in the Thread column ("" when none). */
+    val thread: String = "",
 ) {
     /** Model index of this line's block-primary line; set by [LogTableModel] as lines are appended. */
     var blockStart: Int = -1

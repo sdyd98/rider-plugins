@@ -60,7 +60,8 @@ class LineFormatStore : PersistentStateComponent<LineFormatStore.State> {
 
     fun remove(name: String) {
         state.library.removeAll { it.name == name }
-        if (state.activeName == name) state.activeName = null
+        // If the active format was removed, fall back to the first remaining one (or none → heuristic).
+        if (state.activeName == name) state.activeName = state.library.firstOrNull()?.name
         cache = null
     }
 

@@ -11,7 +11,7 @@ import java.util.regex.Pattern
  * offset in the raw line where the message body begins (just after the level token), so the columnar
  * view can show Time / Level / Message separately. 0 = show the whole line as the message.
  */
-class ParsedLine(val level: LogLevel, val timestampMillis: Long, val messageStart: Int)
+class ParsedLine(val level: LogLevel, val timestampMillis: Long, val messageStart: Int, val thread: String = "")
 
 /**
  * Stateless, allocation-light heuristics that pull a [LogLevel] and an epoch-millis timestamp out of a
@@ -77,7 +77,7 @@ object LogParser {
             val m = fmt.apply(head) ?: continue
             val level = m.level?.let { mapLevel(it) } ?: LogLevel.OTHER
             val time = m.time?.let { parseTimestamp(it) } ?: LogLine.NO_TIME
-            return ParsedLine(level, time, m.messageStart.coerceAtLeast(0))
+            return ParsedLine(level, time, m.messageStart.coerceAtLeast(0), m.thread?.trim() ?: "")
         }
         return parseHeuristic(head)
     }

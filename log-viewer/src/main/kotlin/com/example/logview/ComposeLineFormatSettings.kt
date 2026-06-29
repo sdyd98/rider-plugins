@@ -4,9 +4,11 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
@@ -31,13 +33,13 @@ import org.jetbrains.jewel.ui.component.Text
 import org.jetbrains.jewel.ui.component.TextField
 import javax.swing.JComponent
 
-/** The four assignable fields, in left-to-right order, with their Korean labels and chip colors. */
-private val FIELD_LABELS = listOf("time" to "시간", "level" to "레벨", "thread" to "스레드", "message" to "메시지")
+/** The assignable fields, in left-to-right order, with their Korean labels and chip colors. */
+private val FIELD_LABELS = listOf("time" to "시간", "thread" to "스레드", "level" to "레벨", "message" to "메시지")
 
 private fun fieldColor(field: String): Color = when (field) {
     "time" -> Color(0xFF4D9DE0)
-    "level" -> Color(0xFFE0883B)
     "thread" -> Color(0xFF9B86C9)
+    "level" -> Color(0xFFE0883B)
     else -> Color(0xFF5AAE6B) // message
 }
 
@@ -71,9 +73,6 @@ fun createLineFormatSettings(sampleLines: List<String>, onPreview: (LineFormat?)
                     Dropdown(
                         modifier = Modifier.weight(1f),
                         menuContent = {
-                            selectableItem(selected = activeName == null, onClick = { store.activate(null); changed() }) {
-                                Text("자동 (형식 없음)")
-                            }
                             library.forEach { name ->
                                 selectableItem(selected = name == activeName, onClick = { store.activate(name); changed() }) {
                                     Text(name)
@@ -81,7 +80,7 @@ fun createLineFormatSettings(sampleLines: List<String>, onPreview: (LineFormat?)
                             }
                         },
                     ) {
-                        Text(activeName ?: "자동 (형식 없음)")
+                        Text(activeName ?: "선택")
                     }
                     if (activeName != null) ToolButton("삭제", palette) { store.remove(activeName); changed() }
                 }
@@ -97,8 +96,10 @@ fun createLineFormatSettings(sampleLines: List<String>, onPreview: (LineFormat?)
                 }
             }
 
+            // A separated footer with its own close button.
+            Box(Modifier.fillMaxWidth().height(1.dp).background(palette.border))
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                ToolButton("닫기", palette, accent = true) { onClose() }
+                ToolButton("창 닫기", palette, accent = true) { onClose() }
             }
         }
     }
