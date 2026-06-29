@@ -63,13 +63,18 @@ object LogParser {
 
     private val zone: ZoneId get() = ZoneId.systemDefault()
 
-    fun parse(raw: String): ParsedLine = parse(raw, emptyList())
+    /** The built-in heuristic on its own (no user format). Kept for reference/restore — the viewer no
+     *  longer applies it: a line with no matching user format is shown raw (see [parse] with formats). */
+    fun parse(raw: String): ParsedLine {
+        val head = if (raw.length > HEAD) raw.substring(0, HEAD) else raw
+        return parseHeuristic(head)
+    }
 
     /**
-     * Parse [raw], trying user [formats] (in order) BEFORE the built-in heuristic. The first format that
-     * matches wins and supplies ONLY what it captures (no heuristic merge) — so a partial format shows
-     * partial columns and the live picker visibly fills them in field by field. A line that matches NO
-     * format falls back to the heuristic (so stack frames etc. still parse).
+     * Parse [raw] using the user [formats] (in order). The first format that matches wins and supplies
+     * ONLY what it captures (no heuristic merge) — so a partial format shows partial columns and the live
+     * picker visibly fills them in field by field. A line that matches NO format (or no formats at all) is
+     * left RAW — the whole line is the message, no time/level/thread (no auto-analysis).
      */
     fun parse(raw: String, formats: List<LineFormat>): ParsedLine {
         val head = if (raw.length > HEAD) raw.substring(0, HEAD) else raw
@@ -79,7 +84,7 @@ object LogParser {
             val time = m.time?.let { parseTimestamp(it) } ?: LogLine.NO_TIME
             return ParsedLine(level, time, m.messageStart.coerceAtLeast(0), m.thread?.trim() ?: "")
         }
-        return parseHeuristic(head)
+        return ParsedLine(LogLevel.OTHER, LogLine.NO_TIME, 0) // no match → raw whole line
     }
 
     private fun parseHeuristic(head: String): ParsedLine {

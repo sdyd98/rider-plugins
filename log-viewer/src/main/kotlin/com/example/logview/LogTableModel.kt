@@ -36,7 +36,8 @@ fun parseLogRow(raw: String, formats: List<LineFormat> = emptyList()): ParsedRow
     val hasAnsi = AnsiText.hasAnsi(raw)
     val clean = if (hasAnsi) AnsiText.strip(raw) else raw
     val parsed = LogParser.parse(clean, formats)
-    val contCandidate = parsed.timestampMillis == LogLine.NO_TIME && LogParser.looksLikeContinuation(clean)
+    // Group continuations (stack frames etc.) only when a format is active; with no format every line is raw.
+    val contCandidate = formats.isNotEmpty() && parsed.timestampMillis == LogLine.NO_TIME && LogParser.looksLikeContinuation(clean)
     return ParsedRow(raw, clean, parsed.level, parsed.timestampMillis, parsed.messageStart, hasAnsi, contCandidate, parsed.thread)
 }
 
@@ -111,7 +112,8 @@ class LogTableModel : AbstractTableModel() {
      * parses OFF the EDT via [parseLogRow] and calls [appendParsed] directly so the heavy regex/ANSI
      * work doesn't run on the UI thread (critical for large files / charset re-reads).
      */
-    fun appendRaw(rawLines: List<String>) = appendParsed(rawLines.map { parseLogRow(it) })
+    fun appendRaw(rawLines: List<String>, formats: List<LineFormat> = emptyList()) =
+        appendParsed(rawLines.map { parseLogRow(it, formats) })
 
     /**
      * Append already-parsed rows, assigning block ownership (the only step that needs sequential model

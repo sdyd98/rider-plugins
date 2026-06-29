@@ -73,6 +73,9 @@ fun createLineFormatSettings(sampleLines: List<String>, onPreview: (LineFormat?)
                     Dropdown(
                         modifier = Modifier.weight(1f),
                         menuContent = {
+                            selectableItem(selected = activeName == null, onClick = { store.activate(null); changed() }) {
+                                Text("없음 (원본 그대로)")
+                            }
                             library.forEach { name ->
                                 selectableItem(selected = name == activeName, onClick = { store.activate(name); changed() }) {
                                     Text(name)
@@ -80,7 +83,7 @@ fun createLineFormatSettings(sampleLines: List<String>, onPreview: (LineFormat?)
                             }
                         },
                     ) {
-                        Text(activeName ?: "선택")
+                        Text(activeName ?: "없음 (원본 그대로)")
                     }
                     if (activeName != null) ToolButton("삭제", palette) { store.remove(activeName); changed() }
                 }

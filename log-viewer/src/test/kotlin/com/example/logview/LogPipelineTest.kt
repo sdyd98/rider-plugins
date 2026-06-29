@@ -15,6 +15,9 @@ class LogPipelineTest {
 
     private val esc = 27.toChar() // ANSI escape (0x1B, the CSI introducer) — kept ASCII-only in source
 
+    // The viewer no longer auto-analyzes without a format, so these pipeline tests pass an explicit one.
+    private val timeFmt = listOf(LineFormat.of("%{time} %{level} %{message}"))
+
     private fun collect(): Pair<MutableList<String>, (List<String>) -> Unit> {
         val out = mutableListOf<String>()
         return out to { batch -> out.addAll(batch) }
@@ -76,7 +79,8 @@ class LogPipelineTest {
             listOf(
                 "2024-06-28 14:30:00.123 ERROR something failed",
                 "    at com.foo.Bar(Bar.kt:10)", // continuation (indented, no timestamp)
-            )
+            ),
+            timeFmt,
         )
         assertEquals(2, model.rowCount)
 
@@ -99,7 +103,7 @@ class LogPipelineTest {
     fun `appendRaw parses on ANSI-stripped text and keeps colored message for rendering`() {
         val model = LogTableModel()
         val raw = "$esc[32mINFO$esc[0m green payload"
-        model.appendRaw(listOf(raw))
+        model.appendRaw(listOf(raw), listOf(LineFormat.of("%{level} %{message}")))
         val line = model.lineAt(0)
 
         assertTrue(line.hasAnsi, "raw contains ANSI escape codes")
@@ -125,7 +129,8 @@ class LogPipelineTest {
             listOf(
                 "2024-06-28 14:30:00.123 ERROR boom",
                 "    {\"level\": \"ERROR\", \"x\": 1}", // continuation whose body contains a level token
-            )
+            ),
+            timeFmt,
         )
         val cont = model.lineAt(1)
         assertTrue(cont.isContinuation, "indented payload line should be a continuation")
@@ -156,12 +161,12 @@ class LogPipelineTest {
     @Test
     fun `parseLogRow extracts level and time off-EDT and flags continuation candidates`() {
         // parseLogRow is pure (no model/Swing state) so the heavy parse can run off the EDT.
-        val primary = parseLogRow("2024-06-28 14:30:00.123 ERROR boom")
+        val primary = parseLogRow("2024-06-28 14:30:00.123 ERROR boom", timeFmt)
         assertEquals(LogLevel.ERROR, primary.level)
         assertTrue(primary.timestampMillis != LogLine.NO_TIME, "timestamped line parses a time")
         assertFalse(primary.continuationCandidate, "a timestamped primary is not a continuation")
 
-        val cont = parseLogRow("    at com.foo.Bar(Bar.kt:10)")
+        val cont = parseLogRow("    at com.foo.Bar(Bar.kt:10)", timeFmt)
         assertTrue(cont.continuationCandidate, "an indented, timeless stack frame is a continuation candidate")
 
         // appendParsed(parseLogRow(...)) must match the eager appendRaw path (same blocks/levels).
