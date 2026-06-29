@@ -7,7 +7,7 @@ plugins {
 }
 
 group = "com.example.xlsx"
-version = "0.3.0"
+version = "0.5.0"
 
 repositories {
     mavenCentral()
@@ -40,6 +40,14 @@ dependencies {
         bundledLibrary("lib/intellij.platform.jewel.foundation.jar")
         bundledLibrary("lib/intellij.platform.jewel.ui.jar")
         bundledLibrary("lib/intellij.platform.jewel.ideLafBridge.jar")
+
+        // Gson is bundled with the IDE (used to parse the refs.json relationship schema). IDE provides
+        // it at runtime, so it is NOT shipped in the plugin ZIP.
+        bundledLibrary("lib/intellij.libraries.gson.jar")
+
+        // The IDE's integrated MCP server (2025.2+). We contribute refs.json-authoring MCP tools to it
+        // via its mcpToolset extension point, so they ship with the plugin (optional dependency).
+        bundledPlugin("com.intellij.mcpServer")
     }
 
     // Shared helpers (POI classloader swap, cached-formula formatting). Bundled into the plugin.

@@ -11,6 +11,9 @@ out/
 # Large load-test datasets (generated; never commit — GitHub blocks >100MB files)
 samples/loadtest-*
 
+# Local sample/test-output logs dropped at the repo root (NOT the tracked samples/ data)
+/sample-logs/
+
 # IDE
 .idea/
 *.iml
@@ -20,3 +23,7 @@ samples/loadtest-*
 # OS
 .DS_Store
 Thumbs.db
+
+# Local MCP client config — points Claude Code at this machine's running JetBrains IDE
+# (loopback SSE, http://127.0.0.1:64342/sse). Per-machine; not portable.
+.mcp.json

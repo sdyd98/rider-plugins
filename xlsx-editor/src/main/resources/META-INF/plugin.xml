@@ -14,6 +14,10 @@
          from build.gradle.kts by the IntelliJ Platform Gradle Plugin. -->
     <depends>com.intellij.modules.platform</depends>
 
+    <!-- Contribute refs.json-authoring tools to the IDE's integrated MCP server (2025.2+). Optional, so
+         the viewer still loads on IDEs without / with a disabled MCP server. -->
+    <depends optional="true" config-file="mcp-tools.xml">com.intellij.mcpServer</depends>
+
     <!-- Compose + Jewel are bundled with the IDE; declare the modules so the plugin's class loader
          can see them at runtime (compile classpath comes from bundledLibrary in build.gradle.kts). -->
     <dependencies>
@@ -36,5 +40,9 @@
 
         <!-- The custom grid editor for .xlsx / .xls files (read-only viewer). -->
         <fileEditorProvider implementation="com.example.xlsx.XlsxFileEditorProvider"/>
+
+        <!-- Relationship view: table-level ER map, record-level lineage explorer, and integrity check. -->
+        <toolWindow id="관계도" anchor="right" factoryClass="com.example.xlsx.RefGraphToolWindow"/>
     </extensions>
+
 </idea-plugin>

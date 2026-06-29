@@ -2,9 +2,12 @@ package com.example.xlsx
 
 import com.intellij.openapi.actionSystem.AnActionEvent
 import com.intellij.openapi.actionSystem.CustomShortcutSet
+import com.intellij.openapi.fileEditor.FileEditorManager
 import com.intellij.openapi.project.DumbAwareAction
+import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.popup.JBPopupFactory
 import com.intellij.openapi.util.text.StringUtil
+import com.intellij.openapi.wm.ToolWindowManager
 import com.intellij.ui.ColorUtil
 import com.intellij.ui.JBColor
 import com.intellij.ui.components.JBScrollPane
@@ -13,6 +16,7 @@ import com.intellij.util.ui.JBUI
 import org.apache.poi.ss.util.CellReference
 import java.awt.BorderLayout
 import java.awt.Component
+import java.io.File
 import javax.swing.JComponent
 import javax.swing.JPanel
 import javax.swing.JTable
@@ -143,6 +147,10 @@ class SheetPanel(
         registerShortcut("alt BACK_SLASH") { showColumnJumpPopup() }
         registerShortcut("alt shift F") { toggleFreezeAtCurrent() }
         registerShortcut("alt K") { cycleKeyRow() }
+        // Ctrl+R: show the selected row's record in the relationship explorer (needs the action's project).
+        object : DumbAwareAction() {
+            override fun actionPerformed(e: AnActionEvent) = showRelationships(e.project)
+        }.registerCustomShortcutSet(CustomShortcutSet.fromString("control R"), table)
 
         model.addTableModelListener {
             rowHeader.revalidate(); rowHeader.repaint()
@@ -174,6 +182,30 @@ class SheetPanel(
         object : DumbAwareAction() {
             override fun actionPerformed(e: AnActionEvent) = run()
         }.registerCustomShortcutSet(CustomShortcutSet.fromString(shortcut), table)
+    }
+
+    /** Publish the selected row's record to the relationship explorer (if this sheet is in the schema). */
+    private fun showRelationships(project: Project?) {
+        if (project == null) return
+        // Resolve against the workbook's refs.json — the SAME source the tool window uses (not a hardcoded
+        // sample schema), so the published (table, id) actually matches a record in the explorer's graph.
+        val schema = resolveSchema(project) ?: return
+        // Prefer the table from the OPEN workbook: recursion can surface the same sheet name in several files
+        // under the root (all sharing the plain `sheet`; only tableId is qualified), so match on file too.
+        val openRel = FileEditorManager.getInstance(project).selectedFiles.firstOrNull()
+            ?.let { runCatching { File(it.path).relativeTo(schema.baseDir).invariantSeparatorsPath }.getOrNull() }
+        val candidates = schema.tables.filter { it.sheet == model.sheetName }
+        val st = candidates.firstOrNull { it.file == openRel } ?: candidates.firstOrNull() ?: return
+        val idColumns = st.idCols.map { columnForFieldCode(it) }
+        if (idColumns.any { it < 0 }) return // a key field isn't in this sheet → can't identify the row
+        val viewRow = table.selectedRow.takeIf { it >= 0 } ?: return
+        val mr = table.convertRowIndexToModel(viewRow)
+        // Build the FULL composite display id ("groupKey·slot") so a composite-key row centres on itself,
+        // not the first row sharing its first column.
+        val displayId = idColumns.joinToString("·") { mc -> model.getValueAt(mr, mc)?.toString()?.trim().orEmpty() }
+        if (displayId.isBlank() || displayId.all { it == '·' }) return
+        RelationshipBus.show(st.tableId, displayId)
+        ToolWindowManager.getInstance(project).getToolWindow("관계도")?.show()
     }
 
     // ---- Shared filter / status (driven by the editor's chrome) ----
@@ -209,6 +241,46 @@ class SheetPanel(
     fun focusGrid() {
         if (table.rowCount > 0 && table.selectedRow < 0) table.changeSelection(0, 0, false, false)
         table.requestFocusInWindow()
+    }
+
+    /**
+     * Select the row whose [columnHeader] field (matched against the field-code header in model row 0)
+     * holds [value], and scroll to it — used by the relationship graph's "open this record". Returns
+     * false if the column/row isn't found. A blank [value] just focuses the sheet (no row).
+     */
+    /** Model column whose field-code header (model row 0) equals [code], or -1. O(columns). */
+    private fun columnForFieldCode(code: String): Int =
+        (0 until model.columnCount).firstOrNull { model.getValueAt(0, it)?.toString()?.trim() == code } ?: -1
+
+    // Lazy value→row index per column so reveal is O(1) instead of an O(rows) EDT scan (a 60MB sheet can
+    // hold 1M+ rows; scanning on every navigate would stall the UI). Rebuilt when the row count changes.
+    private val revealIndex = HashMap<Int, HashMap<String, Int>>()
+    private var revealIndexRows = -1
+    private fun rowForValue(mc: Int, value: String): Int {
+        if (revealIndexRows != model.rowCount) { revealIndex.clear(); revealIndexRows = model.rowCount }
+        val byValue = revealIndex.getOrPut(mc) {
+            val m = HashMap<String, Int>(model.rowCount.coerceAtLeast(16))
+            for (r in 0 until model.rowCount) {
+                val v = model.getValueAt(r, mc)?.toString()?.trim().orEmpty()
+                if (v.isNotEmpty()) m.putIfAbsent(v, r) // first matching row wins (matches the old scan)
+            }
+            m
+        }
+        return byValue[value] ?: -1
+    }
+
+    fun revealRow(columnHeader: String, value: String): Boolean {
+        if (value.isBlank()) { table.requestFocusInWindow(); return true }
+        val mc = columnForFieldCode(columnHeader).takeIf { it >= 0 } ?: return false
+        val mr = rowForValue(mc, value).takeIf { it >= 0 } ?: return false
+        val vr = runCatching { table.convertRowIndexToView(mr) }.getOrDefault(-1)
+        val vc = runCatching { table.convertColumnIndexToView(mc) }.getOrDefault(-1)
+        if (vr in 0 until table.rowCount && vc in 0 until table.columnCount) {
+            table.changeSelection(vr, vc, false, false)
+            table.scrollRectToVisible(table.getCellRect(vr, vc, true))
+        }
+        table.requestFocusInWindow()
+        return true
     }
 
     /** Called on the EDT once the sheet has finished streaming. */
