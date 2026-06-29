@@ -111,26 +111,46 @@ class LogTableModel : AbstractTableModel() {
     fun appendParsed(rows: List<ParsedRow>) {
         if (rows.isEmpty()) return
         val start = lines.size
-        for (p in rows) {
-            // The continuation candidacy (no timestamp + looks-like-continuation) is decided off the EDT;
-            // only the block-state part (there IS a prior block to attach to) is decided here.
-            val isCont = p.continuationCandidate && lines.isNotEmpty() && currentBlockStart >= 0
-            val level = if (isCont) lines[currentBlockStart].level else p.level
-            // A continuation line is ALL body — force messageStart = 0 so a stray level token inside it
-            // (e.g. `"level": "ERROR",`) doesn't truncate the displayed text.
-            val messageStart = if (isCont) 0 else p.messageStart
-            val line = LogLine(nextLineNumber++, p.raw, p.clean, level, p.timestampMillis, isCont, p.hasAnsi, messageStart)
-            if (isCont) {
-                line.blockStart = currentBlockStart
-            } else {
-                line.blockStart = lines.size
-                currentBlockStart = lines.size
-            }
-            lines.add(line)
-            counts[level.ordinal]++
-        }
+        for (p in rows) link(p)
         fireTableRowsInserted(start, lines.size - 1)
         trimIfNeeded()
+    }
+
+    /** Append one parsed row, assigning block ownership from the running model state. */
+    private fun link(p: ParsedRow) {
+        // The continuation candidacy (no timestamp + looks-like-continuation) is decided off the EDT;
+        // only the block-state part (there IS a prior block to attach to) is decided here.
+        val isCont = p.continuationCandidate && lines.isNotEmpty() && currentBlockStart >= 0
+        val level = if (isCont) lines[currentBlockStart].level else p.level
+        // A continuation line is ALL body — force messageStart = 0 so a stray level token inside it
+        // (e.g. `"level": "ERROR",`) doesn't truncate the displayed text.
+        val messageStart = if (isCont) 0 else p.messageStart
+        val line = LogLine(nextLineNumber++, p.raw, p.clean, level, p.timestampMillis, isCont, p.hasAnsi, messageStart)
+        if (isCont) {
+            line.blockStart = currentBlockStart
+        } else {
+            line.blockStart = lines.size
+            currentBlockStart = lines.size
+        }
+        lines.add(line)
+        counts[level.ordinal]++
+    }
+
+    /** The raw (ANSI-bearing) text of every loaded line — to re-parse in place under a different format. */
+    fun rawSnapshot(): List<String> = lines.map { it.raw }
+
+    /**
+     * Replace ALL rows with a freshly parsed set in ONE shot (no intermediate empty state → no flicker),
+     * used for the live line-format preview: the heavy parse runs off the EDT, then this swaps the model.
+     */
+    fun replaceAllParsed(rows: List<ParsedRow>) {
+        lines.clear()
+        counts.fill(0)
+        foldedBlocks.clear()
+        currentBlockStart = -1
+        nextLineNumber = 1
+        for (p in rows) link(p)
+        fireTableDataChanged()
     }
 
     /** Reset to empty — used when re-reading the same source under a different charset. EDT only. */

@@ -277,7 +277,8 @@ class LogViewerPanel(
         displayPopup?.cancel()
         val sample = (0 until minOf(model.loadedRowCount(), 8)).map { model.rawAt(it) }
         var popupRef: com.intellij.openapi.ui.popup.JBPopup? = null
-        val panel = createLineFormatSettings(sample, onApply = { reparse() }) { popupRef?.cancel() }
+        // onPreview applies a format LIVE to the real grid (token-building / picking a saved one).
+        val panel = createLineFormatSettings(sample, onPreview = { fmt -> previewFormatLive(fmt) }) { popupRef?.cancel() }
         val popup = JBPopupFactory.getInstance()
             .createComponentPopupBuilder(panel, panel)
             .setRequestFocus(true)
@@ -287,7 +288,17 @@ class LogViewerPanel(
             .setTitle("줄 형식")
             .createPopup()
         popupRef = popup
-        popup.showInCenterOf(component)
+        // On close, drop the live preview and settle the grid on the saved active format.
+        popup.addListener(object : com.intellij.openapi.ui.popup.JBPopupListener {
+            override fun onClosed(event: com.intellij.openapi.ui.popup.LightweightWindowEvent) = endFormatPreview()
+        })
+        // Anchor near the top so the grid below stays visible while the preview updates live.
+        val anchor = runCatching { component.locationOnScreen }.getOrNull()
+        if (anchor != null) {
+            popup.showInScreenCoordinates(component, Point(anchor.x + JBUI.scale(16), anchor.y + JBUI.scale(16)))
+        } else {
+            popup.showInCenterOf(component)
+        }
     }
 
     /** Re-read the source under [cs] (charset change). No-op if unchanged. */
@@ -388,8 +399,35 @@ class LogViewerPanel(
      */
     private fun onReaderBatch(batch: List<String>, gen: Int) {
         if (gen != readerGeneration || batch.isEmpty()) return
-        val formats = LineFormatStore.getInstance().active() // user line-formats, fetched once per batch
+        // previewFormat (transient, while the 줄 형식 picker is open) wins; otherwise the saved active format.
+        val formats = previewFormat ?: LineFormatStore.getInstance().active()
         appendOnEdt(batch.map { parseLogRow(it, formats) }, gen)
+    }
+
+    /** Non-null while the 줄 형식 picker previews a format live on the grid (overrides the saved active one). */
+    @Volatile private var previewFormat: List<LineFormat>? = null
+
+    /** Re-parse the already-loaded lines under [formats] (off the EDT) and swap them in atomically. */
+    private fun applyFormatToLoaded(formats: List<LineFormat>) {
+        val raws = model.rawSnapshot()
+        val gen = readerGeneration
+        ApplicationManager.getApplication().executeOnPooledThread {
+            val rows = raws.map { parseLogRow(it, formats) }
+            onEdt { if (gen == readerGeneration) model.replaceAllParsed(rows) }
+        }
+    }
+
+    /** Live-preview [fmt] on the real grid (null → the saved active format). Transient — not persisted. */
+    fun previewFormatLive(fmt: LineFormat?) {
+        val formats = if (fmt != null) listOf(fmt) else LineFormatStore.getInstance().active()
+        previewFormat = formats
+        applyFormatToLoaded(formats)
+    }
+
+    /** End the live preview: drop the override and re-parse the grid with the saved active format. */
+    fun endFormatPreview() {
+        previewFormat = null
+        applyFormatToLoaded(LineFormatStore.getInstance().active())
     }
 
     private fun appendOnEdt(rows: List<ParsedRow>, gen: Int) = onEdt {

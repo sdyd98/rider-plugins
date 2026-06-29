@@ -23,7 +23,6 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import org.jetbrains.jewel.bridge.JewelComposePanel
@@ -42,13 +41,16 @@ private fun fieldColor(field: String): Color = when (field) {
     else -> Color(0xFF5AAE6B) // message
 }
 
+private fun buildLive(line: String, tokens: List<FormatToken>, assign: Map<Int, String>): LineFormat? =
+    if (assign.isEmpty()) null else LineFormat.of(LineFormat.buildRegex(line, tokens, assign)).takeIf { it.valid }
+
 /**
- * The ⚙ → "줄 형식" settings, in Compose/Jewel. Top: a **library** of saved formats — click one to apply
- * it (the active one is marked). Below: the **region picker** — click the tokens of a sample line to mark
- * Time/Level/Thread/Message and the **preview updates live**; name it and **저장** to add it to the library
- * (and apply). No regex is ever shown. [onApply] re-reads the grid when the active format changes.
+ * The ⚙ → "줄 형식" settings, in Compose/Jewel. Top: a **dropdown** of saved formats — pick one to apply.
+ * Below: the **region picker** — click the tokens of a sample line to mark Time/Level/Thread/Message and
+ * **the real log grid re-splits live** ([onPreview]); name it and **저장** to add it to the library. No
+ * regex or mini-preview — the actual viewer IS the preview.
  */
-fun createLineFormatSettings(sampleLines: List<String>, onApply: () -> Unit, onClose: () -> Unit): JComponent =
+fun createLineFormatSettings(sampleLines: List<String>, onPreview: (LineFormat?) -> Unit, onClose: () -> Unit): JComponent =
     JewelComposePanel {
         val palette = rememberLogPalette()
         val store = remember { LineFormatStore.getInstance() }
@@ -57,18 +59,14 @@ fun createLineFormatSettings(sampleLines: List<String>, onApply: () -> Unit, onC
         val activeName = remember(version) { store.activeName() }
         fun changed() {
             version++
-            onApply()
+            onPreview(store.active().firstOrNull()) // reflect the saved active format on the grid
         }
 
-        Column(Modifier.width(580.dp).padding(Space.md), verticalArrangement = Arrangement.spacedBy(Space.md)) {
+        Column(Modifier.width(560.dp).padding(Space.md), verticalArrangement = Arrangement.spacedBy(Space.md)) {
             Text("줄 형식 (Time · Level · Message 분리)", color = palette.text, fontWeight = FontWeight.Bold, fontSize = 13.sp)
 
             if (library.isNotEmpty()) {
-                Row(
-                    Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(Space.sm),
-                ) {
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Space.sm)) {
                     Text("적용 형식", color = palette.mutedText, fontWeight = FontWeight.Bold, fontSize = 11.sp)
                     Dropdown(
                         modifier = Modifier.weight(1f),
@@ -93,7 +91,7 @@ fun createLineFormatSettings(sampleLines: List<String>, onApply: () -> Unit, onC
             if (pickerLine == null) {
                 Text("로그가 비어 있어 영역을 지정할 수 없습니다.", color = palette.mutedText, fontSize = 11.sp)
             } else {
-                RegionPicker(pickerLine, sampleLines, palette) { name, pattern ->
+                RegionPicker(pickerLine, palette, onPreview) { name, pattern ->
                     store.save(name, pattern)
                     changed()
                 }
@@ -106,12 +104,12 @@ fun createLineFormatSettings(sampleLines: List<String>, onApply: () -> Unit, onC
     }
 
 /**
- * Click-to-mark region picker with a LIVE preview. Pick a field, click the tokens of [line] that belong to
- * it; chips tint with the field color and the preview re-parses instantly. "메시지" needs only its start
- * token — everything after it is the message. Name it + [onSave] adds it to the library.
+ * Click-to-mark region picker. Pick a field, click the tokens of [line]; the chips tint and **the real
+ * log grid re-splits live** via [onPreview]. "메시지" needs only its start token — everything after it is
+ * the message. Name it + [onSave] to add it to the library.
  */
 @Composable
-private fun RegionPicker(line: String, sampleLines: List<String>, palette: LogPalette, onSave: (name: String, pattern: String) -> Unit) {
+private fun RegionPicker(line: String, palette: LogPalette, onPreview: (LineFormat?) -> Unit, onSave: (name: String, pattern: String) -> Unit) {
     val tokens = remember(line) { LineFormat.tokenize(line) }
     var selectedField by remember { mutableStateOf("time") }
     var assign by remember(line) { mutableStateOf<Map<Int, String>>(emptyMap()) }
@@ -120,15 +118,9 @@ private fun RegionPicker(line: String, sampleLines: List<String>, palette: LogPa
     val msgStart = assign.filterValues { it == "message" }.keys.minOrNull()
     fun effectiveField(i: Int): String? = if (msgStart != null && i >= msgStart) "message" else assign[i]
 
-    // Live format from the current assignments (null until something is assigned) → drives the preview now.
-    val liveFormat = remember(assign, line) {
-        if (assign.isEmpty()) null else LineFormat.of(LineFormat.buildRegex(line, tokens, assign)).takeIf { it.valid }
-    }
-    val previewFormats = if (liveFormat != null) listOf(liveFormat) else LineFormatStore.getInstance().active()
-
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(Space.xs)) {
         Text(
-            "새 포맷 만들기 — 필드를 고르고 토큰 클릭 (메시지는 시작 토큰만 클릭하면 끝까지)",
+            "새 포맷 만들기 — 필드를 고르고 토큰을 클릭하면 아래 실제 로그가 바로 나뉩니다 (메시지는 시작 토큰만)",
             color = palette.mutedText,
             fontWeight = FontWeight.Bold,
             fontSize = 11.sp,
@@ -164,85 +156,31 @@ private fun RegionPicker(line: String, sampleLines: List<String>, palette: LogPa
                     modifier = Modifier.clip(RoundedCornerShape(Radii.sm))
                         .background((col ?: palette.text).copy(alpha = if (fld != null) 0.22f else 0.05f))
                         .clickable {
-                            assign = when {
+                            val next = when {
                                 selectedField == "message" -> assign.filterValues { it != "message" } + (i to "message")
                                 assign[i] == selectedField -> assign - i
                                 else -> assign + (i to selectedField)
                             }
+                            assign = next
+                            onPreview(buildLive(line, tokens, next)) // re-split the real grid now
                         }
                         .padding(horizontal = 4.dp, vertical = 2.dp),
                 )
             }
         }
 
-        Text("미리보기 — 현재 로그가 이 형식으로 이렇게 나뉩니다", color = palette.mutedText, fontWeight = FontWeight.Bold, fontSize = 11.sp)
-        // Column headers so it's clear what the three preview columns are.
-        Row(
-            Modifier.fillMaxWidth().padding(horizontal = Space.sm),
-            horizontalArrangement = Arrangement.spacedBy(Space.sm),
-        ) {
-            Text("시간", color = palette.mutedText, fontSize = 10.sp, fontWeight = FontWeight.Bold, modifier = Modifier.width(96.dp))
-            Text("레벨", color = palette.mutedText, fontSize = 10.sp, fontWeight = FontWeight.Bold, modifier = Modifier.width(56.dp))
-            Text("메시지", color = palette.mutedText, fontSize = 10.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
-        }
-        Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            if (sampleLines.isEmpty()) {
-                Text("(로그가 비어 있어 미리보기 없음)", color = palette.mutedText, fontSize = 11.sp)
-            } else {
-                sampleLines.forEach { PreviewRow(it, previewFormats, palette) }
-            }
-        }
-        Text("회색 줄 = 이 형식에 안 맞는 줄 (원본 그대로 표시)", color = palette.mutedText, fontSize = 10.sp)
-
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Space.sm)) {
             Text("이름", color = palette.mutedText, fontSize = 11.sp)
             TextField(state = nameState, modifier = Modifier.weight(1f))
             ToolButton("저장", palette, accent = true) {
                 val name = nameState.text.toString().trim()
-                if (liveFormat != null && name.isNotEmpty()) {
-                    onSave(name, liveFormat.source)
-                    assign = emptyMap() // clean slate for the next format; preview falls back to the active one
+                val fmt = buildLive(line, tokens, assign)
+                if (fmt != null && name.isNotEmpty()) {
+                    onSave(name, fmt.source)
+                    assign = emptyMap() // clean slate for the next format
                     nameState.edit { replace(0, length, LineFormatStore.getInstance().nextDefaultName()) }
                 }
             }
         }
-    }
-}
-
-@Composable
-private fun PreviewRow(line: String, formats: List<LineFormat>, palette: LogPalette) {
-    // Did a format actually match this line? If not, show the ORIGINAL text so it's obvious which lines the
-    // format doesn't cover — rather than a heuristic guess.
-    val matched = remember(line, formats) { formats.any { it.apply(line) != null } }
-    if (!matched) {
-        Row(
-            Modifier.fillMaxWidth().clip(RoundedCornerShape(Radii.sm))
-                .background(palette.mutedText.copy(alpha = 0.06f)).padding(horizontal = Space.sm, vertical = 3.dp),
-        ) {
-            Text(
-                line,
-                color = palette.mutedText,
-                fontSize = 11.sp,
-                fontFamily = FontFamily.Monospace,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.fillMaxWidth(),
-            )
-        }
-        return
-    }
-    val parsed = remember(line, formats) { LogParser.parse(line, formats) }
-    val time = if (parsed.timestampMillis != LogLine.NO_TIME) LogStructure.formatTime(parsed.timestampMillis) else ""
-    val level = if (parsed.level != LogLevel.OTHER) parsed.level.label else ""
-    val msg = line.substring(parsed.messageStart.coerceIn(0, line.length)).trimStart()
-    Row(
-        Modifier.fillMaxWidth().clip(RoundedCornerShape(Radii.sm)).background(palette.surfaceHover.copy(alpha = 0.4f))
-            .padding(horizontal = Space.sm, vertical = 3.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(Space.sm),
-    ) {
-        Text(time, color = palette.mutedText, fontSize = 11.sp, fontFamily = FontFamily.Monospace, modifier = Modifier.width(96.dp))
-        Text(level, color = palette.levelColor[parsed.level] ?: palette.mutedText, fontSize = 11.sp, fontWeight = FontWeight.Bold, modifier = Modifier.width(56.dp))
-        Text(msg, color = palette.text, fontSize = 11.sp, fontFamily = FontFamily.Monospace, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
     }
 }
