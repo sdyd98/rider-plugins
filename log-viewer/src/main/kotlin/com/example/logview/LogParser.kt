@@ -67,24 +67,17 @@ object LogParser {
 
     /**
      * Parse [raw], trying user [formats] (in order) BEFORE the built-in heuristic. The first format that
-     * matches wins; any column it doesn't capture (or that fails to map) falls back to the heuristic for
-     * this line, so a partial format still benefits from the heuristic. No format matches → pure heuristic.
+     * matches wins and supplies ONLY what it captures (no heuristic merge) — so a partial format shows
+     * partial columns and the live picker visibly fills them in field by field. A line that matches NO
+     * format falls back to the heuristic (so stack frames etc. still parse).
      */
     fun parse(raw: String, formats: List<LineFormat>): ParsedLine {
         val head = if (raw.length > HEAD) raw.substring(0, HEAD) else raw
         for (fmt in formats) {
             val m = fmt.apply(head) ?: continue
-            var level = m.level?.let { mapLevel(it) } ?: LogLevel.OTHER
-            var time = m.time?.let { parseTimestamp(it) } ?: LogLine.NO_TIME
-            var messageStart = m.messageStart
-            // Fill any gap from the heuristic (computed only when something is missing).
-            if (level == LogLevel.OTHER || time == LogLine.NO_TIME || messageStart < 0) {
-                val h = parseHeuristic(head)
-                if (level == LogLevel.OTHER) level = h.level
-                if (time == LogLine.NO_TIME) time = h.timestampMillis
-                if (messageStart < 0) messageStart = h.messageStart
-            }
-            return ParsedLine(level, time, messageStart.coerceAtLeast(0))
+            val level = m.level?.let { mapLevel(it) } ?: LogLevel.OTHER
+            val time = m.time?.let { parseTimestamp(it) } ?: LogLine.NO_TIME
+            return ParsedLine(level, time, m.messageStart.coerceAtLeast(0))
         }
         return parseHeuristic(head)
     }
