@@ -4,6 +4,7 @@ import com.example.logview.ByteLineSplitter
 import com.example.logview.LogReader
 import com.jcraft.jsch.ChannelExec
 import java.io.InputStream
+import java.nio.charset.Charset
 
 /**
  * Tails a remote log over SSH. The initial read runs `tail -n N` (bounded — never pulls a multi-GB
@@ -15,6 +16,7 @@ class RemoteLogReader(
     private val profile: SshProfile,
     private val remotePath: String,
     private val tailLines: Int,
+    private val charset: Charset = Charsets.UTF_8,
 ) : LogReader {
 
     @Volatile private var closed = false
@@ -80,7 +82,7 @@ class RemoteLogReader(
     /** Decode an stdout stream into raw lines (UTF-8), delivering each read's complete lines promptly. */
     private fun pump(ins: InputStream, onBatch: (List<String>) -> Unit) {
         val buf = ByteArray(1 shl 16)
-        val splitter = ByteLineSplitter(batchSize)
+        val splitter = ByteLineSplitter(batchSize, charset)
         while (!closed) {
             val read = try {
                 ins.read(buf)

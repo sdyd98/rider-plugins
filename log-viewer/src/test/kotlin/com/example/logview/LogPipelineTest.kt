@@ -134,4 +134,22 @@ class LogPipelineTest {
         assertTrue(cont.message.contains("\"level\""), "continuation message was truncated: '${cont.message}'")
         assertTrue(cont.message.contains("\"x\": 1"), "continuation message was truncated: '${cont.message}'")
     }
+
+    @Test
+    fun `splitter decodes CP949 Korean bytes with the matching charset and garbles them with the wrong one`() {
+        val cp949 = java.nio.charset.Charset.forName("MS949")
+        val line = "한글 로그 테스트"
+        val bytes = "$line\n".toByteArray(cp949)
+
+        // Matching charset → exact round-trip.
+        val (ok, okSink) = collect()
+        ByteLineSplitter(charset = cp949).apply { feed(bytes, bytes.size, okSink); flush(okSink) }
+        assertEquals(listOf(line), ok)
+
+        // Wrong charset (UTF-8) → mojibake, NOT the original — exactly the case the encoding picker fixes.
+        val (bad, badSink) = collect()
+        ByteLineSplitter(charset = Charsets.UTF_8).apply { feed(bytes, bytes.size, badSink); flush(badSink) }
+        assertEquals(1, bad.size)
+        assertTrue(bad[0] != line, "CP949 bytes decoded as UTF-8 should not match the original Korean")
+    }
 }

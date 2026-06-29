@@ -96,6 +96,17 @@ class LogTableModel : AbstractTableModel() {
         trimIfNeeded()
     }
 
+    /** Reset to empty — used when re-reading the same source under a different charset. EDT only. */
+    fun clear() {
+        if (lines.isEmpty()) return
+        lines.clear()
+        counts.fill(0)
+        foldedBlocks.clear()
+        currentBlockStart = -1
+        nextLineNumber = 1
+        fireTableDataChanged()
+    }
+
     /** True if [row] is a continuation line hidden because its block is collapsed. */
     fun isHiddenByFold(row: Int): Boolean {
         val l = lines[row]

@@ -1,17 +1,21 @@
 package com.example.logview
 
 import java.io.ByteArrayOutputStream
+import java.nio.charset.Charset
 
 /**
- * Splits a byte stream into UTF-8 text lines without ever cutting a multi-byte character: bytes are
- * only decoded up to a `\n` (0x0A, which never appears inside a multi-byte UTF-8 sequence). A trailing
- * partial line is held in [pending] until its newline arrives (or [flushPartial] is called at EOF).
+ * Splits a byte stream into text lines without ever cutting a multi-byte character: bytes are only
+ * decoded up to a `\n` (0x0A) and then decoded with [charset]. A trailing partial line is held in
+ * [pending] until its newline arrives (or [flushPartial] is called at EOF).
+ *
+ * [charset] must be ASCII-transparent (a 0x0A byte always means a line feed, never a lead/trail byte):
+ * UTF-8, CP949/EUC-KR, and the 8-bit Latin sets all qualify, but UTF-16/UTF-32 do NOT — see [LogCharsets].
  *
  * Shared by [LocalLogReader] (one splitter that persists across polls, so a line split across two
  * polls resumes correctly) and [RemoteLogReader] (a fresh splitter per exec stream). Not thread-safe:
  * use one splitter per pump loop.
  */
-class ByteLineSplitter(private val batchSize: Int = 2000) {
+class ByteLineSplitter(private val batchSize: Int = 2000, private val charset: Charset = Charsets.UTF_8) {
 
     private val pending = ByteArrayOutputStream() // trailing partial line (raw bytes, no newline yet)
     private val out = ArrayList<String>(batchSize)
@@ -53,8 +57,8 @@ class ByteLineSplitter(private val batchSize: Int = 2000) {
 
     private fun decode(bytes: ByteArray): String {
         var n = bytes.size
-        if (n > 0 && bytes[n - 1] == CR) n-- // strip CR from CRLF
-        return String(bytes, 0, n, Charsets.UTF_8)
+        if (n > 0 && bytes[n - 1] == CR) n-- // strip CR from CRLF (0x0D, same byte in every supported charset)
+        return String(bytes, 0, n, charset)
     }
 
     companion object {

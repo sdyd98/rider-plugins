@@ -47,13 +47,17 @@ private const val STATUS_BAR_H = 24
 class LogViewerPanel(
     private val project: Project?,
     private val sourceLabel: String,
-    private val reader: LogReader,
+    private val makeReader: (java.nio.charset.Charset) -> LogReader, // rebuilt when the charset changes
     followByDefault: Boolean,
     private val onExitLeft: () -> Unit = {}, // moving left past the first column (e.g. into the sources tree)
     private val onSwitchTab: (dir: Int) -> Unit = {}, // gt / gT — switch session tab
 ) : Disposable {
 
     val model = LogTableModel()
+
+    // The decoding charset for this source; changing it re-reads from scratch (see reopenWith).
+    private var charset: java.nio.charset.Charset = LogCharsets.DEFAULT
+    private var reader: LogReader = makeReader(charset)
 
     private val table = object : JBTable(model) {
         // AUTO_RESIZE_OFF already makes this false; explicit for clarity. The Message column is sized to
@@ -210,19 +214,25 @@ class LogViewerPanel(
 
     // ---- Display options (⚙ menu) ----
 
+    private var displayPopup: com.intellij.openapi.ui.popup.JBPopup? = null
+
     private fun showDisplayMenu() {
         val toggles = listOf(
             DisplayToggle("원본 로그 보기", "파싱 없이 원문 그대로", rawMode) { setRawMode(it) },
             DisplayToggle("긴 줄 자르기", "가로 스크롤 끄고 잘라 보기", truncateLines) { setTruncate(it) },
             DisplayToggle("디테일 패널", "선택한 줄의 상세를 오른쪽에", detailVisible) { setDetailVisible(it) },
         )
-        val panel = createDisplayOptionsPanel(toggles)
+        val choices = listOf(
+            DisplayChoice("인코딩", LogCharsets.label(charset)) { showCharsetChooser() },
+        )
+        val panel = createDisplayOptionsPanel(toggles, choices)
         val popup = JBPopupFactory.getInstance()
             .createComponentPopupBuilder(panel, panel)
             .setRequestFocus(true)
             .setResizable(false)
             .setMovable(false)
             .createPopup()
+        displayPopup = popup
         // Drop it from right under the ⚙ icon (right-aligned to where the user clicked).
         val mouse = java.awt.MouseInfo.getPointerInfo()?.location
         if (mouse != null) {
@@ -231,6 +241,31 @@ class LogViewerPanel(
             val anchor = filterBarComp ?: component
             popup.show(RelativePoint(anchor, Point(anchor.width - JBUI.scale(290), anchor.height)))
         }
+    }
+
+    /** Pick the decoding charset (for CP949/EUC-KR Korean logs etc.) and re-read the source. */
+    private fun showCharsetChooser() {
+        displayPopup?.cancel() // close the ⚙ popup first so the chooser isn't nested under it
+        JBPopupFactory.getInstance()
+            .createPopupChooserBuilder(LogCharsets.OPTIONS.map { it.first })
+            .setTitle("인코딩 선택 (현재: ${LogCharsets.label(charset)})")
+            .setItemChosenCallback { label -> LogCharsets.byLabel(label)?.let { reopenWith(it) } }
+            .createPopup()
+            .showInCenterOf(component)
+    }
+
+    /** Re-read the source under [cs]: close the old reader, clear the grid, rebuild, and stream again. */
+    private fun reopenWith(cs: java.nio.charset.Charset) {
+        if (cs == charset) return
+        charset = cs
+        runCatching { reader.close() }
+        tailing = false
+        streaming = true
+        statusError = null
+        model.clear()
+        reader = makeReader(charset)
+        pushChrome()
+        start()
     }
 
     /** Toggle between the parsed Time|Level|Message columns and the original whole-line view. */

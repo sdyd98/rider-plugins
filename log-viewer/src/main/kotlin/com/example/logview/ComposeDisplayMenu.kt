@@ -39,12 +39,18 @@ import javax.swing.JComponent
 /** One display option: a title, a one-line hint, the current value, and a setter. */
 class DisplayToggle(val title: String, val subtitle: String, val initial: Boolean, val onToggle: (Boolean) -> Unit)
 
+/** A non-toggle row: a title + current value that opens a chooser (e.g. encoding) when clicked. */
+class DisplayChoice(val title: String, val value: String, val onClick: () -> Unit)
+
 /**
- * The ⚙ "표시 옵션" popup, in Compose/Jewel: a list of toggle rows (title + hint + animated switch), each
- * applying immediately and keeping the popup open so several can be flipped at once. Replaces the old
- * Swing `JCheckBoxMenuItem` menu so it matches the rest of the viewer's chrome.
+ * The ⚙ "표시 옵션" popup, in Compose/Jewel: a list of toggle rows (title + hint + animated switch) plus
+ * optional choice rows (title + value, click to open a chooser), each applying immediately and keeping
+ * the popup open. Replaces the old Swing `JCheckBoxMenuItem` menu so it matches the viewer's chrome.
  */
-fun createDisplayOptionsPanel(toggles: List<DisplayToggle>): JComponent = JewelComposePanel {
+fun createDisplayOptionsPanel(
+    toggles: List<DisplayToggle>,
+    choices: List<DisplayChoice> = emptyList(),
+): JComponent = JewelComposePanel {
     val palette = rememberLogPalette()
     Column(Modifier.width(290.dp).padding(Space.sm), verticalArrangement = Arrangement.spacedBy(Space.xxs)) {
         Text(
@@ -55,6 +61,28 @@ fun createDisplayOptionsPanel(toggles: List<DisplayToggle>): JComponent = JewelC
             modifier = Modifier.padding(start = Space.sm, top = Space.xs, bottom = Space.xs),
         )
         toggles.forEach { ToggleRow(it, palette) }
+        choices.forEach { ChoiceRow(it, palette) }
+    }
+}
+
+@Composable
+private fun ChoiceRow(choice: DisplayChoice, palette: LogPalette) {
+    val interaction = remember { MutableInteractionSource() }
+    val hovered by interaction.collectIsHoveredAsState()
+    val bg by animateColorAsState(if (hovered) palette.surfaceHover else Color.Transparent)
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(Radii.sm))
+            .background(bg)
+            .hoverable(interaction)
+            .clickable { choice.onClick() }
+            .padding(horizontal = Space.sm, vertical = Space.sm),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(Space.sm),
+    ) {
+        Text(choice.title, color = palette.text, fontSize = 13.sp, modifier = Modifier.weight(1f))
+        Text("${choice.value}  ▾", color = palette.mutedText, fontSize = 12.sp)
     }
 }
 

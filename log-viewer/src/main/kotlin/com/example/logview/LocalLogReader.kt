@@ -1,6 +1,7 @@
 package com.example.logview
 
 import java.io.RandomAccessFile
+import java.nio.charset.Charset
 import java.nio.file.Path
 
 /**
@@ -14,12 +15,12 @@ import java.nio.file.Path
  * UTF-8 safety: bytes are only consumed up to a `\n` (0x0A, which never appears inside a multi-byte
  * UTF-8 sequence), so every emitted line decodes cleanly; the remainder is held as raw bytes.
  */
-class LocalLogReader(private val path: Path) : LogReader {
+class LocalLogReader(private val path: Path, charset: Charset = Charsets.UTF_8) : LogReader {
 
     private val file = path.toFile()
     private var offset = 0L
     // One splitter persists across polls so a line split across two reads resumes correctly.
-    private val splitter = ByteLineSplitter()
+    private val splitter = ByteLineSplitter(charset = charset)
 
     @Volatile private var follow: Thread? = null
     @Volatile private var closed = false

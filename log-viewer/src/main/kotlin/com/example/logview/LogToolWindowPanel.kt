@@ -41,6 +41,7 @@ import java.awt.event.ActionEvent
 import java.awt.event.InputEvent
 import java.awt.event.KeyEvent
 import java.io.File
+import java.nio.charset.Charset
 import java.nio.file.Paths
 import javax.swing.AbstractAction
 import javax.swing.Icon
@@ -549,9 +550,8 @@ class LogToolWindowPanel(private val project: Project) : JPanel(BorderLayout()),
     private fun openRemote(profile: SshProfile, path: String) = ensureSecret(profile) {
         val key = "${profile.user}@${profile.host}:$path"
         if (focusExisting(key)) return@ensureSecret // already open → reuse the tab (keeps its position/focus)
-        val reader = RemoteLogReader(manager, profile, path, profile.tailLines)
         val label = "${profile.name.ifBlank { profile.host }}:${path.substringAfterLast('/')}"
-        addSession(label, key, reader, followByDefault = true)
+        addSession(label, key, { cs -> RemoteLogReader(manager, profile, path, profile.tailLines, cs) }, followByDefault = true)
     }
 
     private fun openLocalFile() {
@@ -563,7 +563,7 @@ class LogToolWindowPanel(private val project: Project) : JPanel(BorderLayout()),
     /** Open a local file path as a live-tail session (called by the "Open in Log Viewer" action too). */
     fun openLocalPath(path: String, name: String) {
         if (focusExisting(path)) return // already open → reuse the tab
-        addSession(name, path, LocalLogReader(Paths.get(path)), followByDefault = true)
+        addSession(name, path, { cs -> LocalLogReader(Paths.get(path), cs) }, followByDefault = true)
     }
 
     /** If [key]'s source is already open, select + focus that tab and return true; else false. */
@@ -576,9 +576,14 @@ class LogToolWindowPanel(private val project: Project) : JPanel(BorderLayout()),
         return true
     }
 
-    private fun addSession(title: String, sourceLabel: String, reader: LogReader, followByDefault: Boolean) {
+    private fun addSession(
+        title: String,
+        sourceLabel: String,
+        makeReader: (Charset) -> LogReader,
+        followByDefault: Boolean,
+    ) {
         val panel = LogViewerPanel(
-            project, sourceLabel, reader, followByDefault,
+            project, sourceLabel, makeReader, followByDefault,
             onExitLeft = { focusTree() },
             onSwitchTab = { dir -> switchSessionTab(dir) },
         )

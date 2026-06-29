@@ -11,6 +11,14 @@
     ]]></description>
 
     <change-notes><![CDATA[
+        <b>0.2.0</b>
+        <ul>
+            <li><b>인코딩 선택</b> — ⚙ 표시 옵션에서 디코딩 인코딩을 UTF-8 / CP949(한글 Windows) / EUC-KR /
+                ISO-8859-1 / US-ASCII 중 고릅니다. 한글이 깨지는 CP949/EUC-KR 로그를 바로 고쳐 보고(선택 시 즉시
+                재읽기), 잘못 고른 인코딩도 다시 바꿀 수 있습니다.</li>
+            <li><b>에디터 폰트 적용</b> — 로그 본문이 Rider 에디터 폰트(Settings → Editor → Font)를 따라갑니다.</li>
+        </ul>
+
         <b>0.1.0</b> — 첫 릴리스
         <ul>
             <li><b>로컬 &amp; 원격(SSH/SFTP)</b> 로그 뷰어 — 로컬 <code>.log</code> 파일과, Rider의 SSH 설정으로

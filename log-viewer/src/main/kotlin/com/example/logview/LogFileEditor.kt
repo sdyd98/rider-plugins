@@ -10,6 +10,7 @@ import com.intellij.openapi.vfs.VfsUtilCore
 import com.intellij.openapi.vfs.VirtualFile
 import java.beans.PropertyChangeListener
 import java.beans.PropertyChangeSupport
+import java.nio.charset.Charset
 import javax.swing.JComponent
 
 /**
@@ -24,12 +25,14 @@ class LogFileEditor(project: Project, private val file: VirtualFile) : UserDataH
 
     init {
         val ioFile = runCatching { VfsUtilCore.virtualToIoFile(file) }.getOrNull()
-        val reader: LogReader = if (ioFile != null && ioFile.isFile) {
-            LocalLogReader(ioFile.toPath())
+        val makeReader: (Charset) -> LogReader = if (ioFile != null && ioFile.isFile) {
+            val path = ioFile.toPath()
+            val local: (Charset) -> LogReader = { cs -> LocalLogReader(path, cs) }
+            local
         } else {
-            VfsLogReader(file) // non-local VFS: one-shot read, no live tail
+            { cs -> VfsLogReader(file, cs) } // non-local VFS: one-shot read, no live tail
         }
-        panel = LogViewerPanel(project, file.name, reader, followByDefault = false)
+        panel = LogViewerPanel(project, file.name, makeReader, followByDefault = false)
         Disposer.register(this, panel)
         panel.start()
     }
@@ -54,9 +57,9 @@ class LogFileEditor(project: Project, private val file: VirtualFile) : UserDataH
     }
 
     /** Fallback reader for non-local (e.g. remote-VFS) files: read the current bytes once, no tail. */
-    private class VfsLogReader(private val file: VirtualFile) : LogReader {
+    private class VfsLogReader(private val file: VirtualFile, private val charset: Charset) : LogReader {
         override fun readInitial(onBatch: (List<String>) -> Unit) {
-            file.inputStream.bufferedReader(Charsets.UTF_8).useLines { seq ->
+            file.inputStream.bufferedReader(charset).useLines { seq ->
                 val batch = ArrayList<String>(2000)
                 for (line in seq) {
                     batch.add(line)
