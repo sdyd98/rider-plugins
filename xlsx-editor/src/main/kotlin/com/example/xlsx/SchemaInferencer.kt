@@ -6,6 +6,7 @@ import com.google.gson.JsonObject
 import org.apache.poi.openxml4j.opc.OPCPackage
 import org.apache.poi.openxml4j.opc.PackageAccess
 import org.apache.poi.ss.usermodel.DataFormatter
+import org.apache.poi.ss.usermodel.WorkbookFactory
 import org.apache.poi.util.XMLHelper
 import org.apache.poi.xssf.eventusermodel.ReadOnlySharedStringsTable
 import org.apache.poi.xssf.eventusermodel.XSSFReader
@@ -57,18 +58,30 @@ object SchemaInferencer {
     // ---- 1. sample every sheet (streaming, capped), recursing into subfolders ----
     fun sample(baseDir: File): List<TableSample> = withPoiClassLoader {
         val out = ArrayList<TableSample>()
-        xlsxFilesUnder(baseDir).forEach { file ->
+        spreadsheetFilesUnder(baseDir).forEach { file ->
             val rel = file.relativeTo(baseDir).invariantSeparatorsPath // root-relative, '/'-joined for refs.json
             runCatching {
-                OPCPackage.open(file, PackageAccess.READ).use { pkg ->
-                    val reader = XSSFReader(pkg)
-                    val styles = reader.stylesTable
-                    val strings = runCatching { ReadOnlySharedStringsTable(pkg) }.getOrNull()
-                    val fmt = DataFormatter()
-                    val sheets = reader.sheetsData as XSSFReader.SheetIterator
-                    while (sheets.hasNext()) {
-                        val stream = sheets.next()
-                        out.add(collect(stream, rel, sheets.sheetName, styles, strings, fmt))
+                if (file.name.endsWith(".xls", true)) {
+                    WorkbookFactory.create(file, null, true).use { wb ->            // legacy .xls (HSSF, full load)
+                        val fmt = DataFormatter()
+                        for (i in 0 until wb.numberOfSheets) {
+                            val collector = SampleCollector()
+                            runCatching { feedXlsSheet(wb.getSheetAt(i), fmt, collector) }
+                                .exceptionOrNull()?.let { if (it !is StopParsing) throw it } // StopParsing = sample cap
+                            out.add(collector.toSample(rel, wb.getSheetName(i)))
+                        }
+                    }
+                } else {
+                    OPCPackage.open(file, PackageAccess.READ).use { pkg ->
+                        val reader = XSSFReader(pkg)
+                        val styles = reader.stylesTable
+                        val strings = runCatching { ReadOnlySharedStringsTable(pkg) }.getOrNull()
+                        val fmt = DataFormatter()
+                        val sheets = reader.sheetsData as XSSFReader.SheetIterator
+                        while (sheets.hasNext()) {
+                            val stream = sheets.next()
+                            out.add(collect(stream, rel, sheets.sheetName, styles, strings, fmt))
+                        }
                     }
                 }
             }
@@ -78,11 +91,11 @@ object SchemaInferencer {
 
     private val IGNORED_DIRS = setOf(".git", ".idea", ".vs", ".gradle", "node_modules", "bin", "obj")
 
-    /** Every .xlsx under [baseDir] (recursive), skipping VCS/build/hidden dirs and Excel lock files. */
-    private fun xlsxFilesUnder(baseDir: File): List<File> =
+    /** Every .xlsx / .xls under [baseDir] (recursive), skipping VCS/build/hidden dirs and Excel lock files. */
+    private fun spreadsheetFilesUnder(baseDir: File): List<File> =
         baseDir.walkTopDown()
             .onEnter { dir -> dir == baseDir || (!dir.name.startsWith(".") && dir.name.lowercase() !in IGNORED_DIRS) }
-            .filter { it.isFile && it.name.endsWith(".xlsx", true) && !it.name.startsWith("~") }
+            .filter { it.isFile && (it.name.endsWith(".xlsx", true) || it.name.endsWith(".xls", true)) && !it.name.startsWith("~") }
             .sortedBy { it.invariantSeparatorsPath }
             .toList()
 
@@ -112,12 +125,18 @@ object SchemaInferencer {
      *  the full [sample] scan (which would parse every row of every workbook just to map id → file). */
     fun locate(baseDir: File, tableId: String): Pair<String, String>? = withPoiClassLoader {
         val entries = ArrayList<Pair<String, String>>() // relFile -> sheet
-        xlsxFilesUnder(baseDir).forEach { file ->
+        spreadsheetFilesUnder(baseDir).forEach { file ->
             val rel = file.relativeTo(baseDir).invariantSeparatorsPath
             runCatching {
-                OPCPackage.open(file, PackageAccess.READ).use { pkg ->
-                    val sheets = XSSFReader(pkg).sheetsData as XSSFReader.SheetIterator
-                    while (sheets.hasNext()) { sheets.next().close(); entries.add(rel to sheets.sheetName) }
+                if (file.name.endsWith(".xls", true)) {
+                    WorkbookFactory.create(file, null, true).use { wb ->
+                        for (i in 0 until wb.numberOfSheets) entries.add(rel to wb.getSheetName(i))
+                    }
+                } else {
+                    OPCPackage.open(file, PackageAccess.READ).use { pkg ->
+                        val sheets = XSSFReader(pkg).sheetsData as XSSFReader.SheetIterator
+                        while (sheets.hasNext()) { sheets.next().close(); entries.add(rel to sheets.sheetName) }
+                    }
                 }
             }
         }
@@ -134,22 +153,32 @@ object SchemaInferencer {
         val file = File(baseDir, relFile)
         if (!file.isFile) return@withPoiClassLoader emptyList<String>() to emptyList()
         runCatching {
-            OPCPackage.open(file, PackageAccess.READ).use { pkg ->
-                val reader = XSSFReader(pkg)
-                val styles = reader.stylesTable
-                val strings = runCatching { ReadOnlySharedStringsTable(pkg) }.getOrNull()
-                val fmt = DataFormatter()
-                val sheets = reader.sheetsData as XSSFReader.SheetIterator
-                while (sheets.hasNext()) {
-                    val stream = sheets.next()
-                    if (sheets.sheetName == sheet) {
-                        val c = SampleCollector(limit.coerceIn(1, MAX_ROWS))
-                        parseSheet(stream, c, styles, strings, fmt)
-                        return@use c.preview()
-                    }
-                    stream.close()
+            if (file.name.endsWith(".xls", true)) {
+                WorkbookFactory.create(file, null, true).use { wb ->
+                    val idx = (0 until wb.numberOfSheets).firstOrNull { wb.getSheetName(it) == sheet } ?: return@use null
+                    val c = SampleCollector(limit.coerceIn(1, MAX_ROWS))
+                    runCatching { feedXlsSheet(wb.getSheetAt(idx), DataFormatter(), c) }
+                        .exceptionOrNull()?.let { if (it !is StopParsing) throw it }
+                    c.preview()
                 }
-                null
+            } else {
+                OPCPackage.open(file, PackageAccess.READ).use { pkg ->
+                    val reader = XSSFReader(pkg)
+                    val styles = reader.stylesTable
+                    val strings = runCatching { ReadOnlySharedStringsTable(pkg) }.getOrNull()
+                    val fmt = DataFormatter()
+                    val sheets = reader.sheetsData as XSSFReader.SheetIterator
+                    while (sheets.hasNext()) {
+                        val stream = sheets.next()
+                        if (sheets.sheetName == sheet) {
+                            val c = SampleCollector(limit.coerceIn(1, MAX_ROWS))
+                            parseSheet(stream, c, styles, strings, fmt)
+                            return@use c.preview()
+                        }
+                        stream.close()
+                    }
+                    null
+                }
             }
         }.getOrNull() ?: (emptyList<String>() to emptyList())
     }

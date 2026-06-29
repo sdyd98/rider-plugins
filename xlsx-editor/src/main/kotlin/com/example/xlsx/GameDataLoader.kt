@@ -4,7 +4,11 @@ import com.intellij.openapi.application.PathManager
 import com.intellij.openapi.diagnostic.Logger
 import org.apache.poi.openxml4j.opc.OPCPackage
 import org.apache.poi.openxml4j.opc.PackageAccess
+import org.apache.poi.ss.usermodel.CellType
 import org.apache.poi.ss.usermodel.DataFormatter
+import org.apache.poi.ss.usermodel.Sheet
+import org.apache.poi.ss.usermodel.WorkbookFactory
+import org.apache.poi.ss.util.CellReference
 import org.apache.poi.util.XMLHelper
 import org.apache.poi.xssf.eventusermodel.ReadOnlySharedStringsTable
 import org.apache.poi.xssf.eventusermodel.XSSFReader
@@ -139,37 +143,50 @@ object GameDataLoader {
             val file = File(schema.baseDir, fileName)
             if (!file.isFile) return@forEach
             runCatching {
-                openWorkbook(file) { reader, styles, strings, fmt ->
-                    val bySheet = sts.associateBy { it.sheet }
-                    val sheetIt = reader.sheetsData as XSSFReader.SheetIterator
-                    while (sheetIt.hasNext()) {
-                        val stream = sheetIt.next()
-                        val st = bySheet[sheetIt.sheetName]
-                        if (st == null) { stream.close(); continue }
-                        foldIntoIndex(collectSheet(stream, st, styles, strings, fmt), reverse, idName, groupMembers, outDeg)
-                    }
-                }
+                forEachSchemaSheet(file, sts) { td -> foldIntoIndex(td, reverse, idName, groupMembers, outDeg) }
             }.onFailure { LOG.warn("relationship index: failed to read $fileName (its tables are omitted from the graph)", it) }
         }
         GameIndex(reverse, idName, groupMembers, outDeg)
     }
 
-    /** Stream a single table on demand (needed columns only). Null if the file/sheet is missing. */
+    /** Load a single table on demand (needed columns only). Null if the file/sheet is missing. */
     fun loadTable(schema: RefSchema, tableId: String): TableData? = withPoiClassLoader {
         val st = schema.table(tableId) ?: return@withPoiClassLoader null
         val file = File(schema.baseDir, st.file)
         if (!file.isFile) return@withPoiClassLoader null
         runCatching {
+            var result: TableData? = null
+            forEachSchemaSheet(file, listOf(st)) { result = it }
+            result
+        }.getOrNull()
+    }
+
+    /** Read each schema table in [file], building a [TableData] per matching sheet. Streams `.xlsx`
+     *  (XSSFReader + SAX); for legacy `.xls` (BIFF, no streaming) it drives the SAME collector from a
+     *  full HSSF usermodel load (capped at 65,536 rows by the format, so memory is bounded). */
+    private inline fun forEachSchemaSheet(file: File, sts: List<SchemaTable>, body: (TableData) -> Unit) {
+        val bySheet = sts.associateBy { it.sheet }
+        if (file.name.endsWith(".xls", true)) {
+            WorkbookFactory.create(file, null, true).use { wb ->
+                val fmt = DataFormatter()
+                for (i in 0 until wb.numberOfSheets) {
+                    val st = bySheet[wb.getSheetName(i)] ?: continue
+                    val collector = SheetCollector(st)
+                    feedXlsSheet(wb.getSheetAt(i), fmt, collector)
+                    body(collector.build())
+                }
+            }
+        } else {
             openWorkbook(file) { reader, styles, strings, fmt ->
                 val sheetIt = reader.sheetsData as XSSFReader.SheetIterator
                 while (sheetIt.hasNext()) {
                     val stream = sheetIt.next()
-                    if (sheetIt.sheetName == st.sheet) return@openWorkbook collectSheet(stream, st, styles, strings, fmt)
-                    stream.close()
+                    val st = bySheet[sheetIt.sheetName]
+                    if (st == null) { stream.close(); continue }
+                    body(collectSheet(stream, st, styles, strings, fmt))
                 }
-                null
             }
-        }.getOrNull()
+        }
     }
 
     private inline fun <R> openWorkbook(file: File, body: (XSSFReader, StylesTable?, ReadOnlySharedStringsTable?, DataFormatter) -> R): R =
@@ -278,5 +295,26 @@ private class SheetCollector(private val st: SchemaTable) : XSSFSheetXMLHandler.
             if (u in 'A'..'Z') c = c * 26 + (u - 'A' + 1) else break
         }
         return c - 1
+    }
+}
+
+/**
+ * Drive a streaming [XSSFSheetXMLHandler.SheetContentsHandler] from a legacy `.xls` (HSSF) sheet via the
+ * usermodel, so the SAME collectors that parse `.xlsx` work for `.xls` too. Each cell renders to the same
+ * display string the `.xlsx` SAX path produces — a formula cell shows its CACHED result (matching the
+ * viewer and the streaming reader), so ids/FK tokens compare identically across formats.
+ */
+internal fun feedXlsSheet(sheet: Sheet, fmt: DataFormatter, handler: XSSFSheetXMLHandler.SheetContentsHandler) {
+    for (r in 0..sheet.lastRowNum) {
+        handler.startRow(r)
+        sheet.getRow(r)?.let { row ->
+            val lastCell = row.lastCellNum.toInt()
+            for (c in 0 until lastCell) {
+                val cell = row.getCell(c) ?: continue
+                val v = if (cell.cellType != CellType.FORMULA) fmt.formatCellValue(cell) else formatCachedFormulaResult(cell, fmt)
+                handler.cell(CellReference(r, c).formatAsString(), v, null)
+            }
+        }
+        handler.endRow(r)
     }
 }
