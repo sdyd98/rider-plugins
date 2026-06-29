@@ -11,6 +11,9 @@ out/
 # Large load-test datasets (generated; never commit — GitHub blocks >100MB files)
 samples/loadtest-*
 
+# Local sample/test-output logs dropped at the repo root (NOT the tracked samples/ data)
+/sample-logs/
+
 # IDE
 .idea/
 *.iml
