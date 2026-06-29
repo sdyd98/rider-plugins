@@ -163,8 +163,8 @@ class LineFormat private constructor(
                         pos = tokens[j].end
                         i = j + 1
                     }
-                    else -> { // unassigned (or a duplicate/used field) → literal text
-                        appendLiteral(sb, tok.text)
+                    else -> { // unassigned (or a duplicate/used field) → a wildcard token, so skipping a
+                        sb.append("\\S+") // field (e.g. thread) still generalizes instead of pinning a literal
                         pos = tok.end
                         i++
                     }

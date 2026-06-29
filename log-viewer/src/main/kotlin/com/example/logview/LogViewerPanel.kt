@@ -225,10 +225,10 @@ class LogViewerPanel(
             DisplayToggle("긴 줄 자르기", "가로 스크롤 끄고 잘라 보기", truncateLines) { setTruncate(it) },
             DisplayToggle("디테일 패널", "선택한 줄의 상세를 오른쪽에", detailVisible) { setDetailVisible(it) },
         )
-        val formatCount = LineFormatStore.getInstance().sources().size
+        val activeFormat = LineFormatStore.getInstance().activeName()
         val choices = listOf(
             DisplayChoice("인코딩", LogCharsets.label(charset)) { showCharsetChooser() },
-            DisplayChoice("줄 형식", if (formatCount == 0) "자동" else "${formatCount}개") { showFormatSettings() },
+            DisplayChoice("줄 형식", activeFormat ?: "자동") { showFormatSettings() },
         )
         val panel = createDisplayOptionsPanel(toggles, choices)
         val popup = JBPopupFactory.getInstance()
@@ -272,35 +272,21 @@ class LogViewerPanel(
         }
     }
 
-    private val lineFormatState = androidx.compose.foundation.text.input.TextFieldState()
-
-    /** ⚙ → "줄 형식": edit user line-format rules with a live preview; re-read on close if they changed. */
+    /** ⚙ → "줄 형식": pick a saved format or build one with the region picker; applying re-reads the grid. */
     private fun showFormatSettings() {
         displayPopup?.cancel()
-        val store = LineFormatStore.getInstance()
-        // Seed with the current saved formats (none → empty); the region picker writes the generated rule in.
-        lineFormatState.edit { replace(0, length, store.sources().joinToString("\n")) }
         val sample = (0 until minOf(model.loadedRowCount(), 8)).map { model.rawAt(it) }
         var popupRef: com.intellij.openapi.ui.popup.JBPopup? = null
-        val panel = createLineFormatSettings(lineFormatState, sample) { popupRef?.cancel() }
+        val panel = createLineFormatSettings(sample, onApply = { reparse() }) { popupRef?.cancel() }
         val popup = JBPopupFactory.getInstance()
             .createComponentPopupBuilder(panel, panel)
             .setRequestFocus(true)
             .setResizable(true)
             .setMovable(true)
-            .setCancelOnClickOutside(false) // accidental outside-clicks shouldn't close + re-read; use 적용하고 닫기 / Esc
+            .setCancelOnClickOutside(false) // accidental outside-clicks shouldn't close; use 닫기 / Esc
             .setTitle("줄 형식")
             .createPopup()
         popupRef = popup
-        popup.addListener(object : com.intellij.openapi.ui.popup.JBPopupListener {
-            override fun onClosed(event: com.intellij.openapi.ui.popup.LightweightWindowEvent) {
-                val newFormats = lineFormatState.text.lineSequence().map { it.trim() }.filter { it.isNotEmpty() }.toList()
-                if (newFormats != store.sources()) {
-                    store.replaceAll(newFormats)
-                    reparse()
-                }
-            }
-        })
         popup.showInCenterOf(component)
     }
 
@@ -357,7 +343,8 @@ class LogViewerPanel(
     private fun updateDetail() {
         if (!detailVisible) return
         val r = table.selectedRow
-        val line = if (r in 0 until table.rowCount) model.lineAt(table.convertRowIndexToModel(r)) else null
+        val mr = if (r in 0 until table.rowCount) table.convertRowIndexToModel(r) else -1
+        val line = if (mr in 0 until model.rowCount) model.lineAt(mr) else null // guard model row (stale during clear)
         detail.show(line)
     }
 
@@ -745,8 +732,10 @@ class LogViewerPanel(
         val total = model.loadedRowCount()
         val counts = LogLevel.entries.associateWith { model.countOf(it) }
         val viewRow = table.selectedRow
-        val cursor = if (viewRow in 0 until table.rowCount) {
-            val mr = table.convertRowIndexToModel(viewRow)
+        // Guard the MODEL row too, not just the view row: clear() fires this through a TableModelListener
+        // while the row sorter still maps to now-gone model rows → model.lineAt would throw (froze the UI).
+        val mr = if (viewRow in 0 until table.rowCount) table.convertRowIndexToModel(viewRow) else -1
+        val cursor = if (mr in 0 until model.rowCount) {
             val line = model.lineAt(mr)
             val time = if (line.hasTime) LogStructure.formatTime(line.timestampMillis) + " · " else ""
             "${line.lineNumber}행 · $time${line.level.label}"

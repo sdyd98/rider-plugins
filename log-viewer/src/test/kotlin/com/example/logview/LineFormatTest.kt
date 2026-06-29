@@ -100,4 +100,21 @@ class LineFormatTest {
         assertEquals("WARN", m2.level)
         assertEquals("disk low", line2.substring(m2.messageStart))
     }
+
+    @Test
+    fun `buildRegex wildcards an unassigned token so a skipped field still generalizes`() {
+        val line = "2026-06-29 09:00:01.001 [worker-3] ERROR boot done"
+        val toks = LineFormat.tokenize(line)
+        // Assign time (0,1), SKIP thread (2 unassigned → \S+), level (3), message (4).
+        val assign = mapOf(0 to "time", 1 to "time", 3 to "level", 4 to "message")
+        val fmt = LineFormat.fromRegex(LineFormat.buildRegex(line, toks, assign))
+        assertTrue(fmt.valid)
+        assertEquals("ERROR", fmt.apply(line)!!.level)
+
+        // Generalizes even though the skipped token differs ([worker-3] vs [main]).
+        val line2 = "2026-06-29 09:00:02.000 [main] WARN low disk"
+        val m2 = fmt.apply(line2)!!
+        assertEquals("WARN", m2.level)
+        assertEquals("low disk", line2.substring(m2.messageStart))
+    }
 }

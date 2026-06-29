@@ -28,6 +28,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import org.jetbrains.jewel.bridge.JewelComposePanel
 import org.jetbrains.jewel.ui.component.Text
+import org.jetbrains.jewel.ui.component.TextField
 import javax.swing.JComponent
 
 /** The four assignable fields, in left-to-right order, with their Korean labels and chip colors. */
@@ -41,65 +42,103 @@ private fun fieldColor(field: String): Color = when (field) {
 }
 
 /**
- * The ⚙ → "줄 형식" settings, in Compose/Jewel. Two ways to define the split: the visual **region picker**
- * (click tokens of a sample line to mark Time/Level/Message → generates a regex) and a text area (one
- * template/regex per line). A **live preview** below splits the current log's first lines with whatever is
- * set, so a wrong pattern is obvious immediately. The owning [TextFieldState] is held by the caller, which
- * reads it back and saves when the popup closes.
+ * The ⚙ → "줄 형식" settings, in Compose/Jewel. Top: a **library** of saved formats — click one to apply
+ * it (the active one is marked). Below: the **region picker** — click the tokens of a sample line to mark
+ * Time/Level/Thread/Message and the **preview updates live**; name it and **저장** to add it to the library
+ * (and apply). No regex is ever shown. [onApply] re-reads the grid when the active format changes.
  */
-fun createLineFormatSettings(state: TextFieldState, sampleLines: List<String>, onClose: () -> Unit): JComponent = JewelComposePanel {
-    val palette = rememberLogPalette()
-    Column(Modifier.width(560.dp).padding(Space.md), verticalArrangement = Arrangement.spacedBy(Space.sm)) {
-        Text("줄 형식 — 영역 지정 (Time · Level · Message 분리)", color = palette.text, fontWeight = FontWeight.Bold, fontSize = 13.sp)
-
-        // The visual region picker is the only input — click tokens to mark the columns (no regex shown).
-        val pickerLine = sampleLines.firstOrNull { it.isNotBlank() }
-        if (pickerLine == null) {
-            Text("로그가 비어 있어 영역을 지정할 수 없습니다.", color = palette.mutedText, fontSize = 11.sp)
-        } else {
-            RegionPicker(pickerLine, state, palette)
+fun createLineFormatSettings(sampleLines: List<String>, onApply: () -> Unit, onClose: () -> Unit): JComponent =
+    JewelComposePanel {
+        val palette = rememberLogPalette()
+        val store = remember { LineFormatStore.getInstance() }
+        var version by remember { mutableStateOf(0) } // bump to re-read the store after a change
+        val library = remember(version) { store.library().map { it.name } }
+        val activeName = remember(version) { store.activeName() }
+        fun changed() {
+            version++
+            onApply()
         }
 
-        Text("미리보기 (현재 로그 앞부분)", color = palette.mutedText, fontWeight = FontWeight.Bold, fontSize = 11.sp)
-        // Read state.text directly so this recomposes on EVERY keystroke → the preview is real-time.
-        val text = state.text.toString()
-        val formats = remember(text) {
-            text.lineSequence().map { it.trim() }.filter { it.isNotEmpty() }
-                .map { LineFormat.of(it) }.filter { it.valid }.toList()
-        }
-        Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            if (sampleLines.isEmpty()) {
-                Text("(로그가 비어 있어 미리보기 없음)", color = palette.mutedText, fontSize = 11.sp)
+        Column(Modifier.width(580.dp).padding(Space.md), verticalArrangement = Arrangement.spacedBy(Space.md)) {
+            Text("줄 형식 (Time · Level · Message 분리)", color = palette.text, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+
+            if (library.isNotEmpty()) {
+                Text("저장된 포맷 — 클릭해서 적용", color = palette.mutedText, fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    library.forEach { name ->
+                        val isActive = name == activeName
+                        Row(
+                            Modifier.fillMaxWidth().clip(RoundedCornerShape(Radii.sm))
+                                .background(if (isActive) palette.accent.copy(alpha = 0.14f) else Color.Transparent)
+                                .padding(horizontal = Space.sm, vertical = 3.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(Space.sm),
+                        ) {
+                            Text(
+                                (if (isActive) "● " else "○ ") + name,
+                                color = if (isActive) palette.accent else palette.text,
+                                fontSize = 12.sp,
+                                modifier = Modifier.weight(1f).clickable { store.activate(name); changed() },
+                            )
+                            if (isActive) Text("적용중", color = palette.mutedText, fontSize = 10.sp)
+                            ToolButton("삭제", palette) { store.remove(name); changed() }
+                        }
+                    }
+                    if (activeName != null) {
+                        Text(
+                            "형식 끄기 (자동 분석으로)",
+                            color = palette.mutedText,
+                            fontSize = 11.sp,
+                            modifier = Modifier.clickable { store.activate(null); changed() }.padding(horizontal = Space.sm, vertical = 2.dp),
+                        )
+                    }
+                }
+            }
+
+            val pickerLine = sampleLines.firstOrNull { it.isNotBlank() }
+            if (pickerLine == null) {
+                Text("로그가 비어 있어 영역을 지정할 수 없습니다.", color = palette.mutedText, fontSize = 11.sp)
             } else {
-                sampleLines.forEach { PreviewRow(it, formats, palette) }
+                RegionPicker(pickerLine, sampleLines, palette) { name, pattern ->
+                    store.save(name, pattern)
+                    changed()
+                }
+            }
+
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                ToolButton("닫기", palette, accent = true) { onClose() }
             }
         }
-
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-            ToolButton("적용하고 닫기", palette, accent = true) { onClose() }
-        }
     }
-}
 
 /**
- * Click-to-mark region picker: pick a field, then click the tokens of [line] that belong to it (chips tint
- * with the field color). "형식 만들기" turns the marks into a named-capture regex via [LineFormat.buildRegex]
- * and writes it into [state] (which feeds the preview + is saved on close).
+ * Click-to-mark region picker with a LIVE preview. Pick a field, click the tokens of [line] that belong to
+ * it; chips tint with the field color and the preview re-parses instantly. "메시지" needs only its start
+ * token — everything after it is the message. Name it + [onSave] adds it to the library.
  */
 @Composable
-private fun RegionPicker(line: String, state: TextFieldState, palette: LogPalette) {
+private fun RegionPicker(line: String, sampleLines: List<String>, palette: LogPalette, onSave: (name: String, pattern: String) -> Unit) {
     val tokens = remember(line) { LineFormat.tokenize(line) }
     var selectedField by remember { mutableStateOf("time") }
     var assign by remember(line) { mutableStateOf<Map<Int, String>>(emptyMap()) }
+    val nameState = remember { TextFieldState(LineFormatStore.getInstance().nextDefaultName()) }
+
+    val msgStart = assign.filterValues { it == "message" }.keys.minOrNull()
+    fun effectiveField(i: Int): String? = if (msgStart != null && i >= msgStart) "message" else assign[i]
+
+    // Live format from the current assignments (null until something is assigned) → drives the preview now.
+    val liveFormat = remember(assign, line) {
+        if (assign.isEmpty()) null else LineFormat.of(LineFormat.buildRegex(line, tokens, assign)).takeIf { it.valid }
+    }
+    val previewFormats = if (liveFormat != null) listOf(liveFormat) else LineFormatStore.getInstance().active()
 
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(Space.xs)) {
         Text(
-            "영역 지정 — 필드를 고르고 샘플 줄의 토큰을 클릭하세요 (같은 필드 여러 토큰 OK · 메시지는 시작 토큰)",
+            "새 포맷 만들기 — 필드를 고르고 토큰 클릭 (메시지는 시작 토큰만 클릭하면 끝까지)",
             color = palette.mutedText,
             fontWeight = FontWeight.Bold,
             fontSize = 11.sp,
         )
-        // Field selector chips.
         Row(horizontalArrangement = Arrangement.spacedBy(Space.xs)) {
             FIELD_LABELS.forEach { (f, label) ->
                 val active = selectedField == f
@@ -116,13 +155,12 @@ private fun RegionPicker(line: String, state: TextFieldState, palette: LogPalett
                 )
             }
         }
-        // The sample line as clickable token chips (horizontally scrollable for long lines).
         Row(
             Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
             horizontalArrangement = Arrangement.spacedBy(4.dp),
         ) {
             tokens.forEachIndexed { i, tok ->
-                val fld = assign[i]
+                val fld = effectiveField(i)
                 val col = fld?.let { fieldColor(it) }
                 Text(
                     tok.text,
@@ -131,26 +169,46 @@ private fun RegionPicker(line: String, state: TextFieldState, palette: LogPalett
                     fontSize = 12.sp,
                     modifier = Modifier.clip(RoundedCornerShape(Radii.sm))
                         .background((col ?: palette.text).copy(alpha = if (fld != null) 0.22f else 0.05f))
-                        .clickable { assign = if (assign[i] == selectedField) assign - i else assign + (i to selectedField) }
+                        .clickable {
+                            assign = when {
+                                selectedField == "message" -> assign.filterValues { it != "message" } + (i to "message")
+                                assign[i] == selectedField -> assign - i
+                                else -> assign + (i to selectedField)
+                            }
+                        }
                         .padding(horizontal = 4.dp, vertical = 2.dp),
                 )
             }
         }
-        Row(horizontalArrangement = Arrangement.spacedBy(Space.sm), verticalAlignment = Alignment.CenterVertically) {
-            ToolButton("형식 만들기", palette, accent = true) {
-                if (assign.isNotEmpty()) {
-                    state.edit { replace(0, length, LineFormat.buildRegex(line, tokens, assign)) }
+
+        Text("미리보기 (현재 로그 앞부분)", color = palette.mutedText, fontWeight = FontWeight.Bold, fontSize = 11.sp)
+        Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            if (sampleLines.isEmpty()) {
+                Text("(로그가 비어 있어 미리보기 없음)", color = palette.mutedText, fontSize = 11.sp)
+            } else {
+                sampleLines.forEach { PreviewRow(it, previewFormats, palette) }
+            }
+        }
+
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Space.sm)) {
+            Text("이름", color = palette.mutedText, fontSize = 11.sp)
+            TextField(state = nameState, modifier = Modifier.weight(1f))
+            ToolButton("저장", palette, accent = true) {
+                val name = nameState.text.toString().trim()
+                if (liveFormat != null && name.isNotEmpty()) {
+                    onSave(name, liveFormat.source)
+                    assign = emptyMap() // clean slate for the next format; preview falls back to the active one
+                    nameState.edit { replace(0, length, LineFormatStore.getInstance().nextDefaultName()) }
                 }
             }
-            ToolButton("지우기", palette) { assign = emptyMap() }
         }
     }
 }
 
 @Composable
 private fun PreviewRow(line: String, formats: List<LineFormat>, palette: LogPalette) {
-    // Did a user format actually match this line? If not (none / all cleared), show the ORIGINAL text so
-    // it's obvious which lines the format doesn't cover — rather than a heuristic guess.
+    // Did a format actually match this line? If not, show the ORIGINAL text so it's obvious which lines the
+    // format doesn't cover — rather than a heuristic guess.
     val matched = remember(line, formats) { formats.any { it.apply(line) != null } }
     if (!matched) {
         Row(
