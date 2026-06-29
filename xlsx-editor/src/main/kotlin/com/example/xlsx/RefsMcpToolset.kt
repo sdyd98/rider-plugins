@@ -122,12 +122,18 @@ class RefsMcpToolset : McpToolset {
 
     @McpTool
     @McpDescription(
-        "Build (or additively extend) the WHOLE relationship schema for a folder tree in one pass. Samples " +
-            "every sheet under <dir> (recursing), infers foreign keys by value overlap across ALL of them " +
-            "(so cross-folder references are found), and writes <dir>/refs.json. Tables already in an existing " +
-            "refs.json are kept as-is (re-runs only ADD newly-found tables, so manual refinements survive). " +
-            "Returns a SUMMARY (counts + low-confidence refs to review), never the full schema — point this at " +
-            "the top of a large dataset to draft the whole thing at once, then refine with read_refs/write_refs.",
+        "Index game-data tables into a relationship schema (refs.json). This is the entry point when the user " +
+            "asks to index / 색인 the tables. INTERACTION POLICY (follow before running): " +
+            "(1) if you do NOT already know the data ROOT folder, ASK the user for the top folder path to use — " +
+            "do not guess it; " +
+            "(2) for an INCREMENTAL build, ASK the user which base/anchor table (or area) to start from, run this " +
+            "on that area's folder, review, then expand to the next area on request — OR pass the whole root to " +
+            "draft everything at once (it samples a multi-thousand-table tree in seconds). " +
+            "What it does: samples every sheet under <dir> (recursing), infers foreign keys by value overlap " +
+            "across ALL of them (so cross-folder references are found), and writes/extends <dir>/refs.json " +
+            "ADDITIVELY (existing entries kept; re-runs only ADD newly-found tables, so refinements survive). " +
+            "Returns a SUMMARY (counts + low-confidence refs to review), never the full schema. Afterwards refine " +
+            "low-confidence / polymorphic refs with read_refs + write_refs.",
     )
     suspend fun build_refs(
         @McpDescription("Absolute path to the root data folder; its refs.json is written/extended here.") dir: String,
