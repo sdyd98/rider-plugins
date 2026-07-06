@@ -7,7 +7,7 @@ plugins {
 }
 
 group = "com.example.xlsx"
-version = "0.6.1"
+version = "0.6.2"
 
 repositories {
     mavenCentral()
