@@ -8,14 +8,17 @@ import androidx.compose.ui.geometry.Offset
  * are only the fallback rendered when no refs.json is found (and were used to design the detail
  * level / interactions before the schema spec was locked).
  *
- * @param refTo    target table id this column references (null = plain column).
- * @param embedded the reference lives inside a delimited/encoded string (shown as a badge).
+ * @param refTo       target table id this column references (null = plain column).
+ * @param embedded    the reference lives inside a delimited/encoded string (shown as a badge).
+ * @param conditional the ref applies only to rows matching its `when` condition (polymorphic column —
+ *                    the same column appears once per target table).
  */
 data class RefColumn(
     val name: String,
     val isId: Boolean = false,
     val refTo: String? = null,
     val embedded: Boolean = false,
+    val conditional: Boolean = false,
 )
 
 data class RefTable(val id: String, val display: String, val columns: List<RefColumn>, val pos: Offset)

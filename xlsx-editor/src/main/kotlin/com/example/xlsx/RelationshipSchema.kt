@@ -9,7 +9,13 @@ import java.io.File
  * keyed by FIELD CODE (the [headerRow] values), so it survives display rows / reordering. A ref whose
  * [byCols] is a strict subset of the target's id is a GROUP reference.
  */
-data class RefSchema(val baseDir: File, val tables: List<SchemaTable>) {
+data class RefSchema(
+    val baseDir: File,
+    val tables: List<SchemaTable>,
+    /** Cell values meaning "no reference" (top-level `nullValues` in refs.json; default `["0"]`) —
+     *  games use 0 / -1 / None etc. as the empty-FK placeholder. Never reported as broken refs. */
+    val nullValues: Set<String> = setOf("0"),
+) {
     fun table(id: String): SchemaTable? = tables.firstOrNull { it.tableId == id }
 }
 
@@ -30,7 +36,16 @@ data class SchemaRef(
     val byCols: List<String>,
     val split: String? = null,
     val pattern: String? = null,
-)
+    /** Conditional (polymorphic) ref: the ref applies to a row only when EVERY entry matches — column →
+     *  accepted values (OR within a column, AND across columns). E.g. `"when": {"ParamType": ["3", "4"]}`
+     *  makes `Param` reference this ref's target only on rows whose ParamType is 3 or 4; a sibling ref on
+     *  the same column with a different `when` can target another table. Null = unconditional. */
+    val whenCond: Map<String, List<String>>? = null,
+) {
+    /** Does this ref apply to the row with the given (field code → rendered value) map? */
+    fun appliesTo(values: Map<String, String>): Boolean =
+        whenCond == null || whenCond.all { (col, accepted) -> values[col]?.trim() in accepted }
+}
 
 /**
  * Loads the reference schema from `<baseDir>/refs.json` — the format the AI-from-code / MCP step
@@ -59,6 +74,10 @@ fun loadRefSchema(baseDir: File): RefSchema? {
                     byCols = roOpt("by")?.asJsonArray?.map { it.asString } ?: idColsOf[to] ?: listOf("Id"),
                     split = roOpt("split")?.asString,
                     pattern = roOpt("pattern")?.asString,
+                    // "when": {"Col": "v"} or {"Col": ["v1", "v2"]} — a scalar is a single accepted value.
+                    whenCond = roOpt("when")?.asJsonObject?.entrySet()?.associate { (c, v) ->
+                        c to (if (v.isJsonArray) v.asJsonArray.map { it.asString } else listOf(v.asString))
+                    },
                 )
             }.orEmpty()
             SchemaTable(
@@ -72,7 +91,8 @@ fun loadRefSchema(baseDir: File): RefSchema? {
                 displayCol = opt("display")?.asString,
             )
         }
-        RefSchema(baseDir, tables)
+        val nullValues = root.getAsJsonArray("nullValues")?.map { it.asString }?.toSet() ?: setOf("0")
+        RefSchema(baseDir, tables, nullValues)
     }.getOrNull()
 }
 
@@ -81,12 +101,21 @@ fun loadRefSchema(baseDir: File): RefSchema? {
 /** Table-level ER graph from the schema alone (nodes = tables w/ id + ref columns, edges = refs). */
 fun buildRefGraph(schema: RefSchema): RefGraph {
     val tables = schema.tables.map { st ->
+        // Keyed by column name — except CONDITIONAL refs, which get one row PER TARGET (a polymorphic
+        // column references several tables, one per `when` branch), keyed "col→target".
         val cols = LinkedHashMap<String, RefColumn>()
         st.idCols.forEach { cols[it] = RefColumn(it, isId = true) }
         st.refs.forEach { r ->
             r.fromCols.forEach { fc ->
                 val embedded = r.split != null || r.pattern != null
-                cols[fc] = RefColumn(fc, isId = cols[fc]?.isId == true, refTo = r.toTable, embedded = embedded)
+                val key = if (r.whenCond == null) fc else "$fc→${r.toTable}"
+                cols[key] = RefColumn(
+                    fc,
+                    isId = cols[fc]?.isId == true,
+                    refTo = r.toTable,
+                    embedded = embedded,
+                    conditional = r.whenCond != null,
+                )
             }
         }
         RefTable(st.tableId, st.tableId, cols.values.toList(), Offset.Zero)
@@ -142,10 +171,11 @@ class IndexRecordGraph(private val schema: RefSchema, private val index: GameInd
         val row = table(r.table)?.byDisplayId?.get(r.id) ?: return emptyList()
         val links = ArrayList<RefLink>()
         schema.table(r.table)?.refs?.forEach { ref ->
+            if (!ref.appliesTo(row.values)) return@forEach // conditional (when) ref inactive on this row
             val embedded = ref.split != null || ref.pattern != null
             val grp = isGroupRef(ref)
             parseTokens(row.values[ref.fromCols.first()].orEmpty(), ref).forEach { tok ->
-                if (tok.isNotEmpty() && tok != "0") {
+                if (tok.isNotEmpty() && tok !in schema.nullValues) {
                     val to = if (grp) groupRec(ref.toTable, tok) else single(ref.toTable, tok)
                     links.add(RefLink(r, ref.fromCols.first(), to, embedded, broken = to.broken))
                 }

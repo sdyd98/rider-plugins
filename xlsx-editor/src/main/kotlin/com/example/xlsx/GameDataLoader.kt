@@ -143,7 +143,7 @@ object GameDataLoader {
             val file = File(schema.baseDir, fileName)
             if (!file.isFile) return@forEach
             runCatching {
-                forEachSchemaSheet(file, sts) { td -> foldIntoIndex(td, reverse, idName, groupMembers, outDeg) }
+                forEachSchemaSheet(file, sts) { td -> foldIntoIndex(td, schema.nullValues, reverse, idName, groupMembers, outDeg) }
             }.onFailure { LOG.warn("relationship index: failed to read $fileName (its tables are omitted from the graph)", it) }
         }
         GameIndex(reverse, idName, groupMembers, outDeg)
@@ -206,6 +206,7 @@ object GameDataLoader {
 
     private fun foldIntoIndex(
         td: TableData,
+        nullValues: Set<String>,
         reverse: HashMap<String, MutableList<Backref>>,
         idName: HashMap<String, String>,
         groupMembers: HashMap<String, MutableList<String>>,
@@ -226,9 +227,10 @@ object GameDataLoader {
             }
             var deg = 0
             st.refs.forEach { ref ->
+                if (!ref.appliesTo(row.values)) return@forEach // conditional (when) ref inactive on this row
                 val embedded = ref.split != null || ref.pattern != null
                 parseTokens(row.values[ref.fromCols.first()].orEmpty(), ref).forEach { tok ->
-                    if (tok.isNotEmpty() && tok != "0") {
+                    if (tok.isNotEmpty() && tok !in nullValues) {
                         deg++
                         reverse.getOrPut("${ref.toTable}|$tok") { ArrayList() }
                             .add(Backref(st.tableId, recId, name, ref.fromCols.first(), embedded))
@@ -245,9 +247,10 @@ object GameDataLoader {
  * columns of each data row (or all columns for group-keyed tables, whose member rows show everything).
  */
 private class SheetCollector(private val st: SchemaTable) : XSSFSheetXMLHandler.SheetContentsHandler {
-    // null = keep every column (group tables render all member columns); else the id/ref/display set.
+    // null = keep every column (group tables render all member columns); else the id/ref/display set —
+    // including `when` condition columns, which must be present to evaluate conditional refs per row.
     private val needed: Set<String>? = if (st.idCols.size > 1) null else
-        (st.idCols + st.refs.flatMap { it.fromCols } + listOfNotNull(st.displayCol)).toSet()
+        (st.idCols + st.refs.flatMap { it.fromCols + it.whenCond?.keys.orEmpty() } + listOfNotNull(st.displayCol)).toSet()
     private val headerIdx = st.headerRow - 1
     private val firstDataIdx = st.dataStartRow - 1
     private val colNames = HashMap<Int, String>()

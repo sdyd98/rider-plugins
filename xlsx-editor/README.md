@@ -6,8 +6,10 @@ A frontend-only JetBrains Rider plugin (Kotlin) that opens `.xlsx` and `.xls` fi
 POI (streaming) and never modifies the file.
 
 On top of the viewer it adds a **relationship-graph explorer** for game-data workbooks — an ER map,
-record-level data lineage, and an integrity check driven by a `refs.json` schema — plus a
-deterministic `refs.json` generator and MCP tools so an AI client can author that schema
+record-level data lineage, and an integrity check driven by a `refs.json` schema — plus MCP tools so
+an AI client can author that schema. The tools are deliberately judgment-free (they enumerate sheets,
+expose raw cells, compute overlap numbers, and validate); every interpretive decision — layout, ids,
+references — is the AI's, made primarily from the game source
 (see [Relationship graph & refs.json](#relationship-graph--refsjson-game-data) below).
 
 Target: **Rider 2026.1.3** (build 261) · **JDK 21** toolchain · IntelliJ Platform Gradle Plugin 2.16.0.
@@ -47,8 +49,8 @@ xlsx-editor/
     GameDataLoader.kt         streaming POI index (+ on-disk .idx cache)
     RelationshipNavigation.kt schema resolution (nearest refs.json) + graph→grid navigation
     RelationshipBus.kt        grid→graph event bus (Ctrl+R)
-    SchemaInferencer.kt       deterministic refs.json drafter (value-overlap FK inference)
-    RefsMcpToolset.kt         7 MCP tools for refs.json authoring (IDE built-in MCP server)
+    SheetScanner.kt           judgment-free sheet access for the MCP tools (enumerate / raw rows / column values / overlap math)
+    RefsMcpToolset.kt         10 MCP tools for refs.json authoring (IDE built-in MCP server)
   (shared in ../common: PoiClassLoaders.kt, CellFormatting.kt)
 ```
 
@@ -163,7 +165,11 @@ row (`RelationshipNavigation` → `XlsxFileEditor.revealSheetRow`).
 
 **`refs.json`** describes each table (`file`, `sheet`, `headerRow`, `dataStartRow`, `id`, `display`)
 and its `refs` (a `from` column → a `to` table, with `by` / `split` for grouped or delimited
-multi-value refs). The graph reads workbooks with streaming POI and a compact index cached on disk
+multi-value refs, and `when` for **conditional/polymorphic** refs — e.g.
+`{"from": ["Param"], "to": "Item", "when": {"ParamType": ["3", "4"]}}` applies only to rows whose
+`ParamType` is 3 or 4; sibling refs on the same column with different `when` values target other
+tables; the ER map badges such refs `if`). A top-level `"nullValues": ["0", "-1"]` lists the
+placeholder values that mean "no reference" (default `["0"]`) so they are never counted as broken. The graph reads workbooks with streaming POI and a compact index cached on disk
 (`.idx`, keyed by file mtime/size + `refs.json`), so reopening is fast and nothing is held in memory
 whole. See `samples/gamedata/refs.json` for a worked example.
 
@@ -172,19 +178,34 @@ above the open workbook, and their cost scales with the table count in *that sch
 of workbooks on disk — so a single top-level file scales to thousands of tables.
 
 **Authoring `refs.json`** — you author it through the IDE's MCP server with an AI client (e.g. Claude
-Code), not by hand. `RefsMcpToolset` exposes eight tools — `build_refs`, `list_tables`, `column_values`,
-`sample_rows`, `suggest_refs`, `read_refs`, `write_refs`, `validate_refs` — and the AI drives them.
+Code), not by hand. `RefsMcpToolset` exposes ten tools — `build_refs`, `list_tables`, `sample_rows`,
+`column_values`, `check_ref`, `read_refs`, `write_refs`, `read_table_refs`, `write_table_refs`,
+`validate_refs` — and the AI drives them.
 
-The primary path is **`build_refs(<top folder>)`**: it samples every sheet under the folder, infers
-foreign keys across all of them via an inverted value→table index (so cross-folder references are found
-and a multi-thousand-table tree drafts in **seconds**), writes one top-level `refs.json`, and returns a
-**summary** (counts + low-confidence refs to review) rather than the whole schema — so it never floods
-the AI's context. Re-runs only ADD newly-found tables, so manual refinements survive: point it at the
-top once, then refine the low-confidence refs (and any the value-overlap heuristic can't decide, e.g.
-polymorphic columns) with `read_refs` / `write_refs`. `suggest_refs` runs the same inference for a single
-folder without writing. A client connects via the repo-local `.mcp.json` (loopback SSE to the running
-IDE); the MCP dependency is **optional**, so the viewer still loads on an IDE without (or with a
-disabled) MCP server.
+The tools are deliberately **judgment-free** — they enumerate, extract, compute, and validate;
+**every interpretive decision is the AI's**:
+
+- **`build_refs(<top folder>)` writes SKELETONS only.** It enumerates every sheet under the folder
+  (a name scan — a multi-thousand-table tree in seconds) into `{file, sheet}` entries, **additively**
+  (re-runs only ADD new sheets, so the AI's filled-in work survives). No layout, id, display, or ref
+  is guessed — ever.
+- **The AI fills every entry.** `sample_rows` shows a sheet's raw top rows verbatim (1-based row
+  numbers, column letters, no header/data assumption) so the AI decides `headerRow` / `dataStartRow` /
+  `id` / `display` itself; `column_values` extracts one column's distinct values + counts for the
+  id/enum/reference judgment. The refs are designed from the **game source** — how the loading code
+  uses each field (polymorphic columns become conditional `when` refs).
+- **`check_ref` verifies each hypothesis with numbers, not opinions** — pure set arithmetic over the
+  full data: how many distinct from-column tokens exist among the target column's values, plus missing
+  samples. The AI supplies all coordinates (column letters, data start rows, `split`, null
+  placeholders) and judges the result.
+- The AI records its decisions with `write_table_refs` (single or **bulk** — one call fills a whole
+  area; whole-file `read_refs` / `write_refs` for small schemas), marking each ref `_source: "code"`
+  or `"data"` (the viewer ignores `_`-prefixed keys), and closes the loop with `validate_refs` —
+  whose reading is also the AI's job: breaks concentrated in one table point at a wrong layout/id
+  judgment, spread-out breaks at a wrong target or missing `when`.
+
+A client connects via the repo-local `.mcp.json` (loopback SSE to the running IDE); the MCP dependency
+is **optional**, so the viewer still loads on an IDE without (or with a disabled) MCP server.
 
 ## Build & run
 

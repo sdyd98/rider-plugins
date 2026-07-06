@@ -81,7 +81,7 @@ fun RefGraphView(graph: RefGraph, fgArgb: Int, bgArgb: Int, onOpenTable: (String
         var w = 26f + measurer.measure(t.display, titleStyle, softWrap = false).size.width.toFloat()
         rowsOf(t).forEach { c ->
             var rowW = measurer.measure((if (c.isId) "◆ " else "→ ") + c.name, rowStyle, softWrap = false).size.width.toFloat()
-            if (c.refTo != null) rowW += 22f + measurer.measure(c.refTo + if (c.embedded) " str" else "", badgeStyle, softWrap = false).size.width.toFloat()
+            if (c.refTo != null) rowW += 22f + measurer.measure(badgeText(c), badgeStyle, softWrap = false).size.width.toFloat()
             w = maxOf(w, rowW)
         }
         return Size(w + PADX * 2, TITLEH + rowsOf(t).size * ROWH + 8f)
@@ -285,7 +285,7 @@ fun RefGraphView(graph: RefGraph, fgArgb: Int, bgArgb: Int, onOpenTable: (String
                             drawText(measurer, mark + c.name, topLeft = Offset(r.left + PADX, y + 4f), style = TextStyle(color = txt, fontSize = 12.sp, fontWeight = if (rowActive && hoverFocus > 0.4f) FontWeight.Bold else FontWeight.Normal).dim(a), softWrap = false, overflow = TextOverflow.Visible)
                             if (c.refTo != null) {
                                 val th = tableColor(c.refTo, bgArgb)
-                                val badge = c.refTo + if (c.embedded) " str" else ""
+                                val badge = badgeText(c)
                                 val bcolor = if (rowActive) androidx.compose.ui.graphics.lerp(badgeStyle.color, pathHi, hoverFocus) else badgeStyle.color
                                 val bl = measurer.measure(badge, badgeStyle.copy(color = bcolor).dim(a), softWrap = false)
                                 val bx = r.right - 12f - bl.size.width
@@ -303,6 +303,10 @@ fun RefGraphView(graph: RefGraph, fgArgb: Int, bgArgb: Int, onOpenTable: (String
         }
     }
 }
+
+/** Ref badge: target table + " str" for embedded refs + " if" for conditional (`when`) refs. */
+private fun badgeText(c: RefColumn): String =
+    (c.refTo ?: "") + (if (c.embedded) " str" else "") + (if (c.conditional) " if" else "")
 
 private fun TextStyle.dim(a: Float): TextStyle = if (a >= 1f) this else copy(color = color.copy(alpha = color.alpha * a))
 
