@@ -13,13 +13,26 @@ import javax.swing.Timer
  * The reference schema for the project's currently-open workbook: the NEAREST `refs.json` at or above the
  * open file's folder drives the relationship views. Walking up means one top-level refs.json covers a whole
  * nested data tree (and the graph/validate cost scales with that schema's table count, not the number of
- * workbooks on disk). Returns null when no refs.json is found (callers fall back to mock data).
+ * workbooks on disk). Returns null when no refs.json is found or it does not parse — the tool window then
+ * shows guidance (never sample data).
  */
 fun resolveSchema(project: Project): RefSchema? {
     val open = FileEditorManager.getInstance(project).selectedFiles.firstOrNull()?.path ?: return null
     val root = generateSequence(File(open).parentFile) { it.parentFile }
         .firstOrNull { File(it, "refs.json").isFile } ?: return null
     return loadRefSchema(root)
+}
+
+/** Cheap change signature for the relationship views' reactive re-resolution: the selected file plus the
+ *  nearest refs.json's path/mtime/size. When it changes (file created, edited e.g. by the MCP tools, or a
+ *  different workbook focused), the views re-resolve the schema — no reopen needed. */
+fun schemaSignature(project: Project): String {
+    if (project.isDisposed) return ""
+    val open = FileEditorManager.getInstance(project).selectedFiles.firstOrNull()?.path ?: return ""
+    val refs = generateSequence(File(open).parentFile) { it.parentFile }
+        .map { File(it, "refs.json") }
+        .firstOrNull { it.isFile }
+    return "$open|${refs?.let { "${it.path}:${it.lastModified()}:${it.length()}" } ?: "none"}"
 }
 
 /** Open the table that holds [record] and jump to that row (double-click in the data explorer). */

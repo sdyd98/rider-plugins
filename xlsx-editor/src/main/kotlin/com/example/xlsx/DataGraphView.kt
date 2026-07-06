@@ -24,6 +24,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -83,15 +84,45 @@ private class GraphData(
 /** Tool-window content: switch between the table-level ER map and the record-level data explorer. */
 @Composable
 fun RelationshipTabs(project: com.intellij.openapi.project.Project, fgArgb: Int, bgArgb: Int) {
-    // Schema from refs.json next to the OPEN workbook (works on any machine / any project). When the
-    // project ships no refs.json we fall back to mock data — never to a hardcoded sample path.
-    val schema = remember { resolveSchema(project) }
+    // Schema from refs.json next to the OPEN workbook, re-resolved REACTIVELY: on editor tab switches
+    // (message bus) and whenever the nearest refs.json appears/changes on disk (2 s signature poll on the
+    // UI dispatcher — a few file stats) — so a refs.json just written (e.g. by the MCP tools) shows up
+    // without reopening the tool window. No refs.json → guidance; there is NO sample/mock fallback.
+    var tick by remember { mutableStateOf(0) }
+    DisposableEffect(Unit) {
+        val conn = project.messageBus.connect()
+        conn.subscribe(
+            com.intellij.openapi.fileEditor.FileEditorManagerListener.FILE_EDITOR_MANAGER,
+            object : com.intellij.openapi.fileEditor.FileEditorManagerListener {
+                override fun selectionChanged(event: com.intellij.openapi.fileEditor.FileEditorManagerEvent) {
+                    tick++
+                }
+            },
+        )
+        onDispose { conn.disconnect() }
+    }
+    LaunchedEffect(Unit) {
+        var last = schemaSignature(project)
+        while (true) {
+            kotlinx.coroutines.delay(2000)
+            val sig = schemaSignature(project)
+            if (sig != last) {
+                last = sig
+                tick++
+            }
+        }
+    }
+    val schema = remember(tick) { if (project.isDisposed) null else resolveSchema(project) }
+    if (schema == null) {
+        NoSchemaView(project, fgArgb)
+        return
+    }
     // Build the index OFF the EDT — first open streams every workbook, which must not freeze the UI.
-    val loaded by produceState<Pair<RefGraph, RecordSource>?>(null, schema) {
-        value = if (schema == null) mockRefGraph() to mockDb()
-        else withContext(Dispatchers.Default) {
-            runCatching { buildRefGraph(schema) to IndexRecordGraph(schema, GameDataLoader.loadOrBuildIndex(schema)) }.getOrNull()
-                ?: (mockRefGraph() to mockDb())
+    // (RefSchema is a data class: an unchanged refs.json re-resolves to an EQUAL schema, so the key
+    // doesn't change and the index is not rebuilt.)
+    val loaded by produceState<Result<Pair<RefGraph, RecordSource>>?>(null, schema) {
+        value = withContext(Dispatchers.Default) {
+            runCatching { buildRefGraph(schema) to IndexRecordGraph(schema, GameDataLoader.loadOrBuildIndex(schema)) }
         }
     }
     var mode by remember { mutableStateOf(0) }
@@ -99,14 +130,21 @@ fun RelationshipTabs(project: com.intellij.openapi.project.Project, fgArgb: Int,
     val req = RelationshipBus.request.value
     LaunchedEffect(req) { if (req != null) mode = 1 }
 
-    val pair = loaded
-    if (pair == null) {
+    val result = loaded
+    if (result == null) {
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text("관계도 로딩 중…", color = Color(fgArgb).copy(alpha = 0.55f)) }
         return
     }
+    val pair = result.getOrNull()
+    if (pair == null) {
+        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            Text("관계도 데이터를 읽지 못했습니다 — refs.json과 워크북 파일을 확인하세요", color = Color(fgArgb).copy(alpha = 0.7f))
+        }
+        return
+    }
     val (graph, db) = pair
-    val onOpenTable: (String) -> Unit = { id -> schema?.let { openTableInEditor(project, it, id) } }
-    val onOpenRecord: (RefRecord) -> Unit = { rec -> schema?.let { openRecordInEditor(project, it, rec) } }
+    val onOpenTable: (String) -> Unit = { id -> openTableInEditor(project, schema, id) }
+    val onOpenRecord: (RefRecord) -> Unit = { rec -> openRecordInEditor(project, schema, rec) }
     val report = remember(db) { runCatching { db.validate() }.getOrNull() } // workbook integrity scan
     val requested = req?.let { r -> db.find(r.table, r.id) ?: db.find(r.table, r.id.substringBefore('·')) }
     Column(Modifier.fillMaxSize()) {
@@ -122,6 +160,30 @@ fun RelationshipTabs(project: com.intellij.openapi.project.Project, fgArgb: Int,
                 0 -> RefGraphView(graph, fgArgb, bgArgb, onOpenTable)
                 1 -> DataGraphView(db, fgArgb, bgArgb, onOpenRecord, requested)
                 else -> ValidationView(report, fgArgb, bgArgb, onOpenRecord)
+            }
+        }
+    }
+}
+
+/** Shown when there is no usable schema — guidance instead of sample data. Re-resolution is reactive,
+ *  so the moment a refs.json is created (or a workbook is opened) the real views replace this. */
+@Composable
+private fun NoSchemaView(project: com.intellij.openapi.project.Project, fgArgb: Int) {
+    val fg = Color(fgArgb)
+    val muted = fg.copy(alpha = 0.55f)
+    val openFile = com.intellij.openapi.fileEditor.FileEditorManager.getInstance(project).selectedFiles.firstOrNull()
+    Box(Modifier.fillMaxSize().padding(24.dp), contentAlignment = Alignment.Center) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            if (openFile == null) {
+                Text("엑셀 파일을 열면 관계도를 표시합니다", color = fg.copy(alpha = 0.8f))
+                Spacer(Modifier.height(8.dp))
+                Text("열린 워크북 폴더(또는 상위)의 refs.json 스키마를 사용합니다", color = muted, fontSize = 12.sp)
+            } else {
+                Text("refs.json 스키마가 없습니다 (또는 유효하지 않습니다)", color = fg.copy(alpha = 0.8f))
+                Spacer(Modifier.height(8.dp))
+                Text("워크북 폴더(또는 상위)에 refs.json이 생기면 자동으로 표시됩니다", color = muted, fontSize = 12.sp)
+                Spacer(Modifier.height(4.dp))
+                Text("AI 클라이언트(MCP)에서 build_refs로 시작하세요", color = muted, fontSize = 12.sp)
             }
         }
     }

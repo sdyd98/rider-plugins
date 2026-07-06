@@ -44,7 +44,7 @@ xlsx-editor/
     RefGraphToolWindow.kt     "관계도" tool window factory (Compose host)
     DataGraphView.kt          3 tabs: ER map · record lineage · integrity check (검사)
     RefGraphPanel.kt          table-level ER map (Compose Canvas, force layout)
-    RefGraphModel.kt          ER / record view-model (+ mock fallback) + TableColor.kt node colors
+    RefGraphModel.kt          ER / record view-model + TableColor.kt node colors (no refs.json → guidance, no mock)
     RelationshipSchema.kt     refs.json parse + buildRefGraph + IndexRecordGraph (real data path)
     GameDataLoader.kt         streaming POI index (+ on-disk .idx cache)
     RelationshipNavigation.kt schema resolution (nearest refs.json) + graph→grid navigation

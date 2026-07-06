@@ -10,7 +10,8 @@ import org.jetbrains.jewel.bridge.JewelComposePanel
 
 /**
  * Hosts the relationship views (ER map / record lineage / integrity check) in a dockable tool window.
- * Driven by the real refs schema + workbook data when available; falls back to [mockRefGraph] otherwise.
+ * Driven by the refs.json schema + workbook data, re-resolved reactively; without a schema it shows
+ * guidance (no sample data).
  *
  * [DumbAware] so the view is NOT replaced by the "indexes are built" placeholder while the IDE indexes —
  * our content reads the workbook directly (POI), it never needs the IDE's indexes.
