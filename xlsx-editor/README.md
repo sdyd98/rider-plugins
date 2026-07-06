@@ -48,7 +48,7 @@ xlsx-editor/
     RelationshipSchema.kt     refs.json parse + buildRefGraph + IndexRecordGraph (real data path)
     GameDataLoader.kt         streaming POI index (+ on-disk .idx cache)
     RelationshipNavigation.kt schema resolution (nearest refs.json) + graph→grid navigation
-    RelationshipBus.kt        grid→graph event bus (Ctrl+R)
+    RelationshipBus.kt        grid→graph event bus (Ctrl+R record · Ctrl+F table)
     SheetScanner.kt           judgment-free sheet access for the MCP tools (enumerate / raw rows / column values / overlap math)
     RefsMcpToolset.kt         10 MCP tools for refs.json authoring (IDE built-in MCP server)
   (shared in ../common: PoiClassLoaders.kt, CellFormatting.kt)
@@ -160,7 +160,8 @@ cross-references and shows them as a graph, driven by a `refs.json` schema that 
   that has no row) and orphan records (rows nothing references); the tab badges the broken count.
 
 **Navigation is bidirectional:** press **`Ctrl+R`** on a grid row to centre the explorer on that
-record (`RelationshipBus` → tool window); click a graph node to open its workbook and select the
+record, or **`Ctrl+F`** to centre the table-level ER map on the current sheet's table
+(`RelationshipBus` → tool window); click a graph node to open its workbook and select the
 row (`RelationshipNavigation` → `XlsxFileEditor.revealSheetRow`).
 
 **`refs.json`** describes each table (`file`, `sheet`, `headerRow`, `dataStartRow`, `id`, `display`)

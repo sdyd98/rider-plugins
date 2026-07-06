@@ -64,7 +64,7 @@ private const val TITLEH = 30f
  */
 @OptIn(ExperimentalComposeUiApi::class)
 @Composable
-fun RefGraphView(graph: RefGraph, fgArgb: Int, bgArgb: Int, onOpenTable: (String) -> Unit = {}) {
+fun RefGraphView(graph: RefGraph, fgArgb: Int, bgArgb: Int, onOpenTable: (String) -> Unit = {}, centerRequest: TableRef? = null) {
     val measurer = rememberTextMeasurer()
     val fg = Color(fgArgb)
     val bg = Color(bgArgb)
@@ -96,6 +96,10 @@ fun RefGraphView(graph: RefGraph, fgArgb: Int, bgArgb: Int, onOpenTable: (String
     // Default centre = the most-connected table (out refs + referrers).
     var center by remember(graph) {
         mutableStateOf(graph.tables.maxByOrNull { t -> t.columns.count { it.refTo != null } + (referrers[t.id]?.size ?: 0) }?.id)
+    }
+    // The grid (Ctrl+F) can request a centre — re-centre on it whenever a new request arrives.
+    LaunchedEffect(centerRequest, graph) {
+        centerRequest?.let { r -> if (graph.table(r.table) != null) center = r.table }
     }
     // Visible subgraph for the current centre: centre + tables it references + tables that reference it.
     val sub = remember(center, graph) {

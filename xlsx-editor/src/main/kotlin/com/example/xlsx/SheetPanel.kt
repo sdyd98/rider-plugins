@@ -151,6 +151,11 @@ class SheetPanel(
         object : DumbAwareAction() {
             override fun actionPerformed(e: AnActionEvent) = showRelationships(e.project)
         }.registerCustomShortcutSet(CustomShortcutSet.fromString("control R"), table)
+        // Ctrl+F: centre the table-level ER map on THIS sheet's table (overrides IDE Find while the
+        // grid is focused — the read-only grid has its own `/` filter instead).
+        object : DumbAwareAction() {
+            override fun actionPerformed(e: AnActionEvent) = showTableGraph(e.project)
+        }.registerCustomShortcutSet(CustomShortcutSet.fromString("control F"), table)
 
         model.addTableModelListener {
             rowHeader.revalidate(); rowHeader.repaint()
@@ -184,18 +189,29 @@ class SheetPanel(
         }.registerCustomShortcutSet(CustomShortcutSet.fromString(shortcut), table)
     }
 
-    /** Publish the selected row's record to the relationship explorer (if this sheet is in the schema). */
-    private fun showRelationships(project: Project?) {
-        if (project == null) return
-        // Resolve against the workbook's refs.json — the SAME source the tool window uses (not a hardcoded
-        // sample schema), so the published (table, id) actually matches a record in the explorer's graph.
-        val schema = resolveSchema(project) ?: return
-        // Prefer the table from the OPEN workbook: recursion can surface the same sheet name in several files
-        // under the root (all sharing the plain `sheet`; only tableId is qualified), so match on file too.
+    /** This sheet's schema table, resolved against the workbook's refs.json — the SAME source the tool
+     *  window uses. Prefers the table from the OPEN workbook: recursion can surface the same sheet name in
+     *  several files under the root (all sharing the plain `sheet`; only tableId is qualified). */
+    private fun schemaTableForThisSheet(project: Project): SchemaTable? {
+        val schema = resolveSchema(project) ?: return null
         val openRel = FileEditorManager.getInstance(project).selectedFiles.firstOrNull()
             ?.let { runCatching { File(it.path).relativeTo(schema.baseDir).invariantSeparatorsPath }.getOrNull() }
         val candidates = schema.tables.filter { it.sheet == model.sheetName }
-        val st = candidates.firstOrNull { it.file == openRel } ?: candidates.firstOrNull() ?: return
+        return candidates.firstOrNull { it.file == openRel } ?: candidates.firstOrNull()
+    }
+
+    /** Ctrl+F: centre the table-level ER map on this sheet's table (if it is in the schema). */
+    private fun showTableGraph(project: Project?) {
+        if (project == null) return
+        val st = schemaTableForThisSheet(project) ?: return
+        RelationshipBus.showTable(st.tableId)
+        ToolWindowManager.getInstance(project).getToolWindow("관계도")?.show()
+    }
+
+    /** Publish the selected row's record to the relationship explorer (if this sheet is in the schema). */
+    private fun showRelationships(project: Project?) {
+        if (project == null) return
+        val st = schemaTableForThisSheet(project) ?: return
         val idColumns = st.idCols.map { columnForFieldCode(it) }
         if (idColumns.any { it < 0 }) return // a key field isn't in this sheet → can't identify the row
         val viewRow = table.selectedRow.takeIf { it >= 0 } ?: return

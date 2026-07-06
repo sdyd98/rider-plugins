@@ -32,6 +32,8 @@ private val SHORTCUTS = listOf(
     Shortcut("Alt+K", "고정된 헤더 중 컬럼 이름으로 쓸 키 행 변경"),
     Shortcut("Alt+\\", "컬럼 목록(키 행 이름) → 선택한 열로 이동"),
     Shortcut("Ctrl+Alt+F", "현재 컬럼 값으로 필터"),
+    Shortcut("Ctrl+R", "현재 행을 관계도(데이터 연결)에서 보기"),
+    Shortcut("Ctrl+F", "현재 테이블을 관계도(테이블 관계도)에서 보기"),
     Shortcut("/", "상단 필터(정규식)로 이동 · Enter로 적용 후 복귀"),
     Shortcut("?", "이 도움말 · Esc 닫기"),
 )

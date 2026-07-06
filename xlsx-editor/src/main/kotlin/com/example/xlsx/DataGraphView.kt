@@ -129,6 +129,9 @@ fun RelationshipTabs(project: com.intellij.openapi.project.Project, fgArgb: Int,
     // The grid (Ctrl+R) can request a specific record → switch to the data view + centre on it.
     val req = RelationshipBus.request.value
     LaunchedEffect(req) { if (req != null) mode = 1 }
+    // The grid (Ctrl+F) can request a table → switch to the ER map + centre on it.
+    val tableReq = RelationshipBus.tableRequest.value
+    LaunchedEffect(tableReq) { if (tableReq != null) mode = 0 }
 
     val result = loaded
     if (result == null) {
@@ -157,7 +160,7 @@ fun RelationshipTabs(project: com.intellij.openapi.project.Project, fgArgb: Int,
         }
         Box(Modifier.weight(1f).fillMaxSize()) {
             when (mode) {
-                0 -> RefGraphView(graph, fgArgb, bgArgb, onOpenTable)
+                0 -> RefGraphView(graph, fgArgb, bgArgb, onOpenTable, centerRequest = tableReq)
                 1 -> DataGraphView(db, fgArgb, bgArgb, onOpenRecord, requested)
                 else -> ValidationView(report, fgArgb, bgArgb, onOpenRecord)
             }
