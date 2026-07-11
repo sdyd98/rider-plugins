@@ -392,8 +392,28 @@ class LogViewerPanel(
         val gen = readerGeneration
         reader.startTail(
             onAppend = { batch -> onReaderBatch(batch, gen) },
-            onError = { e -> onEdt { LOG.info("Log tail ended: $sourceLabel — ${e.message}") } },
+            onError = { e ->
+                onEdt {
+                    LOG.info("Log tail ended: $sourceLabel — ${e.message}")
+                    if (gen == readerGeneration) setStatusError(e)
+                }
+            },
+            onState = { st -> onEdt { if (gen == readerGeneration) onTailState(st) } },
         )
+    }
+
+    /** Surface remote-tail reconnects in the status bar (the reader retries with backoff by itself). */
+    private fun onTailState(st: TailState) {
+        when (st) {
+            TailState.RECONNECTING -> {
+                statusError = "원격 연결 끊김 — 재연결 중… (끊긴 동안의 줄은 누락될 수 있음)"
+                pushChrome()
+            }
+            TailState.LIVE -> if (statusError != null) {
+                statusError = null
+                pushChrome()
+            }
+        }
     }
 
     /**

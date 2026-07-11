@@ -68,7 +68,11 @@ class LogFileEditor(project: Project, private val file: VirtualFile) : UserDataH
                 if (batch.isNotEmpty()) onBatch(batch)
             }
         }
-        override fun startTail(onAppend: (List<String>) -> Unit, onError: (Throwable) -> Unit) {} // not supported
+        override fun startTail(
+            onAppend: (List<String>) -> Unit,
+            onError: (Throwable) -> Unit,
+            onState: (TailState) -> Unit,
+        ) {} // not supported
         override fun close() {}
     }
 }

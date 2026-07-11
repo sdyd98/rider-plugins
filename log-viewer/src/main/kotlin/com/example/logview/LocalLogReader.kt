@@ -38,8 +38,15 @@ class LocalLogReader(private val path: Path, charset: Charset = Charsets.UTF_8) 
         }
     }
 
-    override fun startTail(onAppend: (List<String>) -> Unit, onError: (Throwable) -> Unit) {
+    override fun startTail(
+        onAppend: (List<String>) -> Unit,
+        onError: (Throwable) -> Unit,
+        onState: (TailState) -> Unit,
+    ) {
         if (closed || follow != null) return
+        // Local polling never "disconnects" — a missing file is just re-checked next tick — so the
+        // state is LIVE for the tail's whole life.
+        onState(TailState.LIVE)
         val t = Thread({
             while (!closed) {
                 try {

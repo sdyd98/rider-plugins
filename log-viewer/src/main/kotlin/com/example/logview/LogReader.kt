@@ -16,8 +16,22 @@ interface LogReader : Closeable {
 
     /**
      * Begin following appended lines until [close]. New lines are delivered (possibly from a private
-     * daemon thread) via [onAppend]; unrecoverable failures via [onError]. Idempotent-safe: calling it
-     * after [close] is a no-op.
+     * daemon thread) via [onAppend]; unrecoverable failures via [onError]. [onState] reports tail
+     * connection transitions (remote readers reconnect with backoff and flip RECONNECTING ↔ LIVE;
+     * local polling never disconnects). Idempotent-safe: calling it after [close] is a no-op.
      */
-    fun startTail(onAppend: (List<String>) -> Unit, onError: (Throwable) -> Unit)
+    fun startTail(
+        onAppend: (List<String>) -> Unit,
+        onError: (Throwable) -> Unit,
+        onState: (TailState) -> Unit = {},
+    )
+}
+
+/** Tail connection state, surfaced in the status bar. */
+enum class TailState {
+    /** The tail is connected and streaming (or idle-but-healthy). */
+    LIVE,
+
+    /** The tail lost its stream and is retrying with backoff; appended lines during the outage are lost. */
+    RECONNECTING,
 }
