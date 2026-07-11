@@ -141,6 +141,7 @@ class LogTableModel : AbstractTableModel() {
         val line = LogLine(nextLineNumber++, p.raw, p.clean, level, p.timestampMillis, isCont, p.hasAnsi, messageStart, thread)
         if (isCont) {
             line.blockStart = currentBlockStart
+            lines[currentBlockStart].contCount++
         } else {
             line.blockStart = lines.size
             currentBlockStart = lines.size
@@ -185,12 +186,11 @@ class LogTableModel : AbstractTableModel() {
         return l.isContinuation && l.blockStart in foldedBlocks
     }
 
-    /** True if [row] begins a block that has at least one continuation line (i.e. is foldable). */
+    /** True if [row] begins a block that has at least one continuation line (i.e. is foldable). O(1). */
     fun isFoldableStart(row: Int): Boolean {
         if (row < 0 || row >= lines.size) return false
-        if (lines[row].isContinuation) return false
-        val next = row + 1
-        return next < lines.size && lines[next].isContinuation && lines[next].blockStart == row
+        val l = lines[row]
+        return !l.isContinuation && l.contCount > 0
     }
 
     /** Toggle the fold of the block owning [row]. Returns the block-start index, or -1 if not foldable. */
@@ -208,15 +208,20 @@ class LogTableModel : AbstractTableModel() {
         return start..(start + blockContinuationCount(start))
     }
 
-    /** Number of continuation lines belonging to the block that starts at [blockStart]. */
+    /** Number of continuation lines belonging to the block that starts at [blockStart]. O(1). */
     fun blockContinuationCount(blockStart: Int): Int {
         if (blockStart < 0 || blockStart >= lines.size) return 0
-        var n = 0
-        var i = blockStart + 1
-        while (i < lines.size && lines[i].isContinuation && lines[i].blockStart == blockStart) {
-            n++; i++
-        }
-        return n
+        return lines[blockStart].contCount
+    }
+
+    /**
+     * Re-filter + repaint ONE block's rows after its fold state changed. With the panel's
+     * `sortsOnUpdates = true` sorter this re-runs the row filter for just these rows — a fold toggle
+     * stays O(block) instead of rebuilding the filter over the whole model.
+     */
+    fun notifyBlockUpdated(blockStart: Int) {
+        if (blockStart < 0 || blockStart >= lines.size) return
+        fireTableRowsUpdated(blockStart, blockStart + lines[blockStart].contCount)
     }
 
     fun foldAll() {

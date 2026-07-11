@@ -119,9 +119,13 @@ class LogViewerPanel(
     private val chrome = mutableStateOf(LogChromeData())
     private val filterDebounce = Timer(150) { applyFilter(filterQuery.text.toString()) }.apply { isRepeats = false }
 
+    // Filter-only sorter: sorting is disabled on EVERY column so the view always keeps model
+    // (chronological) order — which also makes `sortsOnUpdates = true` safe: appends can never
+    // reshuffle, and a rowsUpdated event re-runs the filter for JUST the updated rows. That is what
+    // lets toggleFold re-filter one block instead of rebuilding the filter over the whole model.
     private val sorter = TableRowSorter(model).apply {
-        sortsOnUpdates = false
-        setSortable(0, false)
+        sortsOnUpdates = true
+        for (c in 0 until model.columnCount) setSortable(c, false)
     }
 
     // vim search marks store level-jump state; the controller calls back into this panel.
@@ -492,20 +496,33 @@ class LogViewerPanel(
         val pat = searchPattern
         val ignoreCase = !caseSensitive
         return object : RowFilter<LogTableModel, Int>() {
+            // Block-aware search: a multi-line record (a stack trace) is kept intact when ANY of its
+            // lines matches, so a search never strands a primary line from its continuations or
+            // vice-versa. The sorter evaluates rows in ascending model order and a block's rows are
+            // contiguous, so a one-entry memo makes this O(1) per member row — each block is scanned
+            // once per rebuild. (Naively re-scanning the block for every member row made a refilter
+            // O(k²) per k-line block: a 200k-line log full of stack traces took seconds per keystroke.)
+            private var memoBlock = -1
+            private var memoHit = false
             override fun include(entry: Entry<out LogTableModel, out Int>): Boolean {
                 val row = entry.identifier
                 if (model.isHiddenByFold(row)) return false
                 if (model.rawAt(row).isBlank()) return false // drop blank (newline-only) rows entirely
                 if (model.levelAt(row) !in enabledLevels) return false
                 if (q.isEmpty()) return true
-                // Block-aware search: a multi-line record (a stack trace) is kept intact when ANY of its
-                // lines matches, so a search never strands a primary line from its continuations or vice-versa.
-                for (m in model.blockRange(row)) {
-                    val raw = model.rawAt(m)
-                    val hit = if (pat != null) pat.matcher(raw).find() else raw.contains(q, ignoreCase = ignoreCase)
-                    if (hit) return true
+                val block = model.blockRange(row)
+                if (block.first != memoBlock) {
+                    memoBlock = block.first
+                    memoHit = false
+                    for (m in block) {
+                        val raw = model.rawAt(m)
+                        if (if (pat != null) pat.matcher(raw).find() else raw.contains(q, ignoreCase = ignoreCase)) {
+                            memoHit = true
+                            break
+                        }
+                    }
                 }
-                return false
+                return memoHit
             }
         }
     }
@@ -621,13 +638,14 @@ class LogViewerPanel(
     }
 
     private fun toggleFold(modelRow: Int) {
-        if (model.toggleFold(modelRow) < 0) return
-        sorter.rowFilter = buildRowFilter()
-        // folding changes the visible row count via a RowSorterEvent (not a TableModelEvent), so the
-        // gutter's preferred height must be re-queried explicitly here.
+        val blockStart = model.toggleFold(modelRow)
+        if (blockStart < 0) return
+        // Re-filter just this block's rows (sortsOnUpdates) — NOT a whole-model filter rebuild.
+        model.notifyBlockUpdated(blockStart)
+        // folding changes the visible row count, so the gutter's preferred height must be re-queried.
         gutter.revalidate(); gutter.repaint()
         // keep the block-start selected/visible
-        seekToModelRow(model.lineAt(modelRow.coerceIn(0, model.rowCount - 1)).blockStart.coerceAtLeast(0))
+        seekToModelRow(blockStart)
     }
 
     private fun foldAll(all: Boolean) {
@@ -721,10 +739,21 @@ class LogViewerPanel(
         fitColumnWidth()
     }
 
+    // Upper bound of one glyph's advance (CJK-wide) — lets the streaming path skip the real
+    // FontMetrics measurement for every line that can't possibly beat the current max width.
+    private val maxCharW: Int by lazy { renderer.maxCharWidth() }
+
     private fun sizeContentColumnFor(rows: List<ParsedRow>) {
         var w = maxLineWidth
-        // Always measure (batches are small): a glyph-width heuristic would miss double-width CJK lines.
-        for (p in rows) w = maxOf(w, renderer.lineWidth(p.raw))
+        val cap = maxCharW
+        val pad = JBUI.scale(24) // lineWidth()'s padding — keep the guard's bound consistent with it
+        // This runs on the EDT for EVERY streamed line; measuring each one froze large loads. The
+        // length×maxCharWidth bound is conservative (assumes every glyph is double-width), so only
+        // genuine new-maximum candidates pay for a real measurement.
+        for (p in rows) {
+            if (p.raw.length * cap + pad <= w) continue
+            w = maxOf(w, renderer.lineWidth(p.raw))
+        }
         if (w != maxLineWidth) {
             maxLineWidth = w
             fitColumnWidth()

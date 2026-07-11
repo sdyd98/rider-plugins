@@ -30,6 +30,14 @@ class LogLine(
     /** Model index of this line's block-primary line; set by [LogTableModel] as lines are appended. */
     var blockStart: Int = -1
 
+    /**
+     * On a block-primary line: how many continuation lines follow it (maintained by [LogTableModel]
+     * as lines are appended). Always 0 on continuation lines. Cached so block size / foldability /
+     * range queries are O(1) — the row filter asks them for every row of every block, and a linear
+     * rescan made filtering O(k²) per k-line stack trace.
+     */
+    var contCount: Int = 0
+
     val hasTime: Boolean get() = timestampMillis != NO_TIME
 
     // The display-derived fields below are lazy: the model holds every appended line, but only the ~50

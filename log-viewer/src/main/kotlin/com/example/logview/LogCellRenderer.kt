@@ -187,4 +187,8 @@ class LogCellRenderer(
 
     /** Pixel width needed to show [line] fully (for sizing the Message column). */
     fun lineWidth(line: String): Int = getFontMetrics(mono).stringWidth(line) + JBUI.scale(24)
+
+    /** Upper bound of one glyph's advance in the mono font (double-width CJK included) — for cheap
+     *  "this line can't possibly be the widest" guards before a real [lineWidth] measurement. */
+    fun maxCharWidth(): Int = getFontMetrics(mono).let { maxOf(it.charWidth('W'), it.charWidth('한')) }
 }
