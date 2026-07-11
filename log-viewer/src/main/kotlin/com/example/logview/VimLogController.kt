@@ -1,23 +1,14 @@
 package com.example.logview
 
+import com.example.grid.VimTableController
 import com.intellij.openapi.ide.CopyPasteManager
-import com.intellij.openapi.actionSystem.AnActionEvent
-import com.intellij.openapi.actionSystem.CustomShortcutSet
-import com.intellij.openapi.project.DumbAwareAction
 import com.intellij.ui.table.JBTable
 import com.intellij.util.ui.JBUI
 import java.awt.KeyboardFocusManager
 import java.awt.Point
 import java.awt.Rectangle
 import java.awt.datatransfer.StringSelection
-import java.awt.event.ActionEvent
-import java.awt.event.FocusEvent
-import java.awt.event.FocusListener
-import java.awt.event.KeyEvent
-import javax.swing.AbstractAction
-import javax.swing.JComponent
 import javax.swing.JViewport
-import javax.swing.KeyStroke
 
 /**
  * Always-on vim **navigation** for the read-only log grid (one tall content column).
@@ -29,9 +20,12 @@ import javax.swing.KeyStroke
  * `{`/`}` blank-line block boundary · `/` focus filter · `n`/`N` next/prev search match ·
  * `]e`/`[e` (also `w` `i` `d` `t`) next/prev line of that level · `za` toggle fold, `zR`/`zM` open/close all ·
  * `m{a-z}`/`` `{a-z} `` marks · `J` pretty-print JSON on this line · `T` jump to a timestamp · `?` help.
+ *
+ * Key installation, count/mark state, and the scroll family live in [VimTableController] (shared
+ * with xlsx-editor's VimGridController); this class owns the char cursor, folds, and yank.
  */
 class VimLogController(
-    private val table: JBTable,
+    table: JBTable,
     private val model: LogTableModel,
     private val onFocusFilter: () -> Unit,
     private val onToggleFold: () -> Unit,
@@ -47,14 +41,9 @@ class VimLogController(
     private val onExitLeft: () -> Unit = {},
     /** `gt` / `gT` — switch to the next / previous file (session tab). */
     private val onSwitchTab: (dir: Int) -> Unit = {},
-) {
-    private var enabled = false
-    private val count = StringBuilder()
-    private var pending: Char? = null // 'g' | 'z' | '[' | ']' | 'y'
-    private var pendingMark: Char? = null // 'm' set / '`' jump
+) : VimTableController(table) {
 
     private val marks = HashMap<Char, Int>() // mark letter -> MODEL row
-    private var shortcutsRegistered = false
 
     private var curCol = COL_TIME    // the vim "cursor" column — starts at Time when entering the viewer
     private var msgCharIndex = 0     // char-cursor position inside the Message column
@@ -68,61 +57,15 @@ class VimLogController(
         table.getFontMetrics(LogFonts.MONO).charWidth('m').coerceAtLeast(JBUI.scale(7))
     }
 
-    private val keyChars = "abcdefghijklmnopqrstuvwxyzGHLMNTJRV0123456789\$^{}[]`/?*#"
+    override val keyChars = "abcdefghijklmnopqrstuvwxyzGHLMNTJRV0123456789\$^{}[]`/?*#"
 
-    init {
-        table.addFocusListener(object : FocusListener {
-            override fun focusGained(e: FocusEvent) {
-                if (!enabled) return
-                curCol = firstVisibleCol() // always enter the viewer at the first column (Time)
-                if (table.selectedRow < 0 && table.rowCount > 0) select(0) else refreshLead()
-            }
-            override fun focusLost(e: FocusEvent) {}
-        })
+    override fun focusGained() {
+        curCol = firstVisibleCol() // always enter the viewer at the first column (Time)
+        if (table.selectedRow < 0 && table.rowCount > 0) select(0) else refreshLead()
     }
 
-    fun setEnabled(on: Boolean) {
-        if (enabled == on) return
-        enabled = on
-        if (on) installBindings()
-        reset()
-    }
-
-    private fun installBindings() {
-        val im = table.getInputMap(JComponent.WHEN_FOCUSED)
-        val am = table.actionMap
-        for (ch in keyChars) {
-            im.put(KeyStroke.getKeyStroke(ch), "vimlog.$ch")
-            am.put("vimlog.$ch", action { pressChar(ch) })
-        }
-        im.put(KeyStroke.getKeyStroke(KeyEvent.VK_ESCAPE, 0), "vimlog.esc")
-        am.put("vimlog.esc", action { handleEscape() })
-
-        if (!shortcutsRegistered) {
-            shortcutsRegistered = true
-            registerChord("ctrl D") { halfPage(1) }
-            registerChord("ctrl U") { halfPage(-1) }
-            registerChord("ctrl E") { scrollLines(1) }
-            registerChord("ctrl Y") { scrollLines(-1) }
-        }
-    }
-
-    private fun registerChord(shortcut: String, run: () -> Unit) {
-        object : DumbAwareAction() {
-            override fun actionPerformed(e: AnActionEvent) { if (enabled) run() }
-        }.registerCustomShortcutSet(CustomShortcutSet.fromString(shortcut), table)
-    }
-
-    private fun action(run: () -> Unit) = object : AbstractAction() {
-        override fun actionPerformed(e: ActionEvent) { if (enabled) run() }
-    }
-
-    private fun pressChar(ch: Char) {
-        if (pendingMark != null) {
-            val mode = pendingMark; pendingMark = null
-            if (ch.isLetter()) { if (mode == 'm') setMark(ch) else jumpToMark(ch) }
-            reset(); return
-        }
+    override fun pressChar(ch: Char) {
+        if (handleMarkKey(ch)) return
         // `]`/`[` then a level key jumps to the next/prev line of that level.
         if (pending == ']' || pending == '[') {
             val dir = if (pending == ']') 1 else -1
@@ -130,8 +73,8 @@ class VimLogController(
             reset(); return
         }
         if (pending == 'y') { val yy = ch == 'y'; reset(); if (yy) yankLines(curRow(), curRow()); return }
-        if (ch.isDigit() && !(ch == '0' && count.isEmpty())) { count.append(ch); return }
-        val n = count.toString().toIntOrNull() ?: 1
+        if (bufferCountDigit(ch)) return
+        val n = countOr1()
         when (ch) {
             'j' -> { move(n); reset() }
             'k' -> { move(-n); reset() }
@@ -145,7 +88,7 @@ class VimLogController(
             'w' -> { reset(); if (curCol == COL_MSG) wordForward(n) }
             'e' -> { reset(); if (curCol == COL_MSG) wordEnd(n) }
             'y' -> { when { charVisual -> yankCharVisual(); visual -> yankVisual(); else -> pending = 'y' } }
-            'G' -> { gotoRow(if (count.isNotEmpty()) n - 1 else table.rowCount - 1); reset() }
+            'G' -> { gotoRow(if (hasCount()) n - 1 else table.rowCount - 1); reset() }
             'g' -> if (pending == 'g') { gotoRow(0); reset() } else { pending = 'g' }
             'z' -> if (pending == 'z') { reset(); scrollCursorRow(ScrollTo.CENTER) } else { pending = 'z' }
             'a' -> { val z = pending == 'z'; reset(); if (z) onToggleFold() }
@@ -185,14 +128,13 @@ class VimLogController(
 
     private fun curRow() = if (visual) cursorRow.coerceIn(0, maxOf(0, table.rowCount - 1)) else table.selectedRow.coerceAtLeast(0)
 
+    override fun moveRows(delta: Int) = move(delta)
+
+    override fun selectRow(row: Int) = select(row)
+
     private fun move(d: Int) {
         if (table.rowCount == 0) return
         select((curRow() + d).coerceIn(0, table.rowCount - 1))
-    }
-
-    private fun gotoRow(row: Int) {
-        if (table.rowCount == 0) return
-        select(row.coerceIn(0, table.rowCount - 1))
     }
 
     private fun select(row: Int) {
@@ -214,8 +156,6 @@ class VimLogController(
         if (vp != null) table.scrollRectToVisible(Rectangle(vp.viewPosition.x, rect.y, 1, rect.height))
         else table.scrollRectToVisible(rect)
     }
-
-    private fun viewport(): JViewport? = table.parent as? JViewport
 
     // ---- Column cursor + horizontal text scroll (h/l) ----
 
@@ -439,55 +379,6 @@ class VimLogController(
         vp.viewPosition = Point(x.coerceIn(0, maxX), vp.viewPosition.y)
     }
 
-    private fun halfPage(direction: Int) {
-        if (table.rowCount == 0) return
-        val rowH = maxOf(1, table.rowHeight)
-        val rows = maxOf(1, table.visibleRect.height / rowH)
-        move(direction * maxOf(1, rows / 2))
-    }
-
-    private fun scrollLines(n: Int) {
-        val vp = viewport() ?: return
-        val rowH = maxOf(1, table.rowHeight)
-        val maxY = maxOf(0, table.height - vp.height)
-        val pos = vp.viewPosition
-        pos.y = (pos.y + n * rowH).coerceIn(0, maxY)
-        vp.viewPosition = pos
-    }
-
-    private enum class ScrollTo { TOP, CENTER, BOTTOM }
-
-    private fun scrollCursorRow(where: ScrollTo) {
-        val vp = viewport() ?: return
-        val row = table.selectedRow
-        if (row < 0) return
-        val rect = table.getCellRect(row, 0, true)
-        val viewH = vp.height
-        val y = when (where) {
-            ScrollTo.TOP -> rect.y
-            ScrollTo.BOTTOM -> rect.y + rect.height - viewH
-            ScrollTo.CENTER -> rect.y - (viewH - rect.height) / 2
-        }
-        val maxY = maxOf(0, table.height - viewH)
-        vp.viewPosition = Point(vp.viewPosition.x, y.coerceIn(0, maxY))
-    }
-
-    private enum class ScreenPos { TOP, MIDDLE, BOTTOM }
-
-    private fun screenRow(pos: ScreenPos) {
-        val vp = viewport() ?: return
-        if (table.rowCount == 0) return
-        val rowH = maxOf(1, table.rowHeight)
-        val first = (vp.viewPosition.y / rowH).coerceIn(0, table.rowCount - 1)
-        val visibleRows = maxOf(1, vp.height / rowH)
-        val last = (first + visibleRows - 1).coerceAtMost(table.rowCount - 1)
-        select(when (pos) {
-            ScreenPos.TOP -> first
-            ScreenPos.BOTTOM -> last
-            ScreenPos.MIDDLE -> (first + last) / 2
-        })
-    }
-
     private fun jumpBlankRow(dir: Int) {
         val n = table.rowCount
         if (n == 0) return
@@ -506,13 +397,13 @@ class VimLogController(
         }
     }
 
-    private fun setMark(ch: Char) {
+    override fun setMark(ch: Char) {
         val r = table.selectedRow
         if (r < 0) return
         marks[ch] = table.convertRowIndexToModel(r)
     }
 
-    private fun jumpToMark(ch: Char) {
+    override fun jumpToMark(ch: Char) {
         val mr = marks[ch] ?: return
         val vr = runCatching { table.convertRowIndexToView(mr) }.getOrDefault(-1)
         if (vr in 0 until table.rowCount) select(vr)
@@ -529,19 +420,13 @@ class VimLogController(
     private fun showHelp() = showLogHelpPopup(table)
 
     /** Esc cancels in stages: char-visual → line-visual → pending/count → active search → release focus. */
-    private fun handleEscape() {
+    override fun handleEscape() {
         when {
             charVisual -> exitCharVisual()
             visual -> exitVisual()
-            pending != null || pendingMark != null || count.isNotEmpty() -> reset()
+            pending != null || pendingMark != null || hasCount() -> reset()
             onEscape() -> {} // the panel cleared an active search/filter
             else -> KeyboardFocusManager.getCurrentKeyboardFocusManager().clearGlobalFocusOwner()
         }
-    }
-
-    private fun reset() {
-        count.setLength(0)
-        pending = null
-        pendingMark = null
     }
 }

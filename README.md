@@ -11,7 +11,7 @@ rider-plugins/
 ├─ build.gradle.kts             모든 모듈의 플러그인 버전 선언(apply false)
 ├─ gradle/libs.versions.toml    공유 의존성 버전(버전 카탈로그)
 ├─ gradle.properties            riderLocalPath + 공유 Gradle/Kotlin 플래그
-├─ common/                      공용 라이브러리(POI 헬퍼; 그리드/vim 인프라가 이쪽으로 이동 예정)
+├─ common/                      공용 라이브러리(POI 헬퍼 + vim 컨트롤러 베이스)
 │  └─ src/main/kotlin/…
 ├─ xlsx-editor/                 플러그인: IDE 내장 .xlsx/.xls 그리드 뷰어 (자체 README 참고)
 │  ├─ build.gradle.kts
@@ -23,10 +23,13 @@ rider-plugins/
    └─ src/main/{kotlin,resources/META-INF/plugin.xml}
 ```
 
-- **`common`** — 플러그인 간 공유 코드용 순수 Kotlin 라이브러리(현재 POI 스레드 컨텍스트 클래스로더 헬퍼와
-  캐시된 수식 포매팅). `plugin.xml`이 없고, 의존하는 플러그인에 클래스가 번들됩니다
-  (`implementation(project(":common"))`). 공유 UI(그리드 렌더러, vim 컨트롤러)가 이쪽으로 옮겨오면 플랫폼
-  컴파일을 위해 `org.jetbrains.intellij.platform.module`도 적용할 예정입니다.
+- **`common`** — 플러그인 간 공유 코드 라이브러리: POI 스레드 컨텍스트 클래스로더 헬퍼, 캐시된 수식
+  포매팅, 그리고 두 플러그인의 vim 내비게이션이 공유하는 상태 기계/스크롤 베이스 클래스
+  (`com.example.grid.VimTableController` — 헤드리스 단위 테스트 포함). 플랫폼 클래스(JBTable 등) 컴파일을
+  위해 `org.jetbrains.intellij.platform.module`을 적용하며, `plugin.xml`은 없습니다. 각 플러그인은
+  `pluginComposedModule(implementation(project(":common")))`로 이 클래스들을 **자기 메인 jar에 병합**해
+  번들합니다(메인 플러그인 클래스가 직접 상속하므로 lib/modules 콘텐츠 모듈이 아닌 메인 클래스로더에
+  있어야 함).
 - **`xlsx-editor`** — 첫 번째 플러그인. Excel 파일을 IDE 내장 읽기 전용 그리드 뷰어로 엽니다(vim 내비게이션,
   필터, 고정 헤더). 동작은 [`xlsx-editor/README.md`](xlsx-editor/README.md) 참고.
 - **`log-viewer`** — 두 번째 플러그인. 로컬 및 원격(SSH/SFTP) 로그 파일의 빠른 읽기 전용 뷰어(라이브 tail,
@@ -54,7 +57,8 @@ $env:JAVA_HOME = "C:\Program Files\JetBrains\PyCharm 2025.2.1.1\jbr"
 1. `<plugin>/build.gradle.kts` 생성(`xlsx-editor/build.gradle.kts`를 복사해 `plugin.xml` 조정).
 2. `src/main/kotlin` + `src/main/resources/META-INF/plugin.xml` 추가.
 3. `settings.gradle.kts`에 `include(":<plugin>")`.
-4. 공유 코드는 `implementation(project(":common"))`로 재사용.
+4. 공유 코드는 `pluginComposedModule(implementation(project(":common")))`로 재사용
+   (`dependencies { intellijPlatform { … } }` 블록 안).
 
 ## 배포
 

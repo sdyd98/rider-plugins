@@ -1,19 +1,8 @@
 package com.example.xlsx
 
-import com.intellij.openapi.actionSystem.AnActionEvent
-import com.intellij.openapi.actionSystem.CustomShortcutSet
-import com.intellij.openapi.project.DumbAwareAction
+import com.example.grid.VimTableController
 import com.intellij.openapi.ui.popup.JBPopupFactory
 import com.intellij.ui.table.JBTable
-import java.awt.Point
-import java.awt.event.ActionEvent
-import java.awt.event.FocusEvent
-import java.awt.event.FocusListener
-import java.awt.event.KeyEvent
-import javax.swing.AbstractAction
-import javax.swing.JComponent
-import javax.swing.JViewport
-import javax.swing.KeyStroke
 
 /**
  * Always-on modal (vim-like) **navigation** for a read-only spreadsheet [JBTable].
@@ -26,16 +15,16 @@ import javax.swing.KeyStroke
  * `m{a-z}` set mark / `` `{a-z} `` jump to mark · `gt`/`gT` switch sheet · `/` filter ·
  * `V` visual-line select (then `j`/`k` extend, Esc cancel — use Ctrl+C to copy) · `?` help.
  * The grid is a viewer, so there are no editing commands.
+ *
+ * Key installation, count/mark state, and the scroll family live in [VimTableController] (shared
+ * with log-viewer's VimLogController); this class owns the 2D cell cursor and dispatch.
  */
 class VimGridController(
-    private val table: JBTable,
+    table: JBTable,
     private val onFocusFilter: () -> Unit,
     private val onNextSheet: () -> Unit = {},
     private val onPrevSheet: () -> Unit = {},
-) {
-    private var enabled = false
-    private val count = StringBuilder()
-    private var pending: Char? = null
+) : VimTableController(table) {
 
     private var visualMode = false
     private var visualAnchor = 0
@@ -43,87 +32,25 @@ class VimGridController(
 
     // a-z are all bound (read-only grid, so vim owns them) so a mark name after `m`/`` ` `` is captured;
     // plus the navigation symbols/uppercase. Unused letters are harmless no-ops.
-    private val keyChars = "abcdefghijklmnopqrstuvwxyzGHLMNTV0123456789\$^*#{}`/?"
-    private var shortcutsRegistered = false
+    override val keyChars = "abcdefghijklmnopqrstuvwxyzGHLMNTV0123456789\$^*#{}`/?"
 
-    private var pendingMark: Char? = null // 'm' = waiting to set a mark, '`' = waiting to jump
     private val marks = HashMap<Char, Pair<Int, Int>>() // mark letter -> (model row, model col)
     private var searchValue: String? = null // last `*`/`#` value (repeated by n / N)
     private var searchCol = -1
 
-    init {
-        table.addFocusListener(object : FocusListener {
-            override fun focusGained(e: FocusEvent) {
-                if (enabled) {
-                    if (!visualMode) reset()
-                    if (table.selectedRow < 0 && table.rowCount > 0) table.changeSelection(0, 0, false, false)
-                }
-            }
-            override fun focusLost(e: FocusEvent) {}
-        })
+    override fun focusGained() {
+        if (!visualMode) reset()
+        if (table.selectedRow < 0 && table.rowCount > 0) table.changeSelection(0, 0, false, false)
     }
 
-    fun setEnabled(on: Boolean) {
-        if (enabled == on) return
-        enabled = on
-        if (on) installBindings()
-        reset()
-    }
-
-    private fun installBindings() {
-        val im = table.getInputMap(JComponent.WHEN_FOCUSED)
-        val am = table.actionMap
-        for (ch in keyChars) {
-            im.put(KeyStroke.getKeyStroke(ch), "vim.char.$ch")
-            am.put("vim.char.$ch", action { pressChar(ch) })
-        }
-        im.put(KeyStroke.getKeyStroke(KeyEvent.VK_ESCAPE, 0), "vim.esc")
-        am.put("vim.esc", action { escapePressed() })
-
-        if (!shortcutsRegistered) {
-            shortcutsRegistered = true
-            // Chords via the IDE action system so they beat IDE-global bindings on the grid.
-            registerChord("ctrl D") { halfPage(1) }
-            registerChord("ctrl U") { halfPage(-1) }
-            registerChord("ctrl E") { scrollLines(1) }
-            registerChord("ctrl Y") { scrollLines(-1) }
-        }
-    }
-
-    private fun registerChord(shortcut: String, run: () -> Unit) {
-        object : DumbAwareAction() {
-            override fun actionPerformed(e: AnActionEvent) {
-                if (enabled) run()
-            }
-        }.registerCustomShortcutSet(CustomShortcutSet.fromString(shortcut), table)
-    }
-
-    private fun action(run: () -> Unit) = object : AbstractAction() {
-        override fun actionPerformed(e: ActionEvent) {
-            if (enabled) run()
-        }
-    }
-
-    private fun pressChar(ch: Char) {
+    override fun pressChar(ch: Char) {
         if (visualMode) {
             handleVisual(ch)
             return
         }
-        // The key right after `m` / `` ` `` is the mark name (set / jump).
-        if (pendingMark != null) {
-            val mode = pendingMark
-            pendingMark = null
-            if (ch.isLetter()) {
-                if (mode == 'm') setMark(ch) else jumpToMark(ch)
-            }
-            reset()
-            return
-        }
-        if (ch.isDigit() && !(ch == '0' && count.isEmpty())) {
-            count.append(ch)
-            return
-        }
-        val n = count.toString().toIntOrNull() ?: 1
+        if (handleMarkKey(ch)) return
+        if (bufferCountDigit(ch)) return
+        val n = countOr1()
         when (ch) {
             'h' -> { move(0, -n); reset() }
             'l' -> { move(0, n); reset() }
@@ -134,7 +61,7 @@ class VimGridController(
             '$' -> { moveToColumn(lastDataColumn()); reset() }
             'w' -> { wordForward(); reset() }
             'e' -> { wordEnd(); reset() }
-            'G' -> { gotoRow(if (count.isNotEmpty()) n - 1 else table.rowCount - 1); reset() }
+            'G' -> { gotoRow(if (hasCount()) n - 1 else table.rowCount - 1); reset() }
             'g' -> if (pending == 'g') { gotoRow(0); reset() } else { pending = 'g' }
             'z' -> if (pending == 'z') { scrollCursorRow(ScrollTo.CENTER); reset() } else { pending = 'z' }
             't' -> { val p = pending; reset(); when (p) { 'g' -> onNextSheet(); 'z' -> scrollCursorRow(ScrollTo.TOP) } }
@@ -169,12 +96,16 @@ class VimGridController(
             .showInCenterOf(table)
     }
 
-    private fun escapePressed() {
+    override fun handleEscape() {
         if (visualMode) exitVisual() else reset()
     }
 
     private fun curRow() = table.selectedRow.coerceAtLeast(0)
     private fun curCol() = table.selectedColumn.coerceAtLeast(0)
+
+    override fun moveRows(delta: Int) = move(delta, 0)
+
+    override fun selectRow(row: Int) = select(row, curCol())
 
     private fun move(dr: Int, dc: Int) {
         if (table.rowCount == 0 || table.columnCount == 0) return
@@ -292,26 +223,8 @@ class VimGridController(
         return true
     }
 
-    private enum class ScreenPos { TOP, MIDDLE, BOTTOM }
-
-    /** `H` / `M` / `L`: move the cursor to the top / middle / bottom row of the visible viewport. */
-    private fun screenRow(pos: ScreenPos) {
-        val viewport = table.parent as? JViewport ?: return
-        if (table.rowCount == 0) return
-        val rowH = maxOf(1, table.rowHeight)
-        val first = (viewport.viewPosition.y / rowH).coerceIn(0, table.rowCount - 1)
-        val visibleRows = maxOf(1, viewport.height / rowH)
-        val last = (first + visibleRows - 1).coerceAtMost(table.rowCount - 1)
-        val target = when (pos) {
-            ScreenPos.TOP -> first
-            ScreenPos.BOTTOM -> last
-            ScreenPos.MIDDLE -> (first + last) / 2
-        }
-        select(target, curCol())
-    }
-
     /** `m{a-z}`: remember the current cell (by MODEL coordinates so it survives filtering/streaming). */
-    private fun setMark(ch: Char) {
+    override fun setMark(ch: Char) {
         val r = table.selectedRow
         val c = table.selectedColumn
         if (r < 0 || c < 0) return
@@ -319,56 +232,16 @@ class VimGridController(
     }
 
     /** `` `{a-z} ``: jump to a mark (no-op if it was never set or its row is currently filtered out). */
-    private fun jumpToMark(ch: Char) {
+    override fun jumpToMark(ch: Char) {
         val (mr, mc) = marks[ch] ?: return
         val vr = runCatching { table.convertRowIndexToView(mr) }.getOrDefault(-1)
         val vc = runCatching { table.convertColumnIndexToView(mc) }.getOrDefault(-1)
         if (vr in 0 until table.rowCount && vc in 0 until table.columnCount) select(vr, vc)
     }
 
-    private fun gotoRow(row: Int) {
-        if (table.rowCount == 0) return
-        select(row.coerceIn(0, table.rowCount - 1), curCol())
-    }
-
     private fun select(row: Int, col: Int) {
         table.changeSelection(row, col, false, false)
         table.scrollRectToVisible(table.getCellRect(row, col, true))
-    }
-
-    private fun halfPage(direction: Int) {
-        if (table.rowCount == 0) return
-        val rowHeight = maxOf(1, table.rowHeight)
-        val visibleRows = maxOf(1, table.visibleRect.height / rowHeight)
-        move(direction * maxOf(1, visibleRows / 2), 0)
-    }
-
-    /** Ctrl+E / Ctrl+Y: scroll the viewport one row without moving the cursor. */
-    private fun scrollLines(n: Int) {
-        val viewport = table.parent as? JViewport ?: return
-        val rowHeight = maxOf(1, table.rowHeight)
-        val maxY = maxOf(0, table.height - viewport.height)
-        val pos = viewport.viewPosition
-        pos.y = (pos.y + n * rowHeight).coerceIn(0, maxY)
-        viewport.viewPosition = pos
-    }
-
-    private enum class ScrollTo { TOP, CENTER, BOTTOM }
-
-    /** vim `zz`/`zt`/`zb`: scroll so the cursor row sits at the center / top / bottom of the viewport. */
-    private fun scrollCursorRow(where: ScrollTo) {
-        val viewport = table.parent as? JViewport ?: return
-        val row = table.selectedRow
-        if (row < 0) return
-        val rect = table.getCellRect(row, 0, true)
-        val viewH = viewport.height
-        val y = when (where) {
-            ScrollTo.TOP -> rect.y
-            ScrollTo.BOTTOM -> rect.y + rect.height - viewH
-            ScrollTo.CENTER -> rect.y - (viewH - rect.height) / 2
-        }
-        val maxY = maxOf(0, table.height - viewH)
-        viewport.viewPosition = Point(viewport.viewPosition.x, y.coerceIn(0, maxY))
     }
 
     // ---- Visual-line mode (selection only — copy the selection with Ctrl+C) ----
@@ -409,11 +282,5 @@ class VimGridController(
         val hi = maxOf(a, b).coerceIn(0, table.rowCount - 1)
         table.setRowSelectionInterval(lo, hi)
         table.setColumnSelectionInterval(0, table.columnCount - 1)
-    }
-
-    private fun reset() {
-        count.setLength(0)
-        pending = null
-        pendingMark = null
     }
 }

@@ -51,7 +51,8 @@ xlsx-editor/
     RelationshipBus.kt        grid→graph event bus (Ctrl+R record · Ctrl+F table)
     SheetScanner.kt           judgment-free sheet access for the MCP tools (enumerate / raw rows / column values / overlap math)
     RefsMcpToolset.kt         10 MCP tools for refs.json authoring (IDE built-in MCP server)
-  (shared in ../common: PoiClassLoaders.kt, CellFormatting.kt)
+  (shared in ../common: PoiClassLoaders.kt, CellFormatting.kt, and VimTableController.kt —
+   the vim key/count/mark/scroll base class VimGridController extends)
 ```
 
 ## How it works
