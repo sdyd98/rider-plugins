@@ -32,7 +32,8 @@ class LogFileEditor(project: Project, private val file: VirtualFile) : UserDataH
         } else {
             { cs -> VfsLogReader(file, cs) } // non-local VFS: one-shot read, no live tail
         }
-        panel = LogViewerPanel(project, file.name, makeReader, followByDefault = false)
+        // sourceKey = the full path: per-source format/charset memory must not collide on file NAMES.
+        panel = LogViewerPanel(project, file.name, makeReader, followByDefault = false, sourceKey = file.path)
         Disposer.register(this, panel)
         panel.start()
     }

@@ -91,6 +91,8 @@
         <applicationService serviceImplementation="com.example.logview.rules.HighlightRulesStore"/>
         <!-- Persisted user line-format rules (Time/Level/Message column-split templates/regexes). -->
         <applicationService serviceImplementation="com.example.logview.LineFormatStore"/>
+        <!-- Per-source (file/remote path) memory of the last-used line format + charset. -->
+        <applicationService serviceImplementation="com.example.logview.SourcePrefsStore"/>
 
         <!-- Open .log files in the log viewer (as the default tab; the plain-text editor stays available). -->
         <fileEditorProvider implementation="com.example.logview.LogFileEditorProvider"/>

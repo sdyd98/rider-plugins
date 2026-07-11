@@ -35,6 +35,11 @@ private val LOG = logger<LogViewerPanel>()
 private const val FILTER_BAR_H = 82 // command/query row + severity-pill row
 private const val STATUS_BAR_H = 24
 
+// Format auto-detection over the loaded head (first open of a source with nothing remembered).
+private const val DETECT_SAMPLE = 200
+private const val DETECT_MIN_LINES = 20
+private const val DETECT_THRESHOLD_PCT = 60
+
 /**
  * The reusable log view: a virtualized [JBTable] grid (one row = one source line) wrapped in the
  * Compose filter/status chrome, with a severity gutter. Used both by the [LogFileEditor] (a local
@@ -51,12 +56,35 @@ class LogViewerPanel(
     followByDefault: Boolean,
     private val onExitLeft: () -> Unit = {}, // moving left past the first column (e.g. into the sources tree)
     private val onSwitchTab: (dir: Int) -> Unit = {}, // gt / gT — switch session tab
+    /** Stable identity of this source for per-source prefs (local path or user@host:path).
+     *  The tool window's sourceLabel already IS that key; the file editor passes file.path. */
+    private val sourceKey: String = sourceLabel,
 ) : Disposable {
 
     val model = LogTableModel()
 
+    // ---- per-source memory (SourcePrefsStore): last-used line format + charset for THIS source ----
+
+    /** Remembered format name: null = nothing remembered (fall back to the global active format),
+     *  "" = explicit "없음 (원본 그대로)", else a LineFormatStore library name. */
+    private var sourceFormatName: String? = SourcePrefsStore.getInstance().formatFor(sourceKey)
+    private var sourceFormat: List<LineFormat>? = compileSaved(sourceFormatName)
+
+    /** Formats to parse THIS source with: per-source memory first, then the global active format. */
+    private fun effectiveFormats(): List<LineFormat> = sourceFormat ?: LineFormatStore.getInstance().active()
+
+    private fun compileSaved(name: String?): List<LineFormat>? = when {
+        name == null -> null
+        name.isEmpty() -> emptyList()
+        else -> LineFormatStore.getInstance().library().firstOrNull { it.name == name }
+            ?.let { LineFormat.of(it.pattern) }?.takeIf { it.valid }?.let { listOf(it) }
+    }
+
     // The decoding charset for this source; changing it re-reads from scratch (see reopenWith).
-    private var charset: java.nio.charset.Charset = LogCharsets.DEFAULT
+    private var charset: java.nio.charset.Charset =
+        SourcePrefsStore.getInstance().charsetFor(sourceKey)
+            ?.let { runCatching { java.nio.charset.Charset.forName(it) }.getOrNull() }
+            ?: LogCharsets.DEFAULT
     private var reader: LogReader = makeReader(charset)
     // Bumped on every reopen (charset change); batches tagged with a stale generation are dropped so a
     // superseded reader can't append into the freshly-cleared model.
@@ -239,10 +267,15 @@ class LogViewerPanel(
             DisplayToggle("긴 줄 자르기", "가로 스크롤 끄고 잘라 보기", truncateLines) { setTruncate(it) },
             DisplayToggle("디테일 패널", "선택한 줄의 상세를 오른쪽에", detailVisible) { setDetailVisible(it) },
         )
-        val activeFormat = LineFormatStore.getInstance().activeName()
+        // The format label reflects what THIS source is parsed with (per-source memory beats global).
+        val formatLabel = when {
+            sourceFormatName == null -> LineFormatStore.getInstance().activeName()
+            sourceFormatName!!.isEmpty() -> null // explicit "없음" remembered for this source
+            else -> sourceFormatName
+        }
         val choices = listOf(
             DisplayChoice("인코딩", LogCharsets.label(charset)) { showCharsetChooser() },
-            DisplayChoice("줄 형식", activeFormat ?: "자동") { showFormatSettings() },
+            DisplayChoice("줄 형식", formatLabel ?: "자동") { showFormatSettings() },
         )
         val panel = createDisplayOptionsPanel(toggles, choices)
         val popup = JBPopupFactory.getInstance()
@@ -315,10 +348,11 @@ class LogViewerPanel(
         }
     }
 
-    /** Re-read the source under [cs] (charset change). No-op if unchanged. */
+    /** Re-read the source under [cs] (charset change). No-op if unchanged. Remembered per source. */
     private fun reopenWith(cs: java.nio.charset.Charset) {
         if (cs == charset) return
         charset = cs
+        SourcePrefsStore.getInstance().rememberCharset(sourceKey, cs.name())
         reread()
     }
 
@@ -392,6 +426,7 @@ class LogViewerPanel(
                 sizeContentColumn()
                 pushChrome()
                 ensureFollow() // we always tail appended lines; the Follow toggle only controls auto-scroll
+                autoDetectFormat()
             }
         }
     }
@@ -433,8 +468,9 @@ class LogViewerPanel(
      */
     private fun onReaderBatch(batch: List<String>, gen: Int) {
         if (gen != readerGeneration || batch.isEmpty()) return
-        // previewFormat (transient, while the 줄 형식 picker is open) wins; otherwise the saved active format.
-        val formats = previewFormat ?: LineFormatStore.getInstance().active()
+        // previewFormat (transient, while the 줄 형식 picker is open) wins; then this source's
+        // remembered format; then the global active format.
+        val formats = previewFormat ?: effectiveFormats()
         appendOnEdt(batch.map { parseLogRow(it, formats) }, gen)
     }
 
@@ -456,6 +492,40 @@ class LogViewerPanel(
         }
     }
 
+    /**
+     * First open of a source with nothing remembered: try every saved format against the loaded head
+     * and adopt the best one when it matches convincingly (≥[DETECT_THRESHOLD_PCT]% of the sample).
+     * The scoring runs off the EDT; a hit is remembered so the next open skips detection entirely.
+     */
+    private fun autoDetectFormat() {
+        if (SourcePrefsStore.getInstance().formatFor(sourceKey) != null) return // remembered — nothing to detect
+        val store = LineFormatStore.getInstance()
+        val candidates = store.library().mapNotNull { s ->
+            LineFormat.of(s.pattern).takeIf { it.valid }?.let { s.name to it }
+        }
+        if (candidates.isEmpty()) return
+        val sample = (0 until minOf(model.loadedRowCount(), DETECT_SAMPLE))
+            .map { model.rawAt(it) }.filter { it.isNotBlank() }
+        if (sample.size < DETECT_MIN_LINES) return
+        val gen = readerGeneration
+        ApplicationManager.getApplication().executeOnPooledThread {
+            val scored = candidates.map { (name, fmt) -> Triple(name, fmt, sample.count { fmt.apply(it) != null }) }
+            val best = scored.maxByOrNull { it.third } ?: return@executeOnPooledThread
+            if (best.third * 100 < sample.size * DETECT_THRESHOLD_PCT) return@executeOnPooledThread
+            onEdt {
+                if (gen != readerGeneration) return@onEdt
+                if (SourcePrefsStore.getInstance().formatFor(sourceKey) != null) return@onEdt // user chose meanwhile
+                val wasEffective = effectiveFormats()
+                sourceFormatName = best.first
+                sourceFormat = listOf(best.second)
+                SourcePrefsStore.getInstance().rememberFormat(sourceKey, best.first)
+                LOG.info("Auto-detected line format '${best.first}' for $sourceKey (${best.third}/${sample.size} lines)")
+                // Already parsed with this format when it was the global active — skip the re-parse then.
+                if (wasEffective.map { it.source } != listOf(best.second.source)) applyFormatToLoaded(effectiveFormats())
+            }
+        }
+    }
+
     private var threadColShown = false
 
     /** Re-lay-out columns only when the Thread column's visibility flips (cheap; preserves manual resizes). */
@@ -466,17 +536,25 @@ class LogViewerPanel(
         }
     }
 
-    /** Live-preview [fmt] on the real grid (null → the saved active format). Transient — not persisted. */
+    /** Live-preview [fmt] on the real grid (null → the currently applied format). Transient — not persisted. */
     fun previewFormatLive(fmt: LineFormat?) {
-        val formats = if (fmt != null) listOf(fmt) else LineFormatStore.getInstance().active()
+        val formats = if (fmt != null) listOf(fmt) else effectiveFormats()
         previewFormat = formats
         applyFormatToLoaded(formats)
     }
 
-    /** End the live preview: drop the override and re-parse the grid with the saved active format. */
+    /**
+     * End the live preview: settle the grid on the format the picker left active, and REMEMBER that
+     * choice for this source (SourcePrefsStore) so reopening the same file restores it — the picker
+     * dialog is the per-source format choice.
+     */
     fun endFormatPreview() {
         previewFormat = null
-        applyFormatToLoaded(LineFormatStore.getInstance().active())
+        val store = LineFormatStore.getInstance()
+        sourceFormatName = store.activeName() ?: "" // "" = explicit 없음
+        sourceFormat = store.active().takeIf { it.isNotEmpty() } ?: emptyList()
+        SourcePrefsStore.getInstance().rememberFormat(sourceKey, sourceFormatName)
+        applyFormatToLoaded(effectiveFormats())
     }
 
     private fun appendOnEdt(rows: List<ParsedRow>, gen: Int) = onEdt {
