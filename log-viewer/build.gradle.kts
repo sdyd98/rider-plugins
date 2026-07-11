@@ -42,6 +42,11 @@ dependencies {
         bundledLibrary("lib/intellij.platform.jewel.foundation.jar")
         bundledLibrary("lib/intellij.platform.jewel.ui.jar")
         bundledLibrary("lib/intellij.platform.jewel.ideLafBridge.jar")
+
+        // Shared helpers (vim table-controller base). Composed into the MAIN plugin jar (not
+        // lib/modules/) — VimLogController extends the base class directly, so it must be on the
+        // main plugin classloader, not in a plugin-model-v2 content module.
+        pluginComposedModule(implementation(project(":common")))
     }
 
     // JSch (mwiede fork) — bundled into the plugin's lib/ for SSH exec (`tail -F`) + SFTP reads.

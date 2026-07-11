@@ -48,10 +48,12 @@ dependencies {
         // The IDE's integrated MCP server (2025.2+). We contribute refs.json-authoring MCP tools to it
         // via its mcpToolset extension point, so they ship with the plugin (optional dependency).
         bundledPlugin("com.intellij.mcpServer")
-    }
 
-    // Shared helpers (POI classloader swap, cached-formula formatting). Bundled into the plugin.
-    implementation(project(":common"))
+        // Shared helpers (POI classloader swap, cached-formula formatting, vim controller base).
+        // Composed into the MAIN plugin jar (not lib/modules/) — our classes extend these directly,
+        // so they must be on the main plugin classloader, not in a plugin-model-v2 content module.
+        pluginComposedModule(implementation(project(":common")))
+    }
 
     // Apache POI — bundled into the plugin's lib/ so we can read .xlsx / .xls at runtime.
     // The optional pdfbox/batik/bouncycastle/xmlsec chains are <optional> in POI's POM and
