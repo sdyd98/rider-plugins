@@ -58,6 +58,11 @@ class LogTableModel : AbstractTableModel() {
     private var anyThread = false // any loaded line has a thread value → show the Thread column
     private val counts = IntArray(LogLevel.entries.size)
 
+    // Ascending model rows per level (effective level — continuations inherit their block's).
+    // Powers the heatmap stripe (iterate) and the ]e/[e level jumps (binary search) without an
+    // O(model) scan per keypress.
+    private val levelRows = Array(LogLevel.entries.size) { IntVec() }
+
     /** Model indices of currently-collapsed block-start lines (their continuation rows are hidden). */
     val foldedBlocks: MutableSet<Int> = HashSet()
 
@@ -148,7 +153,18 @@ class LogTableModel : AbstractTableModel() {
         }
         lines.add(line)
         counts[level.ordinal]++
+        levelRows[level.ordinal].add(lines.size - 1)
     }
+
+    /** Visit every model row of [level] in ascending order (heatmap paint). EDT only. */
+    fun forEachLevelRow(level: LogLevel, action: (Int) -> Unit) = levelRows[level.ordinal].forEach(action)
+
+    /**
+     * The nearest model row of [level] strictly after (dir > 0) / before (dir < 0) [fromModelRow],
+     * or -1 when there is none. O(log n) — binary search over the per-level index.
+     */
+    fun nextLevelRow(level: LogLevel, fromModelRow: Int, dir: Int): Int =
+        levelRows[level.ordinal].nearest(fromModelRow, dir)
 
     /** The raw (ANSI-bearing) text of every loaded line — to re-parse in place under a different format. */
     fun rawSnapshot(): List<String> = lines.map { it.raw }
@@ -160,6 +176,7 @@ class LogTableModel : AbstractTableModel() {
     fun replaceAllParsed(rows: List<ParsedRow>) {
         lines.clear()
         counts.fill(0)
+        for (v in levelRows) v.clear()
         foldedBlocks.clear()
         currentBlockStart = -1
         nextLineNumber = 1
@@ -173,6 +190,7 @@ class LogTableModel : AbstractTableModel() {
         if (lines.isEmpty()) return
         lines.clear()
         counts.fill(0)
+        for (v in levelRows) v.clear()
         foldedBlocks.clear()
         currentBlockStart = -1
         nextLineNumber = 1
@@ -238,11 +256,58 @@ class LogTableModel : AbstractTableModel() {
         for (i in 0 until drop) counts[lines[i].level.ordinal]--
         lines.subList(0, drop).clear()
         for (l in lines) l.blockStart = if (l.blockStart >= drop) l.blockStart - drop else -1
+        for (v in levelRows) v.rebase(drop)
         currentBlockStart = if (currentBlockStart >= drop) currentBlockStart - drop else -1
         val rebased = foldedBlocks.mapNotNull { if (it >= drop) it - drop else null }.toHashSet()
         foldedBlocks.clear()
         foldedBlocks.addAll(rebased)
         fireTableDataChanged()
         onTrim?.invoke(drop)
+    }
+}
+
+/** Growable int array (ascending values here) — avoids boxing 100k+ row indices per level. */
+private class IntVec {
+    // Not `private`: the class itself is file-private, and `forEach` is inline (an inline function
+    // may not reach into members less visible than itself).
+    var a = IntArray(16)
+    var n = 0
+
+    fun add(v: Int) {
+        if (n == a.size) a = a.copyOf(n * 2)
+        a[n++] = v
+    }
+
+    fun clear() {
+        n = 0
+    }
+
+    inline fun forEach(action: (Int) -> Unit) {
+        for (i in 0 until n) action(a[i])
+    }
+
+    /** Drop values below [drop] and shift the rest down by it (front-trim rebase). Keeps order. */
+    fun rebase(drop: Int) {
+        var w = 0
+        for (i in 0 until n) {
+            val v = a[i]
+            if (v >= drop) a[w++] = v - drop
+        }
+        n = w
+    }
+
+    /** Nearest value strictly after (dir > 0) / before (dir < 0) [from], or -1. Values ascending. */
+    fun nearest(from: Int, dir: Int): Int {
+        // Binary search: lo = first index whose value is > from.
+        var lo = 0
+        var hi = n
+        while (lo < hi) {
+            val mid = (lo + hi) ushr 1
+            if (a[mid] <= from) lo = mid + 1 else hi = mid
+        }
+        if (dir > 0) return if (lo < n) a[lo] else -1
+        var i = lo - 1 // last index with value <= from
+        if (i >= 0 && a[i] == from) i--
+        return if (i >= 0) a[i] else -1
     }
 }

@@ -95,6 +95,7 @@ class LogViewerPanel(
 
     private val gutter = LogGutter(table, model)
     private val scrollPane = JBScrollPane(table)
+    private val heatmap = LogHeatmap(table, model) { modelRow -> seekToModelRow(modelRow) }
 
     private var following = followByDefault
     @Volatile private var streaming = true
@@ -160,8 +161,13 @@ class LogViewerPanel(
         model.onTrim = { dropped -> vim.shiftMarks(dropped) }
         model.addTableModelListener {
             gutter.revalidate(); gutter.repaint()
+            heatmap.repaint()
             if (streaming) pushChrome()
         }
+        // The heatmap's viewport window follows scrolling; its marks follow filter changes (any
+        // rowFilter reassignment or rowsUpdated lands here as a RowSorterEvent).
+        scrollPane.verticalScrollBar.addAdjustmentListener { heatmap.repaint() }
+        sorter.addRowSorterListener { heatmap.repaint() }
         table.selectionModel.addListSelectionListener(ListSelectionListener { e ->
             if (!e.valueIsAdjusting) { pushChrome(); updateDetail() }
             gutter.repaint()
@@ -206,7 +212,11 @@ class LogViewerPanel(
         }
 
         val split = com.intellij.ui.OnePixelSplitter(false, 0.72f).apply {
-            firstComponent = scrollPane
+            // The grid plus the error-stripe heatmap on its right edge.
+            firstComponent = JPanel(BorderLayout()).apply {
+                add(scrollPane, BorderLayout.CENTER)
+                add(heatmap, BorderLayout.EAST)
+            }
             secondComponent = null // the detail drawer is attached on demand
         }
         centerSplit = split
@@ -676,15 +686,19 @@ class LogViewerPanel(
 
     // ---- Level jump (]e / [e) and search repeat (n / N) ----
 
-    // Iterate over VISIBLE (view) rows, not raw model rows, so filtered/folded lines are skipped and
-    // the cursor only ever lands on a line the user can actually see.
+    // Binary-search the model's per-level row index, then skip candidates the filter/fold hides, so
+    // the cursor only ever lands on a line the user can actually see. (Scanning every view row per
+    // keypress was an O(model) EDT stall on 200k+ line logs.)
     private fun jumpToLevel(dir: Int, level: LogLevel) {
         val n = table.rowCount
         if (n == 0) return
-        var v = table.selectedRow.coerceAtLeast(0) + dir
-        while (v in 0 until n) {
-            if (model.levelAt(table.convertRowIndexToModel(v)) == level) { selectView(v); return }
-            v += dir
+        val v = table.selectedRow.coerceIn(0, n - 1)
+        var m = table.convertRowIndexToModel(v)
+        while (true) {
+            m = model.nextLevelRow(level, m, dir)
+            if (m < 0) return
+            val cand = runCatching { table.convertRowIndexToView(m) }.getOrDefault(-1)
+            if (cand >= 0) { selectView(cand); return }
         }
     }
 
