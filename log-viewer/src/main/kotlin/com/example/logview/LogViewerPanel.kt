@@ -633,44 +633,9 @@ class LogViewerPanel(
         regexValid = q.isEmpty() || !useRegex || searchPattern != null
     }
 
-    private fun buildRowFilter(): RowFilter<LogTableModel, Int> {
-        // Hoist the query/pattern/case state once per filter rebuild — every mutator reassigns
-        // sorter.rowFilter after changing these, so they're invariant for this instance's lifetime
-        // (avoids a per-row String.trim() allocation and repeated @Volatile reads inside include()).
-        val q = queryText.trim()
-        val pat = searchPattern
-        val ignoreCase = !caseSensitive
-        return object : RowFilter<LogTableModel, Int>() {
-            // Block-aware search: a multi-line record (a stack trace) is kept intact when ANY of its
-            // lines matches, so a search never strands a primary line from its continuations or
-            // vice-versa. The sorter evaluates rows in ascending model order and a block's rows are
-            // contiguous, so a one-entry memo makes this O(1) per member row — each block is scanned
-            // once per rebuild. (Naively re-scanning the block for every member row made a refilter
-            // O(k²) per k-line block: a 200k-line log full of stack traces took seconds per keystroke.)
-            private var memoBlock = -1
-            private var memoHit = false
-            override fun include(entry: Entry<out LogTableModel, out Int>): Boolean {
-                val row = entry.identifier
-                if (model.isHiddenByFold(row)) return false
-                if (model.rawAt(row).isBlank()) return false // drop blank (newline-only) rows entirely
-                if (model.levelAt(row) !in enabledLevels) return false
-                if (q.isEmpty()) return true
-                val block = model.blockRange(row)
-                if (block.first != memoBlock) {
-                    memoBlock = block.first
-                    memoHit = false
-                    for (m in block) {
-                        val raw = model.rawAt(m)
-                        if (if (pat != null) pat.matcher(raw).find() else raw.contains(q, ignoreCase = ignoreCase)) {
-                            memoHit = true
-                            break
-                        }
-                    }
-                }
-                return memoHit
-            }
-        }
-    }
+    // The filter semantics live in LogRowFilter (headless-testable); this just snapshots the state.
+    private fun buildRowFilter(): RowFilter<LogTableModel, Int> =
+        LogRowFilter(model, queryText, searchPattern, ignoreCase = !caseSensitive, enabledLevels = enabledLevels)
 
     private fun toggleLevel(level: LogLevel) {
         if (!enabledLevels.add(level)) enabledLevels.remove(level)
