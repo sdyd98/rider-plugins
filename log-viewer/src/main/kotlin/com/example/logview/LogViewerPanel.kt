@@ -41,6 +41,13 @@ private const val DETECT_MIN_LINES = 20
 private const val DETECT_THRESHOLD_PCT = 60
 
 /**
+ * At most this many parsed batches may be in flight to the EDT at once; the READER thread blocks
+ * past that. Without the bound, a fast reader floods the invokeLater queue — a 3 GB file piled up
+ * 1,700+ batches (3.5M ParsedRows, hundreds of MB) and GC-thrashed the IDE into a freeze.
+ */
+private const val MAX_INFLIGHT_BATCHES = 4
+
+/**
  * The reusable log view: a virtualized [JBTable] grid (one row = one source line) wrapped in the
  * Compose filter/status chrome, with a severity gutter. Used both by the [LogFileEditor] (a local
  * file opened in the editor area) and by the tool window's live-tail tabs.
@@ -176,10 +183,27 @@ class LogViewerPanel(
 
     val component: JComponent = JPanel(BorderLayout())
 
+    // The sorter is attached only AFTER the initial stream completes (or on first filter/fold use):
+    // with a filter installed, every batch insert makes DefaultRowSorter rebuild O(model) index
+    // arrays — over a 3 GB / 33M-line load that was the EDT's main cost and let the reader outrun
+    // it. Detached, appends are plain O(batch) model inserts. (Same pattern as the xlsx grid.)
+    private var sorterAttached = false
+
+    private fun ensureSorterAttached() {
+        if (sorterAttached) return
+        sorterAttached = true
+        table.rowSorter = sorter
+        sorter.setRowFilter(buildRowFilter())
+    }
+
+    /** (Re)install the row filter, attaching the sorter first if the initial stream deferred it. */
+    private fun refilter() {
+        if (!sorterAttached) ensureSorterAttached() // attaching already installs the current filter
+        else sorter.rowFilter = buildRowFilter()
+    }
+
     init {
         table.rowHeight = renderer.rowHeight()
-        table.rowSorter = sorter
-        sorter.rowFilter = buildRowFilter()
         setupColumns()
         scrollPane.setRowHeaderView(gutter)
         scrollPane.border = BorderFactory.createEmptyBorder()
@@ -366,6 +390,9 @@ class LogViewerPanel(
         tailing = false
         streaming = true
         statusError = null
+        // Detach the sorter for the re-stream (same reason as the initial load); reattached on completion.
+        table.rowSorter = null
+        sorterAttached = false
         model.clear()
         reader = makeReader(charset) // new reader acquires its host BEFORE old releases → SSH session stays warm
         pushChrome()
@@ -423,6 +450,7 @@ class LogViewerPanel(
             onEdt {
                 if (gen != readerGeneration) return@onEdt // superseded by a newer reopen (charset change)
                 streaming = false
+                ensureSorterAttached() // deferred during the initial stream — appends stay O(batch)
                 sizeContentColumn()
                 pushChrome()
                 ensureFollow() // we always tail appended lines; the Follow toggle only controls auto-scroll
@@ -466,12 +494,17 @@ class LogViewerPanel(
      * ANSI strip) HERE, off the UI thread, then hop to the EDT to insert. This keeps the grid responsive
      * during large initial loads and charset re-reads (re-parsing 50k lines on the EDT would freeze it).
      */
+    // Backpressure between the reader thread and the EDT (see MAX_INFLIGHT_BATCHES).
+    private val inflight = java.util.concurrent.Semaphore(MAX_INFLIGHT_BATCHES)
+
     private fun onReaderBatch(batch: List<String>, gen: Int) {
         if (gen != readerGeneration || batch.isEmpty()) return
         // previewFormat (transient, while the 줄 형식 picker is open) wins; then this source's
         // remembered format; then the global active format.
         val formats = previewFormat ?: effectiveFormats()
-        appendOnEdt(batch.map { parseLogRow(it, formats) }, gen)
+        val rows = batch.map { parseLogRow(it, formats) }
+        inflight.acquire() // reader thread — blocks until the EDT digests an earlier batch
+        appendOnEdt(rows, gen)
     }
 
     /** Non-null while the 줄 형식 picker previews a format live on the grid (overrides the saved active one). */
@@ -558,15 +591,19 @@ class LogViewerPanel(
     }
 
     private fun appendOnEdt(rows: List<ParsedRow>, gen: Int) = onEdt {
-        if (gen != readerGeneration) return@onEdt // stale batch from a superseded reader (charset change)
-        val atBottom = isViewAtBottom()
-        model.appendParsed(rows)
-        if (following && atBottom) scrollToBottom()
-        syncThreadColumn()
-        sizeContentColumnFor(rows)
-        // Data is flowing again → a prior initial-read error is stale; clear it so the bar shows LIVE.
-        if (rows.isNotEmpty() && statusError != null) statusError = null
-        if (!streaming) pushChromeThrottled()
+        try {
+            if (gen != readerGeneration) return@onEdt // stale batch from a superseded reader (charset change)
+            val atBottom = isViewAtBottom()
+            model.appendParsed(rows)
+            if (following && atBottom) scrollToBottom()
+            syncThreadColumn()
+            sizeContentColumnFor(rows)
+            // Data is flowing again → a prior initial-read error is stale; clear it so the bar shows LIVE.
+            if (rows.isNotEmpty() && statusError != null) statusError = null
+            if (!streaming) pushChromeThrottled()
+        } finally {
+            inflight.release() // frees the reader to hand over the next batch (even for stale batches)
+        }
     }
 
     // ---- Filtering ----
@@ -575,7 +612,7 @@ class LogViewerPanel(
         if (query == queryText) return
         queryText = query
         recompileSearch()
-        sorter.rowFilter = buildRowFilter()
+        refilter()
         table.repaint()
         pushChrome()
     }
@@ -637,7 +674,7 @@ class LogViewerPanel(
 
     private fun toggleLevel(level: LogLevel) {
         if (!enabledLevels.add(level)) enabledLevels.remove(level)
-        sorter.rowFilter = buildRowFilter()
+        refilter()
         table.repaint(); gutter.repaint()
         pushChrome()
     }
@@ -649,28 +686,28 @@ class LogViewerPanel(
         regexValid = true
         enabledLevels.clear()
         enabledLevels.addAll(LogLevel.REAL + LogLevel.OTHER)
-        sorter.rowFilter = buildRowFilter()
+        refilter()
         table.repaint(); pushChrome()
     }
 
     private fun toggleRegex() {
         useRegex = !useRegex
         recompileSearch()
-        sorter.rowFilter = buildRowFilter()
+        refilter()
         table.repaint(); pushChrome()
     }
 
     private fun toggleCase() {
         caseSensitive = !caseSensitive
         recompileSearch()
-        sorter.rowFilter = buildRowFilter()
+        refilter()
         table.repaint(); pushChrome()
     }
 
     private fun setAllLevels() {
         enabledLevels.clear()
         enabledLevels.addAll(LogLevel.REAL + LogLevel.OTHER)
-        sorter.rowFilter = buildRowFilter()
+        refilter()
         table.repaint(); gutter.repaint(); pushChrome()
     }
 
@@ -678,7 +715,7 @@ class LogViewerPanel(
     private fun errorsOnly() {
         enabledLevels.clear()
         enabledLevels.add(LogLevel.ERROR)
-        sorter.rowFilter = buildRowFilter()
+        refilter()
         table.repaint(); gutter.repaint(); pushChrome()
     }
 
@@ -748,6 +785,7 @@ class LogViewerPanel(
     private fun toggleFold(modelRow: Int) {
         val blockStart = model.toggleFold(modelRow)
         if (blockStart < 0) return
+        ensureSorterAttached() // fold hiding is the row filter's job (deferred during streaming)
         // Re-filter just this block's rows (sortsOnUpdates) — NOT a whole-model filter rebuild.
         model.notifyBlockUpdated(blockStart)
         // folding changes the visible row count, so the gutter's preferred height must be re-queried.
@@ -758,7 +796,7 @@ class LogViewerPanel(
 
     private fun foldAll(all: Boolean) {
         if (all) model.foldAll() else model.unfoldAll()
-        sorter.rowFilter = buildRowFilter()
+        refilter()
         gutter.revalidate(); gutter.repaint(); table.repaint()
     }
 
@@ -787,7 +825,7 @@ class LogViewerPanel(
         queryText = ""
         searchPattern = null
         regexValid = true
-        sorter.rowFilter = buildRowFilter()
+        refilter()
         table.repaint(); pushChrome()
         return true
     }
@@ -803,7 +841,7 @@ class LogViewerPanel(
         // (literal-quoted) pattern from a prior search of the same word.
         queryText = q
         recompileSearch()
-        sorter.rowFilter = buildRowFilter()
+        refilter()
         table.repaint()
         pushChrome()
         repeatSearch(dir)
