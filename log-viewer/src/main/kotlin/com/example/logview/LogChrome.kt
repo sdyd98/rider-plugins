@@ -48,6 +48,10 @@ data class LogChromeData(
     val caseSensitive: Boolean = false,
     val cursor: String = "—",
     val source: String = "",
+    /** 0..1 while the initial read's size is known (local files); -1 = no progress to show. */
+    val progress: Float = -1f,
+    /** Human-formatted size skipped by a tail-first open of a huge file ("" = whole file loaded). */
+    val skipped: String = "",
 )
 
 private fun Int.commas() = "%,d".format(this)
@@ -140,8 +144,9 @@ fun createLogFilterBar(
     }
 }
 
-/** Bottom status bar — premium segmented: cursor · counts · live · source, with subtle separators. */
-fun createLogStatusBar(chrome: State<LogChromeData>): JComponent = JewelComposePanel {
+/** Bottom status bar — premium segmented: cursor · counts · live · source, with subtle separators.
+ *  [onCancelLoad] stops a running initial read early (shown as a 중지 button while streaming). */
+fun createLogStatusBar(chrome: State<LogChromeData>, onCancelLoad: () -> Unit = {}): JComponent = JewelComposePanel {
     val data = chrome.value
     val p = rememberLogPalette()
     Row(
@@ -151,7 +156,14 @@ fun createLogStatusBar(chrome: State<LogChromeData>): JComponent = JewelComposeP
     ) {
         if (data.streaming) {
             SeverityDot(p.accent, 7.dp)
-            Text("로딩 중… ${data.total.commas()}행", color = p.mutedText, fontSize = 11.sp)
+            val pct = if (data.progress >= 0f) " · ${(data.progress * 100).toInt()}%" else ""
+            Text("로딩 중… ${data.total.commas()}행$pct", color = p.mutedText, fontSize = 11.sp)
+            if (data.skipped.isNotEmpty()) {
+                Separator(p)
+                Text("앞 ${data.skipped} 건너뜀(꼬리만 로드)", color = p.mutedText, fontSize = 11.sp)
+            }
+            Spacer(Modifier.weight(1f))
+            ToolButton("중지", palette = p) { onCancelLoad() }
         } else if (data.status.isNotBlank()) {
             // A read failure (set by setStatusError) — show it in place of the normal segments.
             val errColor = p.levelColor[LogLevel.ERROR] ?: p.text
@@ -168,6 +180,10 @@ fun createLogStatusBar(chrome: State<LogChromeData>): JComponent = JewelComposeP
                 Text("LIVE", color = p.levelColor[LogLevel.INFO] ?: p.accent, fontSize = 11.sp)
             } else {
                 Text("일시정지", color = p.mutedText, fontSize = 11.sp)
+            }
+            if (data.skipped.isNotEmpty()) {
+                Separator(p)
+                Text("앞 ${data.skipped} 건너뜀", color = p.mutedText, fontSize = 11.sp)
             }
             if (data.source.isNotEmpty()) {
                 Separator(p)

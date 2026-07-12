@@ -25,6 +25,18 @@ interface LogReader : Closeable {
         onError: (Throwable) -> Unit,
         onState: (TailState) -> Unit = {},
     )
+
+    /** Fraction (0..1) of the initial read completed so far, or -1 when unknown / not applicable. */
+    fun initialProgress(): Float = -1f
+
+    /** Bytes skipped at the head by a tail-first open of a huge file (0 = the whole file is loaded). */
+    fun skippedHeadBytes(): Long = 0
+
+    /**
+     * Ask a running [readInitial] to stop early: keep what is already loaded, and let the live tail
+     * continue from the CURRENT END of the source (the unread gap is skipped). No-op when idle.
+     */
+    fun cancelInitial() {}
 }
 
 /** Tail connection state, surfaced in the status bar. */

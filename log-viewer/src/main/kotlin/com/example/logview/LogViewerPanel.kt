@@ -258,7 +258,7 @@ class LogViewerPanel(
         }
         filterBarComp = filterBar
 
-        val statusBar = createLogStatusBar(chrome).apply {
+        val statusBar = createLogStatusBar(chrome, onCancelLoad = { reader.cancelInitial() }).apply {
             preferredSize = Dimension(0, JBUI.scale(STATUS_BAR_H))
             border = JBUI.Borders.customLine(JBColor.border(), 1, 0, 0, 0) // divider above the status bar
         }
@@ -997,7 +997,15 @@ class LogViewerPanel(
             caseSensitive = caseSensitive,
             cursor = cursor,
             source = sourceLabel,
+            progress = if (streaming) reader.initialProgress() else -1f,
+            skipped = reader.skippedHeadBytes().takeIf { it > 0 }?.let(::fmtBytes).orEmpty(),
         )
+    }
+
+    private fun fmtBytes(b: Long): String = when {
+        b >= 1L shl 30 -> "%.1f GB".format(b.toDouble() / (1L shl 30))
+        b >= 1L shl 20 -> "%.0f MB".format(b.toDouble() / (1L shl 20))
+        else -> "$b B"
     }
 
     private fun setStatusError(e: Throwable) {
