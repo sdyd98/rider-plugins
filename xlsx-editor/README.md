@@ -100,8 +100,10 @@ xlsx-editor/
   - **Search/jump:** `*`/`#` next/prev row with the **same value in this column**, `n`/`N` repeat;
     `{`/`}` prev/next blank row; `m{a-z}` set a mark / `` `{a-z} `` jump to it (marks are stored by
     model coordinates, so they survive filtering/streaming).
-  - **Other:** `V` visual-line select (then `j`/`k` extend, Esc cancel — `Ctrl+C` copies), `gt`/`gT`
-    next/previous sheet, `/` focus filter, `?` shortcut cheat-sheet popup.
+  - **Copy:** `yy` copies the current cell; `v` starts a cell-wise visual block (extend with `hjkl`)
+    and `V` a row-wise visual selection (`j`/`k`) — `y` copies the selection with tabs between cells
+    and newlines between rows (pastes straight into Excel), Esc cancels, `Ctrl+C` also works.
+  - **Other:** `gt`/`gT` next/previous sheet, `/` focus filter, `?` shortcut cheat-sheet popup.
 
   (`Ctrl+D`/`U`/`E`/`Y` and `Ctrl+Alt+F` use `registerCustomShortcutSet` to beat IDE-global bindings.)
   The grid is read-only, so there are no editing commands. IdeaVim can't be reused — it targets text

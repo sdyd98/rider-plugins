@@ -1,8 +1,10 @@
 package com.example.xlsx
 
 import com.example.grid.VimTableController
+import com.intellij.openapi.ide.CopyPasteManager
 import com.intellij.openapi.ui.popup.JBPopupFactory
 import com.intellij.ui.table.JBTable
+import java.awt.datatransfer.StringSelection
 
 /**
  * Always-on modal (vim-like) **navigation** for a read-only spreadsheet [JBTable].
@@ -13,7 +15,9 @@ import com.intellij.ui.table.JBTable
  * `w`/`e`/`b` next-word-start / word-end / prev-word (a word = a run of non-empty cells) ·
  * `*`/`#` next/prev row with the same value in this column, `n`/`N` repeat · `{`/`}` prev/next blank row ·
  * `m{a-z}` set mark / `` `{a-z} `` jump to mark · `gt`/`gT` switch sheet · `/` filter ·
- * `V` visual-line select (then `j`/`k` extend, Esc cancel — use Ctrl+C to copy) · `?` help.
+ * `yy` copy the current cell · `v` visual-block select cells / `V` visual-line select rows
+ * (extend with `hjkl`, then `y` copies — cells joined with tabs, rows with newlines, so the
+ * clipboard pastes straight into Excel; Esc cancels, Ctrl+C also works on any selection) · `?` help.
  * The grid is a viewer, so there are no editing commands.
  *
  * Key installation, count/mark state, and the scroll family live in [VimTableController] (shared
@@ -26,9 +30,13 @@ class VimGridController(
     private val onPrevSheet: () -> Unit = {},
 ) : VimTableController(table) {
 
-    private var visualMode = false
-    private var visualAnchor = 0
-    private var visualCurrent = 0
+    private enum class VisualMode { NONE, LINE, CELL }
+
+    private var visual = VisualMode.NONE
+    private var vAnchorRow = 0
+    private var vAnchorCol = 0
+    private var vRow = 0 // the visual cursor (view coordinates, like the table selection)
+    private var vCol = 0
 
     // a-z are all bound (read-only grid, so vim owns them) so a mark name after `m`/`` ` `` is captured;
     // plus the navigation symbols/uppercase. Unused letters are harmless no-ops.
@@ -39,12 +47,12 @@ class VimGridController(
     private var searchCol = -1
 
     override fun focusGained() {
-        if (!visualMode) reset()
+        if (visual == VisualMode.NONE) reset()
         if (table.selectedRow < 0 && table.rowCount > 0) table.changeSelection(0, 0, false, false)
     }
 
     override fun pressChar(ch: Char) {
-        if (visualMode) {
+        if (visual != VisualMode.NONE) {
             handleVisual(ch)
             return
         }
@@ -78,7 +86,9 @@ class VimGridController(
             '}' -> { jumpBlankRow(1); reset() }
             'm' -> { reset(); pendingMark = 'm' }
             '`' -> { reset(); pendingMark = '`' }
-            'V' -> { reset(); enterVisual() }
+            'y' -> if (pending == 'y') { reset(); yankCurrentCell() } else { pending = 'y' }
+            'v' -> { reset(); enterCellVisual() }
+            'V' -> { reset(); enterLineVisual() }
             '/' -> { onFocusFilter(); reset() }
             '?' -> { reset(); showHelp() }
             else -> reset()
@@ -97,7 +107,7 @@ class VimGridController(
     }
 
     override fun handleEscape() {
-        if (visualMode) exitVisual() else reset()
+        if (visual != VisualMode.NONE) exitVisual() else reset()
     }
 
     private fun curRow() = table.selectedRow.coerceAtLeast(0)
@@ -244,43 +254,99 @@ class VimGridController(
         table.scrollRectToVisible(table.getCellRect(row, col, true))
     }
 
-    // ---- Visual-line mode (selection only — copy the selection with Ctrl+C) ----
+    // ---- Visual modes + yank ----
+    // `V` = line-wise (whole rows, j/k extend) · `v` = cell-wise (a rectangular block, hjkl extend).
+    // `y` copies the selection as tab-separated cells / newline-separated rows (pastes into Excel);
+    // Ctrl+C (IDE copy on the JTable selection) still works too.
 
-    private fun enterVisual() {
-        if (table.rowCount == 0) return
-        visualMode = true
-        visualAnchor = table.selectedRow.coerceAtLeast(0)
-        visualCurrent = visualAnchor
-        selectRowRange(visualAnchor, visualCurrent)
+    private fun enterLineVisual() {
+        if (table.rowCount == 0 || table.columnCount == 0) return
+        visual = VisualMode.LINE
+        vAnchorRow = table.selectedRow.coerceAtLeast(0)
+        vAnchorCol = 0
+        vRow = vAnchorRow
+        vCol = curCol()
+        applyVisualSelection()
+    }
+
+    private fun enterCellVisual() {
+        if (table.rowCount == 0 || table.columnCount == 0) return
+        visual = VisualMode.CELL
+        vAnchorRow = table.selectedRow.coerceAtLeast(0)
+        vAnchorCol = table.selectedColumn.coerceAtLeast(0)
+        vRow = vAnchorRow
+        vCol = vAnchorCol
+        applyVisualSelection()
     }
 
     private fun exitVisual() {
-        visualMode = false
-        val row = visualCurrent.coerceIn(0, maxOf(0, table.rowCount - 1))
-        if (table.rowCount > 0) table.changeSelection(row, curCol(), false, false)
+        visual = VisualMode.NONE
+        if (table.rowCount > 0 && table.columnCount > 0) {
+            table.changeSelection(
+                vRow.coerceIn(0, table.rowCount - 1),
+                vCol.coerceIn(0, table.columnCount - 1),
+                false,
+                false,
+            )
+        }
         reset()
     }
 
     private fun handleVisual(ch: Char) {
         when (ch) {
-            'j' -> extendVisual(1)
-            'k' -> extendVisual(-1)
+            'y' -> { yankVisual(); exitVisual() }
+            'j' -> extendVisual(1, 0)
+            'k' -> extendVisual(-1, 0)
+            'h' -> if (visual == VisualMode.CELL) extendVisual(0, -1) else exitVisual()
+            'l' -> if (visual == VisualMode.CELL) extendVisual(0, 1) else exitVisual()
             else -> exitVisual()
         }
     }
 
-    private fun extendVisual(dir: Int) {
+    private fun extendVisual(dr: Int, dc: Int) {
         if (table.rowCount == 0) return
-        visualCurrent = (visualCurrent + dir).coerceIn(0, table.rowCount - 1)
-        selectRowRange(visualAnchor, visualCurrent)
-        table.scrollRectToVisible(table.getCellRect(visualCurrent, 0, true))
+        vRow = (vRow + dr).coerceIn(0, table.rowCount - 1)
+        if (visual == VisualMode.CELL && table.columnCount > 0) vCol = (vCol + dc).coerceIn(0, table.columnCount - 1)
+        applyVisualSelection()
+        table.scrollRectToVisible(table.getCellRect(vRow, vCol, true))
     }
 
-    private fun selectRowRange(a: Int, b: Int) {
+    /** Select the anchor↔cursor range: whole rows in LINE mode, the rectangle in CELL mode. */
+    private fun applyVisualSelection() {
         if (table.rowCount == 0 || table.columnCount == 0) return
-        val lo = minOf(a, b).coerceIn(0, table.rowCount - 1)
-        val hi = maxOf(a, b).coerceIn(0, table.rowCount - 1)
-        table.setRowSelectionInterval(lo, hi)
-        table.setColumnSelectionInterval(0, table.columnCount - 1)
+        table.setRowSelectionInterval(
+            minOf(vAnchorRow, vRow).coerceIn(0, table.rowCount - 1),
+            maxOf(vAnchorRow, vRow).coerceIn(0, table.rowCount - 1),
+        )
+        if (visual == VisualMode.CELL) {
+            table.setColumnSelectionInterval(
+                minOf(vAnchorCol, vCol).coerceIn(0, table.columnCount - 1),
+                maxOf(vAnchorCol, vCol).coerceIn(0, table.columnCount - 1),
+            )
+        } else {
+            table.setColumnSelectionInterval(0, table.columnCount - 1)
+        }
     }
+
+    /** `yy`: copy just the current cell's text. */
+    private fun yankCurrentCell() {
+        val r = table.selectedRow
+        val c = table.selectedColumn
+        if (r < 0 || c < 0) return
+        copyToClipboard(table.getValueAt(r, c)?.toString().orEmpty())
+    }
+
+    /** `y` in visual mode: copy the selected cells — tabs between cells, newlines between rows. */
+    private fun yankVisual() {
+        val rows = table.selectedRows
+        val cols = table.selectedColumns
+        if (rows.isEmpty() || cols.isEmpty()) return
+        val text = rows.joinToString("\n") { r ->
+            cols.joinToString("\t") { c -> table.getValueAt(r, c)?.toString().orEmpty() }
+        }
+        copyToClipboard(text)
+    }
+
+    private fun copyToClipboard(text: String) =
+        CopyPasteManager.getInstance().setContents(StringSelection(text))
 }
