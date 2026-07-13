@@ -338,6 +338,14 @@ class VimGridController(
         } else {
             table.setColumnSelectionInterval(0, table.columnCount - 1)
         }
+        // set*SelectionInterval leaves the LEAD (the focus ring) on its second argument — the far
+        // corner of the range — so entering V snapped the ring to the last column, and extending
+        // left/up put it on the wrong corner. Re-adding the cursor cell (already selected) moves
+        // anchor+lead back onto the vim cursor WITHOUT changing the selection.
+        val leadRow = vRow.coerceIn(0, table.rowCount - 1)
+        val leadCol = vCol.coerceIn(0, table.columnCount - 1)
+        table.addRowSelectionInterval(leadRow, leadRow)
+        table.addColumnSelectionInterval(leadCol, leadCol)
     }
 
     /** `yy`: copy just the current cell's text. */
