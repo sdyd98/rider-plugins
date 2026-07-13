@@ -21,7 +21,12 @@ internal val GRID_ACCENT: JBColor = JBColor(0x3574F0, 0x589DF6)
 
 /**
  * Cell renderer: zebra striping, right-aligned numbers, a bold/tinted first (header) data row, and
- * a 2px accent ring on the focused cell (important since always-on vim has no blinking caret).
+ * Excel-style selection rendering:
+ *
+ *  - the ACTIVE (lead) cell keeps its normal background and gets a 2px accent ring — a plain cursor
+ *    never reads as "selected" (important since always-on vim has no blinking caret);
+ *  - RANGE members (visual mode / multi-cell selection) get a light accent tint instead of the LAF's
+ *    full selection fill, so "cursor on a cell" and "cells actually selected" are distinguishable.
  *
  * Fonts and the stripe color are cached, and numeric detection bails on the first char, so the
  * per-cell paint (the hot path during scroll) does almost no work and no allocation for the common
@@ -34,6 +39,7 @@ open class GridCellRenderer : DefaultTableCellRenderer() {
     private var boldFont: Font? = null
     private val stripe = UIUtil.getDecoratedRowColor()
     private val formulaBg = ColorUtil.withAlpha(GRID_ACCENT, 0.12)
+    private val rangeBg = ColorUtil.withAlpha(GRID_ACCENT, 0.18) // selected-range tint (Excel-like)
     private val focusBorder: Border = JBUI.Borders.customLine(GRID_ACCENT, 2, 2, 2, 2)
 
     override fun getTableCellRendererComponent(
@@ -57,14 +63,17 @@ open class GridCellRenderer : DefaultTableCellRenderer() {
         // so files without any formulas pay nothing per painted cell.
         val isFormula = sheetModel != null && modelRow >= 0 && sheetModel.hasFormulas() &&
             sheetModel.isFormula(modelRow, table.convertColumnIndexToModel(column))
-        if (!isSelected) {
-            c.background = when {
-                modelRow == 0 -> UIUtil.getPanelBackground() // header row joins the chrome
-                isFormula -> formulaBg
-                row % 2 == 1 -> stripe
-                else -> table.background
-            }
+        val baseBg = when {
+            modelRow == 0 -> UIUtil.getPanelBackground() // header row joins the chrome
+            isFormula -> formulaBg
+            row % 2 == 1 -> stripe
+            else -> table.background
         }
+        // Excel model: the lead cell shows the ring over its NORMAL background; only the other
+        // selected cells fill with the range tint. (When the grid itself isn't focused, the lead
+        // cell tints too, so an active selection stays visible while e.g. the filter bar has focus.)
+        c.background = if (isSelected && !hasFocus) rangeBg else baseBg
+        c.foreground = table.foreground // never the LAF's white-on-blue selection foreground
         if (hasFocus) c.border = focusBorder // else: super already set the no-focus border
         return c
     }

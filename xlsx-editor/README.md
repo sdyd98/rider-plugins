@@ -123,6 +123,10 @@ xlsx-editor/
 - **Grid styling** (`GridStyling.kt`): an Excel-style row-number gutter (`RowNumberHeader`, painted
   from live table geometry so it tracks scroll/filter), a `GridCellRenderer` (zebra striping,
   right-aligned numbers, bold first/header row), and column auto-sizing from a row sample.
+  Selection renders Excel-style: the **active cell keeps its normal background with a 2px accent
+  ring** (a cursor never looks "selected"), while **range members get a light accent tint** — so a
+  visual-mode selection is unmistakable; the status bar also shows `-- VISUAL --` / `-- V-LINE --`
+  while one is active.
 - **Shared Compose chrome** (`ComposeChrome.kt`): one editor-level filter bar + status bar (Compose/
   Jewel), bound to the active sheet. The filter bar has a live match count, an invalid-regex outline,
   and removable per-column filter chips; the status bar shows the cell reference (e.g. `C5`),

@@ -28,11 +28,20 @@ class VimGridController(
     private val onFocusFilter: () -> Unit,
     private val onNextSheet: () -> Unit = {},
     private val onPrevSheet: () -> Unit = {},
+    /** Visual mode entered/left — the panel shows "-- VISUAL --" in the status bar. */
+    private val onVisualModeChanged: () -> Unit = {},
 ) : VimTableController(table) {
 
     private enum class VisualMode { NONE, LINE, CELL }
 
     private var visual = VisualMode.NONE
+
+    /** Status label for the active visual mode ("VISUAL" / "V-LINE"), or null in normal mode. */
+    fun visualModeLabel(): String? = when (visual) {
+        VisualMode.CELL -> "VISUAL"
+        VisualMode.LINE -> "V-LINE"
+        VisualMode.NONE -> null
+    }
     private var vAnchorRow = 0
     private var vAnchorCol = 0
     private var vRow = 0 // the visual cursor (view coordinates, like the table selection)
@@ -267,6 +276,7 @@ class VimGridController(
         vRow = vAnchorRow
         vCol = curCol()
         applyVisualSelection()
+        onVisualModeChanged()
     }
 
     private fun enterCellVisual() {
@@ -277,6 +287,7 @@ class VimGridController(
         vRow = vAnchorRow
         vCol = vAnchorCol
         applyVisualSelection()
+        onVisualModeChanged()
     }
 
     private fun exitVisual() {
@@ -290,6 +301,7 @@ class VimGridController(
             )
         }
         reset()
+        onVisualModeChanged()
     }
 
     private fun handleVisual(ch: Char) {

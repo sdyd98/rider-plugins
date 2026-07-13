@@ -128,6 +128,7 @@ class SheetPanel(
         onFocusFilter = onFocusFilter,
         onNextSheet = onNextSheet,
         onPrevSheet = onPrevSheet,
+        onVisualModeChanged = { updateStatus() }, // show/clear "-- VISUAL --" immediately
     )
 
     val component: JComponent = JPanel(BorderLayout()).apply {
@@ -507,6 +508,7 @@ class SheetPanel(
             null
         }
         val parts = buildList {
+            vim.visualModeLabel()?.let { add("-- $it --") } // vim-style mode indicator while selecting
             add(ref)
             if (formula != null) add("ƒ $formula · Excel에서 계산")
             add(rowsText)
