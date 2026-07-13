@@ -61,6 +61,10 @@ class SheetPanel(
         setShowVerticalLines(true)
         gridColor = JBColor.namedColor("Table.gridColor", JBColor.border())
         intercellSpacing = JBUI.size(1, 1)
+        // Kill the platform's hover-row band: JBTable tints the WHOLE row under the mouse whenever a
+        // cell's background equals the table background, which reads as "my selection colored the
+        // entire row" on the flat grid. Selection must stay the only colored thing.
+        putClientProperty(com.intellij.ui.render.RenderingUtil.PAINT_HOVERED_BACKGROUND, false)
     }
 
     // ---- Frozen header rows ----
