@@ -86,7 +86,11 @@ class SheetPanel(
         autoResizeMode = JTable.AUTO_RESIZE_OFF
         isFocusable = false
         rowSelectionAllowed = false
-        columnSelectionAllowed = false
+        // Do NOT touch columnSelectionAllowed here: it lives on the COLUMN MODEL, which is shared
+        // with the main table — writing false disabled column selection on the main grid, making
+        // isCellSelected() treat every cell of a selected row as selected (the whole row painted
+        // as selection no matter what was actually selected). Non-interactivity comes from
+        // isFocusable=false + rowSelectionAllowed=false + the renderer ignoring selection.
         setShowHorizontalLines(true) // match the main grid's Excel-style hairlines
         setShowVerticalLines(true)
         gridColor = JBColor.namedColor("Table.gridColor", JBColor.border())
