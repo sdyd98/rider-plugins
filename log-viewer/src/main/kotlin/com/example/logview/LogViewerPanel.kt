@@ -253,6 +253,7 @@ class LogViewerPanel(
             onToggleLevel = { level -> toggleLevel(level) },
             onAllLevels = { setAllLevels() },
             onErrorsOnly = { errorsOnly() },
+            onErrorSummary = { showErrorSummary() },
             onToggleFollow = { toggleFollow() },
             onToggleRegex = { toggleRegex() },
             onToggleCase = { toggleCase() },
@@ -694,6 +695,39 @@ class LogViewerPanel(
     }
 
     private fun showHelp() = showLogHelpPopup(table)
+
+    /** 에러 요약: group repeated ERROR lines by shape (ErrorSummary) and show the clickable popup. */
+    private fun showErrorSummary() {
+        // Snapshot on the EDT (LogLine's cached getters are EDT-only), summarize off it, show on it.
+        val entries = ArrayList<ErrorSummary.Entry>(model.countOf(LogLevel.ERROR))
+        model.forEachLevelRow(LogLevel.ERROR) { row ->
+            val line = model.lineAt(row)
+            if (!line.isContinuation) { // stack-frame continuations would form bogus per-frame groups
+                entries.add(ErrorSummary.Entry(row, line.lineNumber, line.timestampMillis, line.message.ifEmpty { line.display }))
+            }
+        }
+        ApplicationManager.getApplication().executeOnPooledThread {
+            val groups = ErrorSummary.summarize(entries)
+            onEdt {
+                var popupRef: com.intellij.openapi.ui.popup.JBPopup? = null
+                val panel = createErrorSummaryPanel(groups, entries.size) { modelRow ->
+                    popupRef?.cancel()
+                    // The row can shift (live-tail trim) while the popup was open — clamp before jumping.
+                    if (model.rowCount > 0) seekToModelRow(modelRow.coerceIn(0, model.rowCount - 1))
+                    focusGrid()
+                }
+                val popup = JBPopupFactory.getInstance()
+                    .createComponentPopupBuilder(panel, panel)
+                    .setTitle("에러 요약")
+                    .setRequestFocus(true)
+                    .setMovable(true)
+                    .setResizable(true)
+                    .createPopup()
+                popupRef = popup
+                popup.showInCenterOf(component)
+            }
+        }
+    }
 
     private fun openRulesDialog() {
         if (HighlightRulesDialog(project).showAndGet()) {

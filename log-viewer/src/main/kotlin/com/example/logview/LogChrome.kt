@@ -63,6 +63,7 @@ class LogChromeActions(
     val onToggleLevel: (LogLevel) -> Unit,
     val onAllLevels: () -> Unit,
     val onErrorsOnly: () -> Unit,
+    val onErrorSummary: () -> Unit,
     val onToggleFollow: () -> Unit,
     val onToggleRegex: () -> Unit,
     val onToggleCase: () -> Unit,
@@ -140,6 +141,7 @@ fun createLogFilterBar(
             }
             Spacer(Modifier.width(Space.sm))
             ToolButton("에러만", palette = p) { actions.onErrorsOnly() }
+            ToolButton("에러 요약", palette = p) { actions.onErrorSummary() }
         }
     }
 }
