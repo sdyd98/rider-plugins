@@ -109,7 +109,11 @@ xlsx-editor/
 
 - **Frozen header rows + column jump:** press **`Alt+Shift+F`** to freeze the top rows through the
   cursor (model rows `0..current`); press it again to **unfreeze**. Frozen rows pin to the top while
-  scrolling **and** stay visible through filtering. Frozen rows live in a separate `frozenTable` placed in the scroll pane's column-header
+  scrolling **and** stay visible through filtering. The last freeze state (row count + key row) is
+  **remembered globally** (`GridPrefs`) and auto-applied to every sheet/workbook opened afterwards —
+  game-data tables share one layout, so freeze once and every table opens with its headers pinned;
+  unfreezing is remembered too (new sheets open unfrozen). A manual `Alt+Shift+F` on a sheet always
+  overrides the remembered default for that sheet. Frozen rows live in a separate `frozenTable` placed in the scroll pane's column-header
   view, sharing the main table's column model so widths stay in sync; the main table's `RowFilter`
   excludes them. One frozen row is the **key row** (`Alt+K` cycles it) whose values name the columns
   in the **`Alt+\`** jump popup (type to filter, choose to move the cursor to that column).

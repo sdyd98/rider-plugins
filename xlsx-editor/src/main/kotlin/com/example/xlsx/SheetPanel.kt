@@ -66,6 +66,11 @@ class SheetPanel(
     private var keyRow = -1
     private val keyTint = ColorUtil.withAlpha(GRID_ACCENT, 0.18)
 
+    // The remembered freeze default (GridPrefs), snapshotted on the first streamed rows so every
+    // sheet decides once at open time: -1 = not decided yet, 0 = nothing to auto-apply (either no
+    // default, or the user already froze/unfroze THIS sheet manually — manual always wins).
+    private var pendingAutoFreeze = -1
+
     /** Display-only table for the frozen rows; shares the main column model, lives in the header. */
     private val frozenTable = JBTable(model).apply {
         columnModel = table.columnModel // share widths/order with the main table
@@ -160,6 +165,7 @@ class SheetPanel(
         model.addTableModelListener {
             rowHeader.revalidate(); rowHeader.repaint()
             if (!ready) updateStatus() // show streaming progress (loaded-row count) in the status bar
+            maybeAutoFreeze() // apply the remembered freeze as soon as enough rows have streamed in
         }
         // Excel-style cross-highlight: moving the active cell repaints both axes. Skip the status push
         // for valueIsAdjusting (mid-drag) events — the repaints still run for the live highlight.
@@ -333,8 +339,10 @@ class SheetPanel(
         override fun include(entry: Entry<out SheetTableModel, out Int>): Boolean = entry.identifier < frozenRowCount
     }
 
-    /** Toggle: if anything is frozen, unfreeze; otherwise freeze model rows 0..current as headers. */
+    /** Toggle: if anything is frozen, unfreeze; otherwise freeze model rows 0..current as headers.
+     *  Either way the result is REMEMBERED (GridPrefs) and auto-applied to sheets opened later. */
     private fun toggleFreezeAtCurrent() {
+        pendingAutoFreeze = 0 // a manual toggle always wins over the remembered default
         if (frozenRowCount > 0) {
             frozenRowCount = 0
             keyRow = -1
@@ -344,6 +352,19 @@ class SheetPanel(
             frozenRowCount = table.convertRowIndexToModel(viewRow) + 1
             keyRow = frozenRowCount - 1 // default key = last (most specific) header row
         }
+        GridPrefs.getInstance().remember(frozenRowCount, keyRow)
+        applyFreeze()
+    }
+
+    /** Auto-apply the remembered freeze once this sheet has streamed enough rows. One-shot. */
+    private fun maybeAutoFreeze() {
+        if (frozenRowCount > 0) return // already frozen (manually or by an earlier auto-apply)
+        if (pendingAutoFreeze == -1) pendingAutoFreeze = GridPrefs.getInstance().frozenRows() // decide once
+        val rows = pendingAutoFreeze
+        if (rows <= 0 || model.rowCount < rows) return // nothing remembered / not enough rows yet
+        pendingAutoFreeze = 0
+        frozenRowCount = rows
+        keyRow = GridPrefs.getInstance().keyRow().coerceIn(0, rows - 1)
         applyFreeze()
     }
 
@@ -351,6 +372,7 @@ class SheetPanel(
     private fun cycleKeyRow() {
         if (frozenRowCount <= 0) return
         keyRow = if (keyRow < 0) frozenRowCount - 1 else (keyRow + 1) % frozenRowCount
+        GridPrefs.getInstance().remember(frozenRowCount, keyRow) // the key row is part of the remembered setup
         frozenTable.repaint()
         recomputeFilterState() // chip labels come from the key row
         updateStatus()

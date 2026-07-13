@@ -31,6 +31,9 @@
     </dependencies>
 
     <extensions defaultExtensionNs="com.intellij">
+        <!-- Persisted grid prefs: the last freeze-header state, auto-applied to newly opened sheets. -->
+        <applicationService serviceImplementation="com.example.xlsx.GridPrefs"/>
+
         <!-- Treat .xlsx/.xls as a binary file type routed to our editor (not a generic archive). -->
         <fileType
             name="Excel Spreadsheet"
