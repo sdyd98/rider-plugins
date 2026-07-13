@@ -39,8 +39,22 @@ open class GridCellRenderer : DefaultTableCellRenderer() {
     private var boldFont: Font? = null
     private val stripe = UIUtil.getDecoratedRowColor()
     private val formulaBg = ColorUtil.withAlpha(GRID_ACCENT, 0.12)
-    private val rangeBg = ColorUtil.withAlpha(GRID_ACCENT, 0.18) // selected-range tint (Excel-like)
+    private val rangeBg = ColorUtil.withAlpha(GRID_ACCENT, 0.30) // selected-range tint (Excel-like)
     private val focusBorder: Border = JBUI.Borders.customLine(GRID_ACCENT, 2, 2, 2, 2)
+
+    // Excel draws one border around the whole selected RANGE; per-cell that means: an accent line
+    // only on the edges facing OUTSIDE the selection. 16 edge combinations, cached (paint hot path).
+    private val rangeEdgeBorders = HashMap<Int, Border>()
+
+    private fun rangeEdgeBorder(table: JTable, row: Int, col: Int): Border {
+        // isCellSelected is false for out-of-range neighbors, so range edges at the grid borders work.
+        val t = if (table.isCellSelected(row - 1, col)) 0 else 1
+        val l = if (table.isCellSelected(row, col - 1)) 0 else 1
+        val b = if (table.isCellSelected(row + 1, col)) 0 else 1
+        val r = if (table.isCellSelected(row, col + 1)) 0 else 1
+        val key = t or (l shl 1) or (b shl 2) or (r shl 3)
+        return rangeEdgeBorders.getOrPut(key) { JBUI.Borders.customLine(GRID_ACCENT, t, l, b, r) }
+    }
 
     override fun getTableCellRendererComponent(
         table: JTable, value: Any?, isSelected: Boolean, hasFocus: Boolean, row: Int, column: Int,
@@ -70,11 +84,16 @@ open class GridCellRenderer : DefaultTableCellRenderer() {
             else -> table.background
         }
         // Excel model: the lead cell shows the ring over its NORMAL background; only the other
-        // selected cells fill with the range tint. (When the grid itself isn't focused, the lead
-        // cell tints too, so an active selection stays visible while e.g. the filter bar has focus.)
+        // selected cells fill with the range tint, and the range gets a 1px outline around its
+        // outside edges. (When the grid itself isn't focused, the lead cell tints too, so an active
+        // selection stays visible while e.g. the filter bar has focus.)
         c.background = if (isSelected && !hasFocus) rangeBg else baseBg
         c.foreground = table.foreground // never the LAF's white-on-blue selection foreground
-        if (hasFocus) c.border = focusBorder // else: super already set the no-focus border
+        c.border = when {
+            hasFocus -> focusBorder
+            isSelected -> rangeEdgeBorder(table, row, column)
+            else -> c.border // super already set the no-focus border
+        }
         return c
     }
 
