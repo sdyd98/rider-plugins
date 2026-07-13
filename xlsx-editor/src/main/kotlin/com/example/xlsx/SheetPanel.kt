@@ -54,11 +54,13 @@ class SheetPanel(
         autoResizeMode = JTable.AUTO_RESIZE_OFF
         cellSelectionEnabled = true
         setDefaultRenderer(Any::class.java, GridCellRenderer())
-        // Lean on zebra striping for rows; keep light vertical separators for columns.
-        setShowHorizontalLines(false)
+        // Excel-style: a flat background with light gridlines on BOTH axes. Row separation comes from
+        // the hairlines, not zebra striping — a pre-tinted half of the grid drowned out the selection
+        // tint (see GridCellRenderer), so unselected cells carry no color at all.
+        setShowHorizontalLines(true)
         setShowVerticalLines(true)
         gridColor = JBColor.namedColor("Table.gridColor", JBColor.border())
-        intercellSpacing = JBUI.size(1, 0)
+        intercellSpacing = JBUI.size(1, 1)
     }
 
     // ---- Frozen header rows ----
@@ -79,10 +81,10 @@ class SheetPanel(
         isFocusable = false
         rowSelectionAllowed = false
         columnSelectionAllowed = false
-        setShowHorizontalLines(false)
+        setShowHorizontalLines(true) // match the main grid's Excel-style hairlines
         setShowVerticalLines(true)
         gridColor = JBColor.namedColor("Table.gridColor", JBColor.border())
-        intercellSpacing = JBUI.size(1, 0)
+        intercellSpacing = JBUI.size(1, 1)
     }
     private var frozenSorter: TableRowSorter<SheetTableModel>? = null
     private val headerPanel = JPanel(BorderLayout())

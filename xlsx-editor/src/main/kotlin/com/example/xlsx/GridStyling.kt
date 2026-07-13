@@ -20,24 +20,25 @@ import com.intellij.ui.table.JBTable
 internal val GRID_ACCENT: JBColor = JBColor(0x3574F0, 0x589DF6)
 
 /**
- * Cell renderer: zebra striping, right-aligned numbers, a bold/tinted first (header) data row, and
- * Excel-style selection rendering:
+ * Cell renderer: right-aligned numbers, a bold first (header) data row, and Excel-style selection
+ * rendering on an otherwise FLAT background — unselected cells all share one background (no zebra
+ * striping: half the grid being pre-tinted drowned out the selection tint), so color means exactly
+ * one thing: what you selected.
  *
  *  - the ACTIVE (lead) cell keeps its normal background and gets a 2px accent ring — a plain cursor
  *    never reads as "selected" (important since always-on vim has no blinking caret);
- *  - RANGE members (visual mode / multi-cell selection) get a light accent tint instead of the LAF's
- *    full selection fill, so "cursor on a cell" and "cells actually selected" are distinguishable.
+ *  - RANGE members (visual mode / multi-cell selection) get an accent tint + a 1px outline around
+ *    the range's outside edges, so a selection is unmistakable.
  *
- * Fonts and the stripe color are cached, and numeric detection bails on the first char, so the
- * per-cell paint (the hot path during scroll) does almost no work and no allocation for the common
- * no-formula case (the boxing `isFormula` lookup is skipped unless the sheet actually has formulas).
+ * Fonts are cached and numeric detection bails on the first char, so the per-cell paint (the hot
+ * path during scroll) does almost no work and no allocation for the common no-formula case (the
+ * boxing `isFormula` lookup is skipped unless the sheet actually has formulas).
  */
 open class GridCellRenderer : DefaultTableCellRenderer() {
 
     private var seenFont: Font? = null
     private var plainFont: Font? = null
     private var boldFont: Font? = null
-    private val stripe = UIUtil.getDecoratedRowColor()
     private val formulaBg = ColorUtil.withAlpha(GRID_ACCENT, 0.12)
     private val rangeBg = ColorUtil.withAlpha(GRID_ACCENT, 0.30) // selected-range tint (Excel-like)
     private val focusBorder: Border = JBUI.Borders.customLine(GRID_ACCENT, 2, 2, 2, 2)
@@ -79,8 +80,7 @@ open class GridCellRenderer : DefaultTableCellRenderer() {
             sheetModel.isFormula(modelRow, table.convertColumnIndexToModel(column))
         val baseBg = when {
             modelRow == 0 -> UIUtil.getPanelBackground() // header row joins the chrome
-            isFormula -> formulaBg
-            row % 2 == 1 -> stripe
+            isFormula -> formulaBg // rare + informative; everything else stays flat
             else -> table.background
         }
         // Excel model: the lead cell shows the ring over its NORMAL background; only the other
