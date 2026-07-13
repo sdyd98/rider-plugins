@@ -56,17 +56,16 @@ private val LOG_SHORTCUTS = listOf(
     LogShortcut("?", "이 도움말 · Esc 닫기"),
 )
 
-private val logHoverTint = Color(0xFF3574F0).copy(alpha = 0.16f)
-
 /**
  * Compose (Jewel) shortcut help for the log viewer — Korean, with per-row animated hover. Mirrors the
  * xlsx viewer's `createComposeHelpPanel` so the two plugins' help popups look and feel identical.
  */
 fun createLogHelpPanel(): JComponent = JewelComposePanel {
-    Column(Modifier.width(380.dp).padding(16.dp)) {
-        Text("로그 뷰어 단축키", fontWeight = FontWeight.Bold)
+    val p = rememberLogPalette()
+    Column(Modifier.width(380.dp).padding(Space.lg)) {
+        Text("로그 뷰어 단축키", color = p.text, fontWeight = FontWeight.Bold)
         Spacer(Modifier.height(10.dp))
-        LOG_SHORTCUTS.forEach { logShortcutRow(it.key, it.desc) }
+        LOG_SHORTCUTS.forEach { logShortcutRow(it.key, it.desc, p) }
     }
 }
 
@@ -82,19 +81,19 @@ fun showLogHelpPopup(anchor: JComponent) {
 }
 
 @Composable
-private fun logShortcutRow(key: String, desc: String) {
+private fun logShortcutRow(key: String, desc: String, p: LogPalette) {
     val interaction = remember { MutableInteractionSource() }
     val hovered by interaction.collectIsHoveredAsState()
-    val background by animateColorAsState(if (hovered) logHoverTint else Color.Transparent)
+    val background by animateColorAsState(if (hovered) p.surfaceHover else Color.Transparent)
     Row(
         Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(6.dp))
+            .clip(RoundedCornerShape(Radii.sm))
             .background(background)
             .hoverable(interaction)
             .padding(horizontal = 8.dp, vertical = 6.dp),
     ) {
-        Text(key, Modifier.width(128.dp), fontWeight = FontWeight.Bold)
-        Text(desc)
+        Text(key, Modifier.width(128.dp), color = p.text, fontWeight = FontWeight.Bold)
+        Text(desc, color = p.text)
     }
 }
