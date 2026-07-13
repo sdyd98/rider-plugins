@@ -50,6 +50,7 @@ private val LOG_SHORTCUTS = listOf(
     LogShortcut("za", "스택트레이스 접기 / 펴기"),
     LogShortcut("zR / zM", "모두 펴기 / 모두 접기"),
     LogShortcut("m{a-z} / `{a-z}", "마크 설정 / 마크로 이동"),
+    LogShortcut("Enter / 더블클릭", "스택 프레임의 소스 파일로 이동"),
     LogShortcut("J", "이 줄의 JSON 정렬해 보기"),
     LogShortcut("T", "시각으로 이동"),
     LogShortcut("?", "이 도움말 · Esc 닫기"),

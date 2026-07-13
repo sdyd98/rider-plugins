@@ -41,6 +41,8 @@ class VimLogController(
     private val onExitLeft: () -> Unit = {},
     /** `gt` / `gT` — switch to the next / previous file (session tab). */
     private val onSwitchTab: (dir: Int) -> Unit = {},
+    /** Enter — open the source reference (stack frame) on the cursor line in the editor. */
+    private val onOpenSource: () -> Unit = {},
 ) : VimTableController(table) {
 
     private val marks = HashMap<Char, Int>() // mark letter -> MODEL row
@@ -58,6 +60,11 @@ class VimLogController(
     }
 
     override val keyChars = "abcdefghijklmnopqrstuvwxyzGHLMNTJRV0123456789\$^{}[]`/?*#"
+
+    init {
+        // Registered as an IDE-action chord so it beats JTable's default Enter (selection down).
+        registerChord("ENTER") { onOpenSource() }
+    }
 
     override fun focusGained() {
         curCol = firstVisibleCol() // always enter the viewer at the first column (Time)

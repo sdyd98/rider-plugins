@@ -43,6 +43,7 @@ class LogCellRenderer(
     private var focused = false
     private var foldHint: String? = null
     private var ansiSpans: List<AnsiText.Span>? = null // non-null when this line has ANSI colors to render
+    private var linkSpan: IntRange? = null // char range of a source reference (underlined; Enter/double-click opens)
 
     override fun getTableCellRendererComponent(
         table: JTable, value: Any?, isSelected: Boolean, hasFocus: Boolean, row: Int, column: Int,
@@ -75,6 +76,9 @@ class LogCellRenderer(
             model.rawMode -> if (line.hasAnsi) line.rawSpans else null
             else -> if (line.messageHasAnsi) line.messageSpans else null
         }
+        // Underline a recognized source reference (stack frame etc.) — only the ~50 visible rows ever
+        // run this regex, so it stays off any hot path. Skipped on ANSI lines (span math ≠ cell text).
+        linkSpan = if (ansiSpans == null) LogSourceLink.find(text)?.span else null
         return this
     }
 
@@ -132,6 +136,17 @@ class LogCellRenderer(
                 g2.color = fg
                 g2.font = useFont
                 g2.drawString(text, pad, baseline)
+
+                // Source-link underline (e.g. `Gateway.java:107`) — Enter / double-click opens it.
+                linkSpan?.let { span ->
+                    val x1 = pad + fm.stringWidth(text.substring(0, span.first.coerceIn(0, text.length)))
+                    val x2 = pad + fm.stringWidth(text.substring(0, span.last.coerceIn(0, text.length)))
+                    if (x2 > x1) {
+                        val a = LogStyling.ACCENT
+                        g2.color = Color(a.red, a.green, a.blue, 150)
+                        g2.drawLine(x1, baseline + JBUI.scale(2), x2, baseline + JBUI.scale(2))
+                    }
+                }
             }
         }
 

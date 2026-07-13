@@ -179,6 +179,7 @@ class LogViewerPanel(
         onEscape = { clearSearchQuery() },
         onExitLeft = onExitLeft,
         onSwitchTab = onSwitchTab,
+        onOpenSource = { openSourceAtCursor() },
     )
 
     val component: JComponent = JPanel(BorderLayout())
@@ -227,6 +228,14 @@ class LogViewerPanel(
         // Re-fit the content column to the viewport width when the panel is resized (e.g. a narrow dock).
         scrollPane.viewport.addComponentListener(object : java.awt.event.ComponentAdapter() {
             override fun componentResized(e: java.awt.event.ComponentEvent) = fitColumnWidth()
+        })
+        // Double-click a line with a source reference (stack frame) → open it in the editor.
+        table.addMouseListener(object : java.awt.event.MouseAdapter() {
+            override fun mouseClicked(e: java.awt.event.MouseEvent) {
+                if (e.clickCount != 2) return
+                val row = table.rowAtPoint(e.point)
+                if (row >= 0) openSourceAtViewRow(row)
+            }
         })
 
         buildChrome()
@@ -829,6 +838,22 @@ class LogViewerPanel(
     }
 
     // ---- JSON pretty-print + time jump ----
+
+    // ---- Source jump (Enter / double-click on a stack frame) ----
+
+    private fun openSourceAtCursor() {
+        val r = table.selectedRow
+        if (r in 0 until table.rowCount) openSourceAtViewRow(r)
+    }
+
+    private fun openSourceAtViewRow(viewRow: Int): Boolean {
+        val mr = table.convertRowIndexToModel(viewRow)
+        if (mr !in 0 until model.rowCount) return false
+        // Same text the Message cell renders, so the parsed link matches the underline the user sees.
+        val text = model.getValueAt(mr, COL_MSG) as? String ?: return false
+        val link = LogSourceLink.find(text) ?: return false
+        return LogSourceLink.open(project, link)
+    }
 
     private fun showJsonAtCursor() {
         val viewRow = table.selectedRow
