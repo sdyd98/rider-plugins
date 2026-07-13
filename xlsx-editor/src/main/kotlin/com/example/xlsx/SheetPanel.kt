@@ -61,9 +61,11 @@ class SheetPanel(
         setShowVerticalLines(true)
         gridColor = JBColor.namedColor("Table.gridColor", JBColor.border())
         intercellSpacing = JBUI.size(1, 1)
-        // Kill the platform's hover-row band: JBTable tints the WHOLE row under the mouse whenever a
-        // cell's background equals the table background, which reads as "my selection colored the
-        // entire row" on the flat grid. Selection must stay the only colored thing.
+        // Kill the platform's hover-row band: JBTable tints the WHOLE row under the mouse, which
+        // reads as "my selection colored the entire row" on the flat grid. Remove the hover
+        // listener itself (deterministic — no hovered row exists at all) AND set the disable
+        // property for any other RenderingUtil consumers. Selection must stay the only colored thing.
+        com.intellij.ui.hover.TableHoverListener.DEFAULT.removeFrom(this)
         putClientProperty(com.intellij.ui.render.RenderingUtil.PAINT_HOVERED_BACKGROUND, false)
     }
 
