@@ -44,6 +44,10 @@
         <!-- The custom grid editor for .xlsx / .xls files (read-only viewer). -->
         <fileEditorProvider implementation="com.example.xlsx.XlsxFileEditorProvider"/>
 
+        <!-- Text projection (TSV per sheet) for diff/VCS: without it, comparing spreadsheet
+             revisions just says "binary files differ". Same mechanism as .class decompiled diffs. -->
+        <filetype.decompiler filetype="Excel Spreadsheet" implementationClass="com.example.xlsx.XlsxDecompiler"/>
+
         <!-- Relationship view: table-level ER map, record-level lineage explorer, and integrity check. -->
         <toolWindow id="관계도" anchor="right" factoryClass="com.example.xlsx.RefGraphToolWindow"/>
     </extensions>
