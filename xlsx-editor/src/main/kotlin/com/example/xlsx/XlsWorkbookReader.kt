@@ -27,10 +27,12 @@ object XlsWorkbookReader {
 
     /** Render one sheet's cells to display strings and collect its formula positions. */
     fun renderSheet(wb: Workbook, index: Int): SheetData = withPoiClassLoader {
-        // Same tuning as the .xlsx path: fast General formatting (byte-identical to DataFormatter,
-        // see FastGeneralFormatterTest) + repeated-display-string dedup.
+        // Same tuning as the .xlsx path: fast General formatting + repeated-display-string dedup.
+        // NOTE: numeric cells must route through formatRawCellContents explicitly — the usermodel
+        // convenience path (formatCellValue) never calls it, which silently bypassed the fast path.
         val formatter = FastGeneralFormatter()
         val pool = StringPool()
+        val use1904 = (wb as? org.apache.poi.hssf.usermodel.HSSFWorkbook)?.internalWorkbook?.isUsing1904DateWindowing == true
         val sheet = wb.getSheetAt(index)
         val rows = ArrayList<Array<String?>>(sheet.lastRowNum + 1)
         val formulas = HashMap<Long, String>()
@@ -44,7 +46,7 @@ object XlsWorkbookReader {
             val arr = arrayOfNulls<String>(lastCell)
             for (c in 0 until lastCell) {
                 val cell = row.getCell(c) ?: continue
-                arr[c] = pool.dedup(render(cell, formatter))
+                arr[c] = pool.dedup(render(cell, formatter, use1904))
                 if (cell.cellType == CellType.FORMULA) formulas[SheetTableModel.pack(r, c)] = "=" + cell.cellFormula
             }
             rows.add(arr)
@@ -55,11 +57,19 @@ object XlsWorkbookReader {
     /**
      * Display text for a cell. For a formula cell, show its **cached result** (like Excel and like
      * our .xlsx streaming path) rather than the formula text that `formatCellValue(cell)` returns
-     * when given no evaluator.
+     * when given no evaluator. Numeric cells go straight to [DataFormatter.formatRawCellContents]
+     * (the event-model entry the .xlsx path uses) so [FastGeneralFormatter]'s shortcut applies;
+     * for everything else the convenience path is already cheap.
      */
-    private fun render(cell: Cell, formatter: DataFormatter): String {
-        if (cell.cellType != CellType.FORMULA) return formatter.formatCellValue(cell)
-        return formatCachedFormulaResult(cell, formatter)
+    private fun render(cell: Cell, formatter: DataFormatter, use1904: Boolean): String {
+        return when (cell.cellType) {
+            CellType.NUMERIC -> {
+                val style = cell.cellStyle
+                formatter.formatRawCellContents(cell.numericCellValue, style.dataFormat.toInt(), style.dataFormatString, use1904)
+            }
+            CellType.FORMULA -> formatCachedFormulaResult(cell, formatter)
+            else -> formatter.formatCellValue(cell)
+        }
     }
 
     private val EMPTY = arrayOfNulls<String>(0)

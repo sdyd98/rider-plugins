@@ -149,7 +149,12 @@ For **large files** the open path is tuned to show content fast (measured on a 1
   whole (it's opened by random access from the file).
 - `.xls` has no streaming (HSSF builds the whole workbook ~1.8 s), but the tabs show right after the
   build and sheets render incrementally (active first), so first paint is ~2.3 s rather than ~4.4 s.
-- The parse itself is tuned for game-data shapes (measured on a 28 MB / 5.4M-cell workbook, serial):
+- `.xls` measured (47 MB / 2.6M cells): full HSSF build ~0.9 s + all-sheet render ~0.8 s. Numeric
+  cells route through `formatRawCellContents` explicitly — the usermodel convenience path
+  (`formatCellValue`) never calls it, which would silently bypass the fast General path below.
+  Rendering now sits within ~15% of a bare formatting loop, so the remaining `.xls` floor is the
+  (unavoidable) HSSF workbook build.
+- The `.xlsx` parse is tuned for game-data shapes (measured on a 28 MB / 5.4M-cell workbook, serial):
   the formula scan byte-checks for a `<f` tag before its SAX pass (2.0 s → 0.05 s on formula-free
   sheets), General-format numbers take a fast path around POI's per-cell BigDecimal rounding
   (`FastGeneralFormatter` — byte-identical output, pinned by a 200k-value equivalence test), and
