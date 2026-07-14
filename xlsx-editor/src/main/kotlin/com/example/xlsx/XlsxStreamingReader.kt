@@ -144,16 +144,8 @@ private class BatchingCollector(
     private var curMax = 0
     private var nextExpected = 0
 
-    // Dedup repeated display strings (game data repeats enum-ish values across thousands of rows —
-    // "TRUE", grades, category names). One hash probe per cell (~4% parse time) in exchange for a
-    // large heap/GC saving on 5M+ cell files. Cleared when unique-heavy columns (ids) fill it up.
-    private val interned = HashMap<String, String>(4096)
-
-    private fun dedup(v: String?): String? {
-        if (v == null || v.length > 64) return v
-        if (interned.size >= 65_536) interned.clear()
-        return interned.getOrPut(v) { v }
-    }
+    // Dedup repeated display strings — see StringPool (~4% parse time for a large heap/GC saving).
+    private val pool = StringPool()
 
     override fun startRow(rowNum: Int) {
         while (nextExpected < rowNum) {
@@ -167,7 +159,7 @@ private class BatchingCollector(
     override fun cell(cellReference: String?, formattedValue: String?, comment: XSSFComment?) {
         val col = if (cellReference == null) curMax else CellReference(cellReference).col.toInt()
         if (col >= cur.size) cur = cur.copyOf(maxOf(col + 1, cur.size * 2))
-        cur[col] = dedup(formattedValue)
+        cur[col] = pool.dedup(formattedValue)
         if (col + 1 > curMax) curMax = col + 1
     }
 

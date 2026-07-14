@@ -27,7 +27,10 @@ object XlsWorkbookReader {
 
     /** Render one sheet's cells to display strings and collect its formula positions. */
     fun renderSheet(wb: Workbook, index: Int): SheetData = withPoiClassLoader {
-        val formatter = DataFormatter()
+        // Same tuning as the .xlsx path: fast General formatting (byte-identical to DataFormatter,
+        // see FastGeneralFormatterTest) + repeated-display-string dedup.
+        val formatter = FastGeneralFormatter()
+        val pool = StringPool()
         val sheet = wb.getSheetAt(index)
         val rows = ArrayList<Array<String?>>(sheet.lastRowNum + 1)
         val formulas = HashMap<Long, String>()
@@ -41,7 +44,7 @@ object XlsWorkbookReader {
             val arr = arrayOfNulls<String>(lastCell)
             for (c in 0 until lastCell) {
                 val cell = row.getCell(c) ?: continue
-                arr[c] = render(cell, formatter)
+                arr[c] = pool.dedup(render(cell, formatter))
                 if (cell.cellType == CellType.FORMULA) formulas[SheetTableModel.pack(r, c)] = "=" + cell.cellFormula
             }
             rows.add(arr)
