@@ -149,6 +149,12 @@ For **large files** the open path is tuned to show content fast (measured on a 1
   whole (it's opened by random access from the file).
 - `.xls` has no streaming (HSSF builds the whole workbook ~1.8 s), but the tabs show right after the
   build and sheets render incrementally (active first), so first paint is ~2.3 s rather than ~4.4 s.
+- The parse itself is tuned for game-data shapes (measured on a 28 MB / 5.4M-cell workbook, serial):
+  the formula scan byte-checks for a `<f` tag before its SAX pass (2.0 s → 0.05 s on formula-free
+  sheets), General-format numbers take a fast path around POI's per-cell BigDecimal rounding
+  (`FastGeneralFormatter` — byte-identical output, pinned by a 200k-value equivalence test), and
+  repeated display strings are deduped at parse time (enum-ish columns → far less heap/GC). Overall
+  ~7.0 s → ~3.8 s serial CPU; wall time is lower still since sheets parse in parallel.
 
 Large `.xls`/`.xlsx` also need the IDE's heap raised (Help → Change Memory Settings) and the plugin
 lifts POI's anti-DoS array cap + bypasses the IDE's ~20 MB content-load limit so big files open.

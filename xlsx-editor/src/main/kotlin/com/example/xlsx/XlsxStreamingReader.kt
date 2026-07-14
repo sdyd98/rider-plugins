@@ -90,9 +90,43 @@ object XlsxStreamingReader {
     ) = withPoiClassLoader {
         val collector = BatchingCollector(batchSize, onBatch)
         val parser = XMLHelper.newXMLReader()
-        parser.contentHandler = XSSFSheetXMLHandler(styles, null, sst, collector, DataFormatter(), false)
+        parser.contentHandler = XSSFSheetXMLHandler(styles, null, sst, collector, FastGeneralFormatter(), false)
         parser.parse(InputSource(ByteArrayInputStream(xml)))
         collector.flush()
+    }
+}
+
+/**
+ * [DataFormatter] with a fast path for the by-far most common cell shape in game data: an INTEGRAL
+ * number in the General format. POI's General path rounds through BigDecimal per cell — measured at
+ * ~50% of the whole sheet parse on a 30 MB workbook — while an integral double in Excel's General
+ * simply renders as its plain integer digits, which `Long.toString` produces identically. Everything
+ * else (fractions, dates, explicit formats) still goes through POI, so display stays byte-identical.
+ */
+internal class FastGeneralFormatter : DataFormatter() {
+    override fun formatRawCellContents(value: Double, formatIndex: Int, formatString: String?): String {
+        if (formatString == "General" || formatString == "@" || formatIndex == 0) {
+            val asLong = value.toLong()
+            // Integral (bit-exact, so -0.0 falls through to POI), and at most 11 digits — the range
+            // Excel's General renders as plain digits (12+ digits switch to scientific, POI's job).
+            if (asLong.toDouble().toRawBits() == value.toRawBits() &&
+                asLong > -100_000_000_000L && asLong < 100_000_000_000L
+            ) {
+                return asLong.toString()
+            }
+            // Fractional fast path: when the double's SHORTEST decimal representation is plain
+            // (no exponent) and within the 10-significant-digit budget POI's General rounds to
+            // (measured: 376.99111842 → "376.9911184"), the rounding cannot change it — POI prints
+            // exactly that representation. Counting every digit char (including non-significant
+            // leading zeros) only narrows the fast path. -0.0 must delegate (POI prints "0").
+            val s = value.toString()
+            if (value != 0.0 && s.indexOf('E') < 0) {
+                var digits = 0
+                for (ch in s) if (ch in '0'..'9') digits++
+                if (digits <= 10) return s
+            }
+        }
+        return super.formatRawCellContents(value, formatIndex, formatString)
     }
 }
 
@@ -110,6 +144,17 @@ private class BatchingCollector(
     private var curMax = 0
     private var nextExpected = 0
 
+    // Dedup repeated display strings (game data repeats enum-ish values across thousands of rows —
+    // "TRUE", grades, category names). One hash probe per cell (~4% parse time) in exchange for a
+    // large heap/GC saving on 5M+ cell files. Cleared when unique-heavy columns (ids) fill it up.
+    private val interned = HashMap<String, String>(4096)
+
+    private fun dedup(v: String?): String? {
+        if (v == null || v.length > 64) return v
+        if (interned.size >= 65_536) interned.clear()
+        return interned.getOrPut(v) { v }
+    }
+
     override fun startRow(rowNum: Int) {
         while (nextExpected < rowNum) {
             emit(EMPTY)
@@ -122,7 +167,7 @@ private class BatchingCollector(
     override fun cell(cellReference: String?, formattedValue: String?, comment: XSSFComment?) {
         val col = if (cellReference == null) curMax else CellReference(cellReference).col.toInt()
         if (col >= cur.size) cur = cur.copyOf(maxOf(col + 1, cur.size * 2))
-        cur[col] = formattedValue
+        cur[col] = dedup(formattedValue)
         if (col + 1 > curMax) curMax = col + 1
     }
 

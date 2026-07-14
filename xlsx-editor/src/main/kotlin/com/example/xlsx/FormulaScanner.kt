@@ -16,11 +16,25 @@ import java.io.ByteArrayInputStream
 object FormulaScanner {
 
     fun scan(xml: ByteArray): Map<Long, String> = withPoiClassLoader {
+        // Quick reject: a formula cell always contains a `<f` tag (`<f>`, `<f `, `<f/`). Most
+        // game-data sheets have ZERO formulas, and this byte scan (~ns/byte) spares them the full
+        // second SAX parse — which measured at ~40% of the whole value-parse cost on a 30 MB file.
+        // (Rare false positives — e.g. a `<firstFooter` header/footer element — just run the parse.)
+        if (!containsFormulaTag(xml)) return@withPoiClassLoader emptyMap()
         val handler = Handler()
         val parser = XMLHelper.newXMLReader()
         parser.contentHandler = handler
         parser.parse(InputSource(ByteArrayInputStream(xml)))
         handler.result
+    }
+
+    private fun containsFormulaTag(xml: ByteArray): Boolean {
+        val lt = '<'.code.toByte()
+        val f = 'f'.code.toByte()
+        for (i in 0 until xml.size - 1) {
+            if (xml[i] == lt && xml[i + 1] == f) return true
+        }
+        return false
     }
 
     private class Handler : DefaultHandler() {

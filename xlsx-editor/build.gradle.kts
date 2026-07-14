@@ -92,3 +92,17 @@ intellijPlatform {
 tasks.runIde {
     maxHeapSize = "4g"
 }
+
+dependencies {
+    // Headless tests/benchmarks for the streaming reader (pure POI — no IDE runtime). The repo-wide
+    // `kotlin.stdlib.default.dependency=false` also applies to tests, so add the stdlib back here.
+    testImplementation(kotlin("stdlib"))
+    testImplementation("org.junit.jupiter:junit-jupiter:5.10.2")
+    testRuntimeOnly("org.junit.platform:junit-platform-launcher")
+}
+
+tasks.test {
+    useJUnitPlatform()
+    maxHeapSize = "2g" // the open benchmark generates + parses a ~30 MB workbook
+    testLogging { showStandardStreams = true } // benchmark stage timings print to stdout
+}
