@@ -287,8 +287,12 @@ text projection stays in the diff window's viewer combo:
   shared scroll: added rows green, removed rows red (a grey placeholder slot on the other side keeps
   alignment visible), modified rows tinted with the **changed cells highlighted bold**. Sheet tabs
   are starred when they contain changes (sheet-level add/remove is labeled); the first changed sheet
-  is auto-selected. Loading runs off the EDT; sheets beyond 100k rows fall back to a notice (use the
-  text diff there).
+  is auto-selected and each sheet **auto-scrolls to its first change** when shown. Navigation is
+  first-class: the platform's **차이점 이동** (F7/⇧F7, toolbar arrows) works via
+  `PrevNextDifferenceIterable`, **vim keys are always on** (`hjkl` + counts, `gg`/`G`, `0`/`$`,
+  `zz`/`zt`/`zb`, `H`/`M`/`L`, `Ctrl+D/U/E/Y`, and vim diff-mode's **`]c`/`[c`** change jumps), row
+  selection mirrors across the two sides, and a **"변경만 보기"** toolbar toggle hides unchanged rows.
+  Loading runs off the EDT; sheets beyond 100k rows fall back to a notice (use the text diff there).
 - **TSV text projection** (`XlsxDecompiler`, a `filetype.decompiler` — the mechanism `.class` files
   use for decompiled diffs) — each sheet as `===== 시트: name =====` + one tab-joined line per row,
   deterministic and line-stable (one edited cell == one changed line), ~40 MB char cap. Without it a
