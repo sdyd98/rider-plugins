@@ -5,17 +5,19 @@ import javax.swing.JTable
 
 /**
  * Vim navigation for one side of the grid DIFF: `hjkl` + counts, `gg`/`G`, `0`/`$`, `zz`/`zt`/`zb`,
- * `H`/`M`/`L`, `Ctrl+D/U/E/Y` (base class), and vim diff-mode's **`]c` / `[c`** next/previous-change
- * jumps (wired to the same navigator F7 uses). No marks/visual/yank — the diff grid is a comparison
- * view, not the data browser; column 0 is the row-number gutter, so the cell cursor floors at 1.
+ * `H`/`M`/`L`, `Ctrl+D/U/E/Y` (base class), `gt`/`gT` sheet-tab switching (same semantics as the
+ * grid viewer), and vim diff-mode's **`]c` / `[c`** next/previous-change jumps (wired to the same
+ * navigator F7 uses). No marks/visual/yank — the diff grid is a comparison view, not the data
+ * browser; column 0 is the row-number gutter, so the cell cursor floors at 1.
  */
 internal class VimDiffGridController(
     table: JTable,
     private val nextChange: (Int) -> Unit,
     private val prevChange: (Int) -> Unit,
+    private val switchSheet: (Int) -> Unit,
 ) : VimTableController(table) {
 
-    override val keyChars = "0123456789hjklgGztbHML\$[]c"
+    override val keyChars = "0123456789hjklgGztbTHML\$[]c"
 
     override fun pressChar(ch: Char) {
         val p = pending
@@ -23,6 +25,8 @@ internal class VimDiffGridController(
             pending = null
             when {
                 p == 'g' && ch == 'g' -> gotoRow(0)
+                p == 'g' && ch == 't' -> switchSheet(1)
+                p == 'g' && ch == 'T' -> switchSheet(-1)
                 p == 'z' && ch == 'z' -> scrollCursorRow(ScrollTo.CENTER)
                 p == 'z' && ch == 't' -> scrollCursorRow(ScrollTo.TOP)
                 p == 'z' && ch == 'b' -> scrollCursorRow(ScrollTo.BOTTOM)

@@ -12,6 +12,7 @@ import com.intellij.diff.requests.ContentDiffRequest
 import com.intellij.diff.requests.DiffRequest
 import com.intellij.diff.tools.util.DiffDataKeys
 import com.intellij.diff.tools.util.PrevNextDifferenceIterable
+import com.intellij.diff.util.TextDiffType
 import com.intellij.icons.AllIcons
 import com.intellij.openapi.actionSystem.ActionUpdateThread
 import com.intellij.openapi.actionSystem.AnActionEvent
@@ -23,9 +24,14 @@ import com.intellij.openapi.diagnostic.logger
 import com.intellij.openapi.progress.DumbProgressIndicator
 import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.ui.JBColor
+import com.intellij.ui.OnePixelSplitter
+import com.intellij.ui.SimpleColoredComponent
+import com.intellij.ui.SimpleTextAttributes
 import com.intellij.ui.components.JBLabel
 import com.intellij.ui.components.JBScrollPane
+import com.intellij.ui.components.JBTabbedPane
 import com.intellij.ui.table.JBTable
+import com.intellij.util.ui.JBUI
 import java.awt.BorderLayout
 import java.awt.Color
 import java.awt.Component
@@ -33,13 +39,11 @@ import java.awt.Font
 import java.awt.Point
 import javax.swing.JComponent
 import javax.swing.JPanel
-import javax.swing.JSplitPane
 import javax.swing.JTabbedPane
 import javax.swing.JTable
 import javax.swing.JViewport
 import javax.swing.ListSelectionModel
 import javax.swing.RowFilter
-import javax.swing.ScrollPaneConstants
 import javax.swing.SwingConstants
 import javax.swing.SwingUtilities
 import javax.swing.table.AbstractTableModel
@@ -93,7 +97,7 @@ private class XlsxGridDiffViewer(private val request: ContentDiffRequest) : Fram
             currentPane()?.navigator?.let { sink.set(DiffDataKeys.PREV_NEXT_DIFFERENCE_ITERABLE, it) }
         }
     }
-    private val status = JBLabel("")
+    private val status = SimpleColoredComponent()
     private var tabs: JTabbedPane? = null
     private var panes: List<SheetPane?> = emptyList() // index-aligned with tabs; null = notice tab
     private var changedOnly = false
@@ -159,12 +163,10 @@ private class XlsxGridDiffViewer(private val request: ContentDiffRequest) : Fram
     }
 
     private fun buildTabs(sheets: List<XlsxDiffModel.SheetDiff>): JComponent {
-        val changedSheets = sheets.count { it.changed }
-        status.text = "시트 ${sheets.size}개 중 ${changedSheets}개 변경 · " +
-            "~${sheets.sumOf { it.modified }} · +${sheets.sumOf { it.inserted }} · −${sheets.sumOf { it.deleted }}"
+        renderStatus(sheets)
 
         if (sheets.isEmpty()) return JBLabel("시트가 없습니다", SwingConstants.CENTER)
-        val tabbed = JTabbedPane()
+        val tabbed: JTabbedPane = JBTabbedPane()
         val builtPanes = ArrayList<SheetPane?>(sheets.size)
         sheets.forEach { sheet ->
             val title = (if (sheet.changed) "✱ " else "") + sheet.name + (sheet.onlySide?.let { " ($it)" } ?: "")
@@ -172,7 +174,7 @@ private class XlsxGridDiffViewer(private val request: ContentDiffRequest) : Fram
                 builtPanes.add(null)
                 tabbed.addTab(title, JBLabel("시트가 너무 큽니다 (${XlsxDiffModel.MAX_DIFF_ROWS}행 초과) — 텍스트 디프를 사용하세요", SwingConstants.CENTER))
             } else {
-                val pane = SheetPane(sheet)
+                val pane = SheetPane(sheet, ::switchSheet)
                 builtPanes.add(pane)
                 tabbed.addTab(title, pane.component)
             }
@@ -194,6 +196,50 @@ private class XlsxGridDiffViewer(private val request: ContentDiffRequest) : Fram
         return tabbed
     }
 
+    /** `gt`/`gT` — cycle to the next/previous NON-notice sheet tab. tooBig sheets are notice tabs
+     *  with a null pane (no grid, non-focusable label); landing on one via the keyboard would drop
+     *  focus with no grid to hand it back to, killing the always-on vim keys — so we skip them. */
+    private fun switchSheet(dir: Int) {
+        val t = tabs ?: return
+        val n = t.tabCount
+        if (n <= 1) return
+        var i = t.selectedIndex
+        repeat(n) {
+            i = (i + dir + n) % n
+            if (panes.getOrNull(i) != null) { t.selectedIndex = i; return } // ChangeListener focuses + re-jumps
+        }
+        // Every other tab is a notice tab — nothing navigable; leave the selection put.
+    }
+
+    /** Status line as colored fragments (SimpleColoredComponent — the platform idiom for styled
+     *  inline text): counts wear the SAME semantic colors the grid highlights use, so `~` `+` `−`
+     *  read without a legend. */
+    private fun renderStatus(sheets: List<XlsxDiffModel.SheetDiff>) {
+        val changedSheets = sheets.count { it.changed }
+        val modified = sheets.sumOf { it.modified }
+        val inserted = sheets.sumOf { it.inserted }
+        val deleted = sheets.sumOf { it.deleted }
+        status.clear()
+        if (changedSheets == 0) {
+            status.append("차이 없음", SimpleTextAttributes.GRAYED_ATTRIBUTES)
+            return
+        }
+        status.append("변경된 시트 ", SimpleTextAttributes.GRAYED_ATTRIBUTES)
+        status.append("$changedSheets/${sheets.size}", SimpleTextAttributes.REGULAR_BOLD_ATTRIBUTES)
+        status.append("   ", SimpleTextAttributes.REGULAR_ATTRIBUTES)
+        if (modified > 0) status.append("~$modified 수정  ", SimpleTextAttributes(SimpleTextAttributes.STYLE_PLAIN, MODIFIED_FG))
+        if (inserted > 0) status.append("+$inserted 추가  ", SimpleTextAttributes(SimpleTextAttributes.STYLE_PLAIN, INSERTED_FG))
+        if (deleted > 0) status.append("−$deleted 삭제", SimpleTextAttributes(SimpleTextAttributes.STYLE_PLAIN, DELETED_FG))
+    }
+
+    private companion object {
+        // Foreground variants of the grid's highlight semantics, legible at status-bar size in both
+        // themes (background diff colors are too pale to use as text).
+        val MODIFIED_FG = JBColor(Color(0x2E6BB0), Color(0x6FA8DC))
+        val INSERTED_FG = JBColor(Color(0x1E7D34), Color(0x6CBB7A))
+        val DELETED_FG = JBColor(Color(0xC0392B), Color(0xE07A72)) // deletions are RED — firm user decision
+    }
+
     /** Toolbar: hide unchanged rows — the diff stops being a needle in a 50k-row haystack. */
     private inner class ChangedOnlyAction : ToggleAction("변경만 보기", "변경된 행만 표시합니다", AllIcons.General.Filter) {
         override fun getActionUpdateThread() = ActionUpdateThread.EDT
@@ -206,7 +252,10 @@ private class XlsxGridDiffViewer(private val request: ContentDiffRequest) : Fram
 
     /** One sheet's side-by-side diff: two tables over the SAME aligned rows, shared scroll model,
      *  mirrored row selection, a change navigator (F7 + `]c`/`[c`), and always-on vim keys. */
-    private class SheetPane(private val sheet: XlsxDiffModel.SheetDiff) {
+    private class SheetPane(
+        private val sheet: XlsxDiffModel.SheetDiff,
+        switchSheet: (Int) -> Unit,
+    ) {
         val leftTable: JBTable = diffTable(leftSide = true)
         private val rightTable: JBTable = diffTable(leftSide = false)
         val navigator = Navigator()
@@ -220,6 +269,7 @@ private class XlsxGridDiffViewer(private val request: ContentDiffRequest) : Fram
                     table,
                     nextChange = { n -> repeat(n) { if (navigator.canGoNext()) navigator.goNext() } },
                     prevChange = { n -> repeat(n) { if (navigator.canGoPrev()) navigator.goPrev() } },
+                    switchSheet = switchSheet,
                 ).setEnabled(true)
             }
             mirrorSelection(leftTable, rightTable)
@@ -227,13 +277,15 @@ private class XlsxGridDiffViewer(private val request: ContentDiffRequest) : Fram
 
             val leftScroll = JBScrollPane(leftTable)
             val rightScroll = JBScrollPane(rightTable)
-            // One shared scroll model = perfect row alignment while scrolling; mirror horizontal too.
-            rightScroll.verticalScrollBar.model = leftScroll.verticalScrollBar.model
-            rightScroll.horizontalScrollBar.model = leftScroll.horizontalScrollBar.model
-            leftScroll.verticalScrollBarPolicy = ScrollPaneConstants.VERTICAL_SCROLLBAR_NEVER
-            component = JSplitPane(JSplitPane.HORIZONTAL_SPLIT, true, leftScroll, rightScroll).apply {
-                resizeWeight = 0.5
-                border = null
+            // Sync the VIEWPORTS directly (both axes) — sharing one scrollbar MODEL breaks with
+            // JBScrollPane (its scrollbar UI doesn't re-listen after setModel, killing scrolling);
+            // viewport listeners keep every input path working (wheel, thumb, keyboard, vim).
+            // BOTH panes keep their scrollbars: Swing's wheel handler drops events when the target
+            // scrollbar isn't VISIBLE, so hiding the left one made wheel-over-left-grid dead.
+            syncViewports(leftScroll.viewport, rightScroll.viewport)
+            component = OnePixelSplitter(false, 0.5f).apply {
+                firstComponent = leftScroll
+                secondComponent = rightScroll
             }
         }
 
@@ -250,9 +302,15 @@ private class XlsxGridDiffViewer(private val request: ContentDiffRequest) : Fram
             table.rowSorter = TableRowSorter(table.model as AbstractTableModel).apply {
                 for (c in 0 until table.model.columnCount) setSortable(c, false)
             }
-            table.columnModel.getColumn(0).preferredWidth = 56
-            for (c in 1 until table.columnCount) table.columnModel.getColumn(c).preferredWidth = 96
+            table.columnModel.getColumn(0).preferredWidth = JBUI.scale(56)
+            for (c in 1 until table.columnCount) table.columnModel.getColumn(c).preferredWidth = JBUI.scale(96)
             return table
+        }
+
+        /** Mirror any scroll of one side to the other; the equality guard stops the feedback loop. */
+        private fun syncViewports(a: JViewport, b: JViewport) {
+            a.addChangeListener { if (b.viewPosition != a.viewPosition) b.viewPosition = a.viewPosition }
+            b.addChangeListener { if (a.viewPosition != b.viewPosition) a.viewPosition = b.viewPosition }
         }
 
         /** Keep the two sides' row selection in lockstep (model coords survive the filter). */
@@ -352,17 +410,24 @@ private class DiffSideModel(private val sheet: XlsxDiffModel.SheetDiff, private 
     override fun isCellEditable(rowIndex: Int, columnIndex: Int): Boolean = false
 }
 
+/**
+ * Cell backgrounds come from the EDITOR COLOR SCHEME's diff attributes ([TextDiffType] — the exact
+ * colors the platform text diff paints with), resolved per paint so user scheme edits and theme
+ * switches apply live: full color for added rows and changed cells, the lighter "ignored" variant
+ * for the rest of a modified row and for the placeholder slot on the side lacking a row.
+ *
+ * EXCEPTION — deletions are RED (firm user decision): the default IntelliJ scheme paints diff
+ * deletions GRAY, which reads as "nothing" in a data grid; removed rows use an explicit GitHub-style
+ * red pair (light/dark) instead of the scheme key.
+ */
 private class DiffCellRenderer(
     private val sheet: XlsxDiffModel.SheetDiff,
     private val leftSide: Boolean,
 ) : DefaultTableCellRenderer() {
 
-    private val added = JBColor(Color(0xE6FFEC), Color(0x1B3620))
-    private val removed = JBColor(Color(0xFFEBE9), Color(0x442222))
-    private val modifiedRow = JBColor(Color(0xF2F7FF), Color(0x1E2833))
-    private val changedCell = JBColor(Color(0xC9E1FF), Color(0x2E4B6E))
-    private val placeholder = JBColor(Color(0xF2F2F2), Color(0x313335))
     private val numberFg = JBColor(Color(0x999999), Color(0x777777))
+    private val deletedBg = JBColor(Color(0xFFEBE9), Color(0x4B2B29))
+    private val deletedPlaceholder = JBColor(Color(0xFFF5F4), Color(0x3A2422))
 
     override fun getTableCellRendererComponent(
         table: JTable, value: Any?, isSelected: Boolean, hasFocus: Boolean, rowIndex: Int, columnIndex: Int,
@@ -376,19 +441,30 @@ private class DiffCellRenderer(
 
         background = when {
             isSelected -> table.selectionBackground
-            cells == null -> placeholder // this side lacks the row — grey slot keeps alignment visible
-            row.kind == XlsxDiffModel.Kind.INSERTED -> added
-            row.kind == XlsxDiffModel.Kind.DELETED -> removed
+            cells == null -> // placeholder slot on the side lacking the row
+                if (row.kind == XlsxDiffModel.Kind.DELETED) deletedPlaceholder
+                else diffType(row)?.getIgnoredColor(null) ?: table.background
+            row.kind == XlsxDiffModel.Kind.INSERTED -> TextDiffType.INSERTED.getColor(null)
+            row.kind == XlsxDiffModel.Kind.DELETED -> deletedBg
             row.kind == XlsxDiffModel.Kind.MODIFIED -> {
                 if (columnIndex > 0 && (columnIndex - 1) in row.changedCols) {
                     font = font.deriveFont(Font.BOLD)
-                    changedCell
-                } else modifiedRow
+                    TextDiffType.MODIFIED.getColor(null)
+                } else {
+                    TextDiffType.MODIFIED.getIgnoredColor(null)
+                }
             }
             else -> table.background
         }
         if (isSelected) foreground = table.selectionForeground
         return c
+    }
+
+    private fun diffType(row: XlsxDiffModel.DiffRow): TextDiffType? = when (row.kind) {
+        XlsxDiffModel.Kind.INSERTED -> TextDiffType.INSERTED
+        XlsxDiffModel.Kind.DELETED -> TextDiffType.DELETED
+        XlsxDiffModel.Kind.MODIFIED -> TextDiffType.MODIFIED
+        XlsxDiffModel.Kind.EQUAL -> null
     }
 
     private operator fun IntArray.contains(v: Int): Boolean {
