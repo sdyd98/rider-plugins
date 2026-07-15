@@ -26,8 +26,10 @@ import java.io.File
  * Typical flow: build_refs (skeleton: file+sheet per table) → per table: sample_rows (raw cells) → decide
  * headerRow/dataStartRow/id/display → read the game code for its refs (conditional "when" refs for
  * polymorphic columns) → check_ref to verify each hypothesis → write_table_refs (bulk-capable) →
- * validate_refs. All paths are absolute folders that hold the .xlsx data (and refs.json). Every tool
- * returns JSON text.
+ * validate_refs (scopable). On a large schema the work spans sessions: list_unfilled_tables is the
+ * progress query (which skeletons still need judgments), and unfilled skeletons stay out of the
+ * graph/index/validation until their id is recorded. All paths are absolute folders that hold the .xlsx
+ * data (and refs.json). Every tool returns JSON text.
  */
 class RefsMcpToolset : McpToolset {
 
@@ -180,8 +182,15 @@ class RefsMcpToolset : McpToolset {
             "Single: pass <table> + <json> (one entry object). BULK: pass table=\"\" and <json> as " +
             "{\"<tableId>\": <entry>, ...} to write many at once (use this to fill a whole area's decisions " +
             "in one call). An entry is your COMPLETE judgment of a table: file, sheet, headerRow, " +
-            "dataStartRow, id (array of field codes), display, refs — see write_refs for the ref syntax " +
-            "(conditional \"when\", _source marks). Entries are shape-validated before writing (file+sheet " +
+            "dataStartRow, id (array of field codes), display, refs. REF SYNTAX — every field is YOUR " +
+            "judgment: mark each ref with _source: \"code\" (derived from reading the game source) or " +
+            "\"data\" (hypothesized from values and check_ref numbers alone). POLYMORPHIC columns (target " +
+            "depends on a type column — decided by reading the game code) are one CONDITIONAL ref per " +
+            "target: {\"from\": [\"Param\"], \"to\": \"Item\", \"when\": {\"ParamType\": [\"3\", \"4\"]}} — " +
+            "the ref applies only to rows where every \"when\" column has one of its accepted values (cell " +
+            "display text; a scalar means one value); write sibling refs on the same column with different " +
+            "\"when\" for the other targets. Non-0 \"no reference\" placeholders (-1, None, …) go in the " +
+            "top-level list via set_null_values. Entries are shape-validated before writing (file+sheet " +
             "present; refs an array of {from[], to, when?}); nothing is written on error. Pass delete=true " +
             "(with <table>) to REMOVE a non-data sheet (notes/config) from the schema.",
     )
@@ -269,47 +278,108 @@ class RefsMcpToolset : McpToolset {
 
     @McpTool
     @McpDescription(
-        "Write (overwrite) the WHOLE refs.json in <dir> — fine for small schemas; on a large one prefer " +
-            "write_table_refs (per-table or bulk insert/replace, no whole-file round-trip). Validates that " +
-            "the content parses as JSON with a top-level \"tables\" object before writing; nothing is " +
-            "written on error. REF SYNTAX — every field is YOUR judgment: mark each ref with _source: " +
-            "\"code\" (derived from reading the game source) or \"data\" (hypothesized from values and " +
-            "check_ref numbers alone). POLYMORPHIC columns (target depends on a type column — decided by " +
-            "reading the game code) are one CONDITIONAL ref per target: {\"from\": [\"Param\"], \"to\": " +
-            "\"Item\", \"when\": {\"ParamType\": [\"3\", \"4\"]}} — the ref applies only to rows where every " +
-            "\"when\" column has one of its accepted values (cell display text; a scalar means one value); " +
-            "write sibling refs on the same column with different \"when\" for the other targets. If the game " +
-            "uses a placeholder other than 0 for \"no reference\" (-1, None, …), set the top-level " +
-            "\"nullValues\": [\"0\", \"-1\"] — those values are never resolved nor reported as broken.",
+        "Set the top-level \"nullValues\" list in refs.json — the placeholder values that mean \"no " +
+            "reference\" (default [\"0\"]); they are never resolved nor reported as broken. Pass the FULL " +
+            "comma-separated list (e.g. \"0,-1,None\") — it REPLACES the previous list; every other key in " +
+            "refs.json is left untouched. YOU decide the placeholders (from the game source, or from " +
+            "check_ref/validate_refs missing samples that are obviously sentinels, not ids).",
     )
-    suspend fun write_refs(
-        @McpDescription("Absolute path to the data folder.") dir: String,
-        @McpDescription("Full refs.json content to write.") json: String,
+    suspend fun set_null_values(
+        @McpDescription("Absolute path to the data folder (holds refs.json).") dir: String,
+        @McpDescription("Comma-separated placeholder values, e.g. \"0,-1\".") values: String,
     ): String = io {
-        val parsed = runCatching { JsonParser.parseString(json).asJsonObject }.getOrNull() ?: return@io err("content is not valid JSON")
-        if (!parsed.has("tables")) return@io err("missing the top-level \"tables\" object")
-        val file = File(dir, "refs.json")
-        file.writeText(json)
-        gson.toJson(JsonObject().apply { addProperty("ok", true); addProperty("path", file.path.replace('\\', '/')) })
+        val refsFile = File(dir, "refs.json")
+        if (!refsFile.isFile) return@io err("no refs.json in $dir")
+        val parsed = runCatching { JsonParser.parseString(refsFile.readText()) }.getOrNull()
+        if (parsed == null || !parsed.isJsonObject)
+            return@io err("existing refs.json does not parse as a JSON object — refusing to modify; fix or remove it first")
+        val list = values.split(',').map(String::trim).filter { it.isNotEmpty() }
+        if (list.isEmpty()) return@io err("<values> is empty — pass at least one placeholder, e.g. \"0\"")
+        val rootObj = parsed.asJsonObject
+        rootObj.add("nullValues", arrayOf(list))
+        refsFile.writeText(gson.toJson(rootObj))
+        gson.toJson(JsonObject().apply { addProperty("ok", true); add("nullValues", arrayOf(list)) })
     }
 
     @McpTool
     @McpDescription(
-        "Validate the current refs.json against the data: counts of dangling (broken) references and " +
-            "unreferenced (orphan) records, with a few examples each. Run after writing refs. Reading the " +
-            "result is YOUR job: broken refs concentrated in one table usually mean that entry's " +
-            "headerRow/dataStartRow/id is wrong (re-inspect with sample_rows), spread-out breaks suggest a " +
-            "wrong target or a missing \"when\" condition, and placeholder ids showing up as broken mean " +
-            "nullValues is incomplete.",
+        "Validate refs.json against the data: dangling (broken) references and unreferenced (orphan) " +
+            "records. Run after writing refs. Scope with <tables> (comma-separated table ids — broken refs " +
+            "whose SOURCE or TARGET table is listed, orphans in listed tables; empty = whole schema) and " +
+            "page the examples with <limit>/<offset> — on a large schema validate the area you just filled, " +
+            "not everything. Unfilled skeleton entries (no \"id\" yet) and refs pointing at them are " +
+            "EXCLUDED from validation (counts reported back) — track them with list_unfilled_tables. " +
+            "Reading the result is YOUR job: broken refs concentrated in one table usually mean that " +
+            "entry's headerRow/dataStartRow/id is wrong (re-inspect with sample_rows), spread-out breaks " +
+            "suggest a wrong target or a missing \"when\" condition, and placeholder ids showing up as " +
+            "broken mean nullValues is incomplete (fix with set_null_values).",
     )
-    suspend fun validate_refs(@McpDescription("Absolute path to the data folder.") dir: String): String = io {
+    suspend fun validate_refs(
+        @McpDescription("Absolute path to the data folder.") dir: String,
+        @McpDescription("Comma-separated table ids to scope the report to (empty = whole schema).") tables: String = "",
+        @McpDescription("Max broken/orphan examples returned.") limit: Int = 10,
+        @McpDescription("Examples to skip first (paging through a long list).") offset: Int = 0,
+    ): String = io {
         val schema = loadRefSchema(File(dir)) ?: return@io err("no valid refs.json in $dir")
-        val report = IndexRecordGraph(schema, GameDataLoader.buildIndex(schema)).validate()
+        if (schema.tables.isEmpty())
+            return@io err("refs.json has no filled tables yet (${schema.unfilledTables.size} skeletons) — nothing to validate; see list_unfilled_tables")
+        val scope = tables.split(',').map(String::trim).filter { it.isNotEmpty() }.toSet()
+        val unknown = scope.filter { schema.table(it) == null }
+        if (unknown.isNotEmpty())
+            return@io err("tables not filled in refs.json (or absent): ${unknown.joinToString(", ")}")
+        val report = IndexRecordGraph(schema, GameDataLoader.loadOrBuildIndex(schema)).validate()
+        val broken = if (scope.isEmpty()) report.broken else report.broken.filter { it.from.table in scope || it.toTable in scope }
+        val orphans = if (scope.isEmpty()) report.orphans else report.orphans.filter { it.table in scope }
         gson.toJson(JsonObject().apply {
-            addProperty("broken", report.broken.size)
-            addProperty("orphans", report.orphans.size)
-            add("brokenSample", JsonArray().apply { report.broken.take(10).forEach { add("${it.from.table}#${it.from.id}.${it.column} -> ${it.toTable}#${it.missingId} (missing)") } })
-            add("orphanSample", JsonArray().apply { report.orphans.take(10).forEach { add("${it.table}#${it.id}") } })
+            if (scope.isNotEmpty()) addProperty("scope", scope.joinToString(","))
+            addProperty("broken", broken.size)
+            addProperty("orphans", orphans.size)
+            add("brokenSample", JsonArray().apply { broken.drop(offset).take(limit).forEach { add("${it.from.table}#${it.from.id}.${it.column} -> ${it.toTable}#${it.missingId} (missing)") } })
+            add("orphanSample", JsonArray().apply { orphans.drop(offset).take(limit).forEach { add("${it.table}#${it.id}") } })
+            if (schema.unfilledTables.isNotEmpty()) {
+                addProperty("unfilledTablesExcluded", schema.unfilledTables.size)
+                addProperty("refsToUnfilledTargetsExcluded", schema.refsToUnfilled)
+            }
+        })
+    }
+
+    @McpTool
+    @McpDescription(
+        "Progress query for a large indexing job — mechanically classify every refs.json entry by SHAPE, " +
+            "no interpretation: \"unfilled\" entries have NO \"id\" yet (build_refs skeletons whose " +
+            "layout/id judgment isn't recorded; the viewer/validation exclude them until filled), " +
+            "\"undecidedRefs\" entries have an id but NO \"refs\" key (write \"refs\": [] explicitly once " +
+            "you decide a table has no outgoing refs, so done and not-yet-looked-at stay distinguishable). " +
+            "Returns counts plus up to <limit> table keys per list (<offset> pages). Use this to pick the " +
+            "next work batch across sessions instead of reading the whole file with read_refs.",
+    )
+    suspend fun list_unfilled_tables(
+        @McpDescription("Absolute path to the data folder (holds refs.json).") dir: String,
+        @McpDescription("Max table keys per list.") limit: Int = 100,
+        @McpDescription("Table keys to skip first in each list (paging).") offset: Int = 0,
+    ): String = io {
+        val refsFile = File(dir, "refs.json")
+        if (!refsFile.isFile) return@io err("no refs.json in $dir")
+        val tablesObj = runCatching { JsonParser.parseString(refsFile.readText()) }.getOrNull()
+            ?.takeIf { it.isJsonObject }?.asJsonObject?.get("tables")?.takeIf { it.isJsonObject }?.asJsonObject
+            ?: return@io err("refs.json does not parse as a JSON object with \"tables\"")
+        val unfilled = ArrayList<String>()
+        val undecided = ArrayList<String>()
+        for ((key, el) in tablesObj.entrySet()) {
+            val t = el.takeIf { it.isJsonObject }?.asJsonObject ?: continue
+            val hasId = (t.get("id")?.takeIf { it.isJsonArray }?.asJsonArray?.size() ?: 0) > 0
+            when {
+                !hasId -> unfilled.add(key)
+                t.get("refs") == null -> undecided.add(key)
+            }
+        }
+        gson.toJson(JsonObject().apply {
+            addProperty("tablesTotal", tablesObj.size())
+            addProperty("filled", tablesObj.size() - unfilled.size)
+            addProperty("unfilled", unfilled.size)
+            addProperty("undecidedRefs", undecided.size)
+            add("unfilledTables", arrayOf(unfilled.drop(offset).take(limit)))
+            add("undecidedRefsTables", arrayOf(undecided.drop(offset).take(limit)))
         })
     }
 
@@ -375,7 +445,7 @@ class RefsMcpToolset : McpToolset {
             addProperty("tablesInSchema", tablesObj.size())
             addProperty("tablesAddedThisRun", addedKeys.size)
             addProperty("_note", "SKELETON entries only ({file, sheet}) — the tool made no other decision. Re-runs only ADD new sheets (existing entries are never touched).")
-            addProperty("_next", "Every added table needs YOUR decisions: (1) sample_rows → decide headerRow/dataStartRow/id/display; (2) read the game source → design refs (\"when\" for polymorphic columns, _source: \"code\"); (3) check_ref each hypothesis; (4) write_table_refs (bulk: table=\"\" + {tableId: entry, ...}); (5) validate_refs. Delete non-data sheets via write_table_refs(delete=true).")
+            addProperty("_next", "Every added table needs YOUR decisions: (1) sample_rows → decide headerRow/dataStartRow/id/display; (2) read the game source → design refs (\"when\" for polymorphic columns, _source: \"code\"); (3) check_ref each hypothesis; (4) write_table_refs (bulk: table=\"\" + {tableId: entry, ...}); (5) validate_refs (scope it with <tables> to the area you filled). Delete non-data sheets via write_table_refs(delete=true). Across sessions, pick the next batch with list_unfilled_tables — skeletons stay out of the graph/validation until filled.")
         })
     }
 

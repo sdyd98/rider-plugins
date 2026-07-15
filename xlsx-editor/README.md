@@ -202,9 +202,9 @@ above the open workbook, and their cost scales with the table count in *that sch
 of workbooks on disk — so a single top-level file scales to thousands of tables.
 
 **Authoring `refs.json`** — you author it through the IDE's MCP server with an AI client (e.g. Claude
-Code), not by hand. `RefsMcpToolset` exposes ten tools — `build_refs`, `list_tables`, `sample_rows`,
-`column_values`, `check_ref`, `read_refs`, `write_refs`, `read_table_refs`, `write_table_refs`,
-`validate_refs` — and the AI drives them.
+Code), not by hand. `RefsMcpToolset` exposes eleven tools — `build_refs`, `list_tables`, `sample_rows`,
+`column_values`, `check_ref`, `read_refs`, `read_table_refs`, `write_table_refs`, `set_null_values`,
+`list_unfilled_tables`, `validate_refs` — and the AI drives them.
 
 The tools are deliberately **judgment-free** — they enumerate, extract, compute, and validate;
 **every interpretive decision is the AI's**:
@@ -212,7 +212,9 @@ The tools are deliberately **judgment-free** — they enumerate, extract, comput
 - **`build_refs(<top folder>)` writes SKELETONS only.** It enumerates every sheet under the folder
   (a name scan — a multi-thousand-table tree in seconds) into `{file, sheet}` entries, **additively**
   (re-runs only ADD new sheets, so the AI's filled-in work survives). No layout, id, display, or ref
-  is guessed — ever.
+  is guessed — ever. Skeletons are inert until filled: entries without an `id` (and refs pointing at
+  them) are **excluded from the graph, the index, and validation**, so a half-authored schema never
+  draws or validates default-layout guesses.
 - **The AI fills every entry.** `sample_rows` shows a sheet's raw top rows verbatim (1-based row
   numbers, column letters, no header/data assumption) so the AI decides `headerRow` / `dataStartRow` /
   `id` / `display` itself; `column_values` extracts one column's distinct values + counts for the
@@ -223,10 +225,18 @@ The tools are deliberately **judgment-free** — they enumerate, extract, comput
   samples. The AI supplies all coordinates (column letters, data start rows, `split`, null
   placeholders) and judges the result.
 - The AI records its decisions with `write_table_refs` (single or **bulk** — one call fills a whole
-  area; whole-file `read_refs` / `write_refs` for small schemas), marking each ref `_source: "code"`
+  area; there is deliberately NO whole-file write, so a stale copy in the AI's context can never
+  clobber filled-in judgments — `read_refs` reads the whole file, `set_null_values` sets the
+  top-level placeholder list), marking each ref `_source: "code"`
   or `"data"` (the viewer ignores `_`-prefixed keys), and closes the loop with `validate_refs` —
-  whose reading is also the AI's job: breaks concentrated in one table point at a wrong layout/id
-  judgment, spread-out breaks at a wrong target or missing `when`.
+  scopable to a comma-separated table list with paged examples, so on a large schema the AI validates
+  the area it just filled instead of everything. Reading the result is also the AI's job: breaks
+  concentrated in one table point at a wrong layout/id judgment, spread-out breaks at a wrong target
+  or missing `when`.
+- **Large schemas span sessions**, so `list_unfilled_tables` is the mechanical progress query: which
+  entries are still `{file, sheet}` skeletons (no `id`), and which have an id but no `refs` key yet
+  (the convention is to write `refs: []` explicitly once a table is decided to have none) — counts
+  plus paged table keys, so the AI picks its next work batch without ever loading the whole file.
 
 A client connects via the repo-local `.mcp.json` (loopback SSE to the running IDE); the MCP dependency
 is **optional**, so the viewer still loads on an IDE without (or with a disabled) MCP server.

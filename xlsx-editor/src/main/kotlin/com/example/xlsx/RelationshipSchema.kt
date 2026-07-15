@@ -15,6 +15,13 @@ data class RefSchema(
     /** Cell values meaning "no reference" (top-level `nullValues` in refs.json; default `["0"]`) —
      *  games use 0 / -1 / None etc. as the empty-FK placeholder. Never reported as broken refs. */
     val nullValues: Set<String> = setOf("0"),
+    /** Table keys present in refs.json that are still SKELETONS (no `id` yet — build_refs output whose
+     *  layout/id judgment hasn't been recorded). Excluded from [tables] — not parsed, not drawn, not
+     *  validated — so a half-filled schema never poisons the graph with default-layout guesses. */
+    val unfilledTables: List<String> = emptyList(),
+    /** Refs on filled tables whose target is still a skeleton — dropped at load (they cannot resolve
+     *  until the target's id is recorded; kept, they would all read as broken noise in validate). */
+    val refsToUnfilled: Int = 0,
 ) {
     fun table(id: String): SchemaTable? = tables.firstOrNull { it.tableId == id }
 }
@@ -51,6 +58,11 @@ data class SchemaRef(
  * Loads the reference schema from `<baseDir>/refs.json` — the format the AI-from-code / MCP step
  * produces. Returns null if the file is missing or invalid, so callers can fall back. A ref with no `by`
  * defaults to the target's id columns; a `by` that is a strict subset of the target id is a GROUP reference.
+ *
+ * Entries WITHOUT an `id` are unfilled build_refs skeletons: they are collected into
+ * [RefSchema.unfilledTables] and excluded from [RefSchema.tables] (along with any ref pointing at them,
+ * counted in [RefSchema.refsToUnfilled]) — otherwise every skeleton would be parsed with the default 1/4
+ * layout and flood the index/validation with garbage while the schema is still being authored.
  */
 fun loadRefSchema(baseDir: File): RefSchema? {
     val file = File(baseDir, "refs.json")
@@ -61,13 +73,16 @@ fun loadRefSchema(baseDir: File): RefSchema? {
         val idColsOf = tablesObj.entrySet().associate { (id, el) ->
             id to (el.asJsonObject.getAsJsonArray("id")?.map { it.asString }.orEmpty())
         }
-        val tables = tablesObj.entrySet().map { (tableId, el) ->
+        val unfilled = idColsOf.filterValues { it.isEmpty() }.keys
+        var refsToUnfilled = 0
+        val tables = tablesObj.entrySet().filter { (id, _) -> id !in unfilled }.map { (tableId, el) ->
             val t = el.asJsonObject
             fun opt(name: String) = t.get(name)?.takeIf { !it.isJsonNull }
-            val refs = t.getAsJsonArray("refs")?.map { r ->
+            val refs = t.getAsJsonArray("refs")?.mapNotNull { r ->
                 val ro = r.asJsonObject
                 fun roOpt(name: String) = ro.get(name)?.takeIf { !it.isJsonNull }
                 val to = ro.get("to").asString
+                if (to in unfilled) { refsToUnfilled++; return@mapNotNull null }
                 SchemaRef(
                     fromCols = ro.getAsJsonArray("from").map { it.asString },
                     toTable = to,
@@ -92,7 +107,7 @@ fun loadRefSchema(baseDir: File): RefSchema? {
             )
         }
         val nullValues = root.getAsJsonArray("nullValues")?.map { it.asString }?.toSet() ?: setOf("0")
-        RefSchema(baseDir, tables, nullValues)
+        RefSchema(baseDir, tables, nullValues, unfilled.sorted(), refsToUnfilled)
     }.getOrNull()
 }
 

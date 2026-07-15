@@ -113,8 +113,10 @@ fun RelationshipTabs(project: com.intellij.openapi.project.Project, fgArgb: Int,
         }
     }
     val schema = remember(tick) { if (project.isDisposed) null else resolveSchema(project) }
-    if (schema == null) {
-        NoSchemaView(project, fgArgb)
+    if (schema == null || schema.tables.isEmpty()) {
+        // No refs.json — or one that holds only unfilled build_refs skeletons (excluded from the graph
+        // so half-authored schemas never draw default-layout guesses).
+        NoSchemaView(project, fgArgb, unfilledCount = schema?.unfilledTables?.size ?: 0)
         return
     }
     // Build the index OFF the EDT — first open streams every workbook, which must not freeze the UI.
@@ -171,7 +173,7 @@ fun RelationshipTabs(project: com.intellij.openapi.project.Project, fgArgb: Int,
 /** Shown when there is no usable schema — guidance instead of sample data. Re-resolution is reactive,
  *  so the moment a refs.json is created (or a workbook is opened) the real views replace this. */
 @Composable
-private fun NoSchemaView(project: com.intellij.openapi.project.Project, fgArgb: Int) {
+private fun NoSchemaView(project: com.intellij.openapi.project.Project, fgArgb: Int, unfilledCount: Int = 0) {
     val fg = Color(fgArgb)
     val muted = fg.copy(alpha = 0.55f)
     val openFile = com.intellij.openapi.fileEditor.FileEditorManager.getInstance(project).selectedFiles.firstOrNull()
@@ -181,6 +183,12 @@ private fun NoSchemaView(project: com.intellij.openapi.project.Project, fgArgb: 
                 Text("엑셀 파일을 열면 관계도를 표시합니다", color = fg.copy(alpha = 0.8f))
                 Spacer(Modifier.height(8.dp))
                 Text("열린 워크북 폴더(또는 상위)의 refs.json 스키마를 사용합니다", color = muted, fontSize = 12.sp)
+            } else if (unfilledCount > 0) {
+                Text("refs.json에 아직 채워진 테이블이 없습니다 (골격 ${unfilledCount}개)", color = fg.copy(alpha = 0.8f))
+                Spacer(Modifier.height(8.dp))
+                Text("골격 엔트리는 id가 기록되기 전까지 관계도에 표시되지 않습니다", color = muted, fontSize = 12.sp)
+                Spacer(Modifier.height(4.dp))
+                Text("AI 클라이언트(MCP)에서 sample_rows → write_table_refs로 채워 주세요", color = muted, fontSize = 12.sp)
             } else {
                 Text("refs.json 스키마가 없습니다 (또는 유효하지 않습니다)", color = fg.copy(alpha = 0.8f))
                 Spacer(Modifier.height(8.dp))
