@@ -48,6 +48,13 @@
              revisions just says "binary files differ". Same mechanism as .class decompiled diffs. -->
         <filetype.decompiler filetype="Excel Spreadsheet" implementationClass="com.example.xlsx.XlsxDecompiler"/>
 
+        <!-- Grid-shaped diff viewer for two workbook revisions (per-sheet side-by-side tables with
+             row/cell highlighting). order="first" makes it the DEFAULT viewer for Excel diffs (the
+             diff window opens the first applicable tool in order; canShow gates it to xlsx/xls, so
+             text-file diffs are unaffected). The TSV text diff above stays in the viewer switcher
+             as the fallback for huge sheets. -->
+        <diff.DiffTool implementation="com.example.xlsx.XlsxGridDiffTool" order="first"/>
+
         <!-- Relationship view: table-level ER map, record-level lineage explorer, and integrity check. -->
         <toolWindow id="관계도" anchor="right" factoryClass="com.example.xlsx.RefGraphToolWindow"/>
     </extensions>

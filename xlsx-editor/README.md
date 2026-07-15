@@ -277,6 +277,29 @@ does **not** download the ~1.5 GB IDE distribution. Delete that line to download
   real-world functions, and a viewer doesn't need to. Cells show the cached result Excel last wrote;
   to recompute, open the file in Excel.
 
+## VCS diff (Perforce/Git/…)
+
+Comparing two revisions of a workbook offers **two viewers** — the grid opens by DEFAULT
+(`order="first"` on the tool registration; the diff window opens the first applicable viewer), the
+text projection stays in the diff window's viewer combo:
+
+- **Excel 그리드** (`XlsxGridDiffTool`, a `diff.DiffTool`) — per-sheet **side-by-side grids** with a
+  shared scroll: added rows green, removed rows red (a grey placeholder slot on the other side keeps
+  alignment visible), modified rows tinted with the **changed cells highlighted bold**. Sheet tabs
+  are starred when they contain changes (sheet-level add/remove is labeled); the first changed sheet
+  is auto-selected. Loading runs off the EDT; sheets beyond 100k rows fall back to a notice (use the
+  text diff there).
+- **TSV text projection** (`XlsxDecompiler`, a `filetype.decompiler` — the mechanism `.class` files
+  use for decompiled diffs) — each sheet as `===== 시트: name =====` + one tab-joined line per row,
+  deterministic and line-stable (one edited cell == one changed line), ~40 MB char cap. Without it a
+  binary spreadsheet diff would just say "binary files differ".
+
+Both viewers agree by construction: the grid's row alignment runs the platform `ComparisonManager`
+over the same row keys the text projection emits ([XlsxDiffModel] is the shared, headless-tested
+model). Diff-side revision files are read with a local-filesystem guard — VCS old-revision virtual
+files report the original workspace path, which must not be read from disk (that would diff the
+current file against itself).
+
 ## Known limitations
 
 - The whole sheet is materialized as display strings (far lighter than POI objects, but not

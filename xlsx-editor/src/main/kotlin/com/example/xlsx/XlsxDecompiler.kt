@@ -14,24 +14,25 @@ class XlsxDecompiler : BinaryFileDecompiler {
 
     override fun decompile(file: VirtualFile): CharSequence {
         val bytes = try {
-            readBytes(file)
+            readWorkbookBytes(file)
         } catch (t: Throwable) {
             return "[${file.name}] 내용을 읽을 수 없습니다: ${t.message}"
         }
         if (bytes.isEmpty()) return ""
         return XlsxTextProjection.toText(bytes, isLegacyXls = file.extension.equals("xls", ignoreCase = true))
     }
+}
 
-    private fun readBytes(file: VirtualFile): ByteArray {
-        // contentsToByteArray honors the IDE's per-file size limit (~20 MB) — go through the io
-        // file for big LOCAL workbooks. Local-FS check is load-bearing: VCS old-revision files
-        // (ContentRevisionVirtualFile etc.) report the ORIGINAL workspace path, and
-        // virtualToIoFile is just File(path) — without the check the old-revision pane would
-        // silently read the CURRENT workbook and every diff would show zero changes.
-        if (file.isInLocalFileSystem) {
-            val io = runCatching { VfsUtilCore.virtualToIoFile(file) }.getOrNull()
-            if (io != null && io.isFile) return io.readBytes()
-        }
-        return file.contentsToByteArray()
+/** Workbook bytes for diff-side files (shared by the text projection and the grid diff tool). */
+internal fun readWorkbookBytes(file: VirtualFile): ByteArray {
+    // contentsToByteArray honors the IDE's per-file size limit (~20 MB) — go through the io
+    // file for big LOCAL workbooks. Local-FS check is load-bearing: VCS old-revision files
+    // (ContentRevisionVirtualFile etc.) report the ORIGINAL workspace path, and
+    // virtualToIoFile is just File(path) — without the check the old-revision pane would
+    // silently read the CURRENT workbook and every diff would show zero changes.
+    if (file.isInLocalFileSystem) {
+        val io = runCatching { VfsUtilCore.virtualToIoFile(file) }.getOrNull()
+        if (io != null && io.isFile) return io.readBytes()
     }
+    return file.contentsToByteArray()
 }
