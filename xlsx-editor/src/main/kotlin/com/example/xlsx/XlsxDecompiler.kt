@@ -24,9 +24,14 @@ class XlsxDecompiler : BinaryFileDecompiler {
 
     private fun readBytes(file: VirtualFile): ByteArray {
         // contentsToByteArray honors the IDE's per-file size limit (~20 MB) — go through the io
-        // file for big LOCAL workbooks; old-revision contents arrive as light files (no io path)
-        // and are already in memory anyway.
-        val io = runCatching { VfsUtilCore.virtualToIoFile(file) }.getOrNull()
-        return if (io != null && io.isFile) io.readBytes() else file.contentsToByteArray()
+        // file for big LOCAL workbooks. Local-FS check is load-bearing: VCS old-revision files
+        // (ContentRevisionVirtualFile etc.) report the ORIGINAL workspace path, and
+        // virtualToIoFile is just File(path) — without the check the old-revision pane would
+        // silently read the CURRENT workbook and every diff would show zero changes.
+        if (file.isInLocalFileSystem) {
+            val io = runCatching { VfsUtilCore.virtualToIoFile(file) }.getOrNull()
+            if (io != null && io.isFile) return io.readBytes()
+        }
+        return file.contentsToByteArray()
     }
 }
