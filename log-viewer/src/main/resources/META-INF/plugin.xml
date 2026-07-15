@@ -69,6 +69,8 @@
     <!-- Frontend-only plugin: the platform module is enough. It loads in Rider (and any other
          IntelliJ-based IDE). Name / version / since-build come from build.gradle.kts. -->
     <depends>com.intellij.modules.platform</depends>
+    <!-- Debug-session log tab (XDebugger API — present in every IntelliJ-based IDE). -->
+    <depends>com.intellij.modules.xdebugger</depends>
 
     <!-- Compose + Jewel are bundled with the IDE; declare the modules so the plugin's class loader
          can see them at runtime (compile classpath comes from bundledLibrary in build.gradle.kts). -->
@@ -100,6 +102,13 @@
         <!-- The hub for remote connections + live-tail sessions. -->
         <toolWindow id="로그 뷰어" anchor="bottom" factoryClass="com.example.logview.LogToolWindowFactory"/>
     </extensions>
+
+    <!-- Debug tool window integration: every debug session gets a "로그 뷰어" tab next to the Console,
+         fed by the SAME process output pipe (see debug/DebugLogTabListener). -->
+    <projectListeners>
+        <listener class="com.example.logview.debug.DebugLogTabListener"
+                  topic="com.intellij.xdebugger.XDebuggerManagerListener"/>
+    </projectListeners>
 
     <actions>
         <action id="LogViewer.OpenInLogViewer"
