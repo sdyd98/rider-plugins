@@ -90,7 +90,14 @@ class DebugLogTabListener : XDebuggerManagerListener {
                 val content = ui.createContent(
                     "com.example.logview.debug", wrapper, "로그 뷰어", AllIcons.Debugger.Console, null,
                 )
-                content.setDisposer(panel) // closing the session tab disposes the panel (and its taps)
+                // Closing the session tab disposes the panel (and its console taps, parented to it)
+                // and stops the buffer's delivery thread.
+                content.setDisposer(
+                    com.intellij.openapi.Disposable {
+                        com.intellij.openapi.util.Disposer.dispose(panel)
+                        buffer.close()
+                    },
+                )
                 ui.addContent(content)
                 panel.start()
 

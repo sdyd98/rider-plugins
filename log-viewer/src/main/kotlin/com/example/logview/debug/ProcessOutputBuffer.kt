@@ -11,8 +11,17 @@ import com.example.logview.TailState
  *
  * Chunks are NOT line-aligned and stdout/stderr are pumped by different threads, so partial lines are
  * assembled **per base stream** — fragments of one stream can never corrupt a line of the other.
- * Listener callbacks run under the buffer lock: ordering is guaranteed, and a slow consumer
- * back-pressures the process pump exactly like the built-in console does.
+ *
+ * DELIVERY IS ASYNCHRONOUS — this is load-bearing, not an optimization. Console `textAdded` events
+ * arrive on the EDT, and the panel's tail consumer applies BLOCKING backpressure (it waits for the
+ * EDT to digest earlier batches). Calling listeners synchronously would make the EDT wait on itself —
+ * a hard IDE freeze the moment the process out-runs the grid. So producers only enqueue (never
+ * block); a dedicated daemon thread invokes the listeners in order and absorbs the backpressure like
+ * the file/SSH reader threads do. Each queued delivery captures its recipients AT ENQUEUE TIME, which
+ * preserves the snapshot+listen guarantee (a reader registered later never re-receives lines already
+ * in its snapshot). If even the queue fills (pathological output rate), whole deliveries are skipped
+ * and announced — the STORED history stays complete, so a re-read (source toggle, charset change)
+ * restores every line.
  *
  * Pure JVM (no platform types) so line assembly is headless-testable.
  */
@@ -20,6 +29,7 @@ class ProcessOutputBuffer(private val maxLines: Int = DEFAULT_MAX_LINES) {
 
     companion object {
         const val DEFAULT_MAX_LINES = 1_000_000
+        private const val QUEUE_CAP = 8192 // pending deliveries (batches, not lines)
     }
 
     private val lock = Any()
@@ -27,6 +37,31 @@ class ProcessOutputBuffer(private val maxLines: Int = DEFAULT_MAX_LINES) {
     private var dropped = 0L
     private val partial = HashMap<String, StringBuilder>()
     private val listeners = ArrayList<(String, List<String>) -> Unit>()
+
+    private class Delivery(val targets: List<(String, List<String>) -> Unit>, val stream: String, val batch: List<String>)
+
+    private val queue = java.util.concurrent.LinkedBlockingQueue<Delivery>(QUEUE_CAP)
+    private var skippedLines = 0L // lines whose live delivery was skipped on queue overflow (locked)
+    @Volatile private var closed = false
+    private val deliveryThread = Thread({
+        // Poll (not take) so the loop re-checks `closed` even if an interrupt got consumed inside a
+        // listener (e.g. while blocked in the panel's backpressure semaphore) — guaranteed exit.
+        while (!closed) {
+            val d = try {
+                queue.poll(1, java.util.concurrent.TimeUnit.SECONDS) ?: continue
+            } catch (_: InterruptedException) {
+                continue
+            }
+            d.targets.forEach { t -> runCatching { t(d.stream, d.batch) } }
+        }
+    }, "log-viewer debug delivery").apply { isDaemon = true; start() }
+
+    /** Stop the delivery thread and drop pending deliveries (the session tab was closed). */
+    fun close() {
+        closed = true
+        deliveryThread.interrupt()
+        queue.clear()
+    }
 
     /** Append one raw output chunk. [stream] keys partial-line assembly (fragments of different
      *  streams can't corrupt each other) AND tags the stored lines for source filtering. */
@@ -62,7 +97,15 @@ class ProcessOutputBuffer(private val maxLines: Int = DEFAULT_MAX_LINES) {
     private fun deliverLocked(stream: String, batch: List<String>) {
         batch.forEach { lines.addLast(stream to it) }
         while (lines.size > maxLines) { lines.removeFirst(); dropped++ }
-        listeners.forEach { it(stream, batch) }
+        if (closed || listeners.isEmpty()) return
+        val targets = ArrayList(listeners) // recipients captured NOW — see the class doc
+        if (skippedLines > 0 && queue.offer(
+                Delivery(targets, stream, listOf("… [로그 뷰어] 표시 과부하로 ${skippedLines}줄 생략 (기록은 보존 — 소스 전환/재읽기로 복원)")),
+            )
+        ) {
+            skippedLines = 0
+        }
+        if (!queue.offer(Delivery(targets, stream, batch))) skippedLines += batch.size
     }
 
     /** ATOMIC snapshot + subscribe: the returned (stream, line) pairs plus every future [listener]
