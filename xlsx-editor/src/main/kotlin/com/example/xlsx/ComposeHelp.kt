@@ -35,6 +35,8 @@ private val SHORTCUTS = listOf(
     Shortcut("Ctrl+R", "현재 행을 관계도(데이터 연결)에서 보기"),
     Shortcut("Ctrl+F", "현재 테이블을 관계도(테이블 관계도)에서 보기"),
     Shortcut("/", "상단 필터(정규식)로 이동 · Enter로 적용 후 복귀"),
+    Shortcut("Alt+H", "필터 ↔ 하이라이트 모드 전환 — 행을 숨기지 않고 매치 셀만 표시, n/N으로 이동"),
+    Shortcut("Alt+S", "시트 점프 팝업 — 타이핑으로 시트 이름 필터, Enter로 이동"),
     Shortcut("?", "이 도움말 · Esc 닫기"),
 )
 

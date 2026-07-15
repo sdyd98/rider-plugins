@@ -34,14 +34,25 @@ internal val GRID_ACCENT: JBColor = JBColor(0x3574F0, 0x589DF6)
  * path during scroll) does almost no work and no allocation for the common no-formula case (the
  * boxing `isFormula` lookup is skipped unless the sheet actually has formulas).
  */
-open class GridCellRenderer : DefaultTableCellRenderer() {
+open class GridCellRenderer(
+    /** Non-filtering search: when non-null, cells whose text matches get the scheme's search-result
+     *  tint (read per paint — live theme/scheme switches). The panel swaps the matcher on query edits. */
+    private val searchMatcher: () -> ((String) -> Boolean)? = { null },
+) : DefaultTableCellRenderer() {
 
     private var seenFont: Font? = null
     private var plainFont: Font? = null
     private var boldFont: Font? = null
     private val formulaBg = ColorUtil.withAlpha(GRID_ACCENT, 0.12)
     private val rangeBg = ColorUtil.withAlpha(GRID_ACCENT, 0.30) // selected-range tint (Excel-like)
+    private val searchFallbackBg = JBColor(0xFFF3C2, 0x4A4327) // if the scheme has no search color
     private val focusBorder: Border = JBUI.Borders.customLine(GRID_ACCENT, 2, 2, 2, 2)
+
+    /** The editor scheme's search-result background — the same tint Find-in-editor uses. */
+    private fun searchBg(): java.awt.Color =
+        com.intellij.openapi.editor.colors.EditorColorsManager.getInstance().globalScheme
+            .getAttributes(com.intellij.openapi.editor.colors.EditorColors.SEARCH_RESULT_ATTRIBUTES)
+            ?.backgroundColor ?: searchFallbackBg
 
     // Excel draws one border around the whole selected RANGE; per-cell that means: an accent line
     // only on the edges facing OUTSIDE the selection. 16 edge combinations, cached (paint hot path).
@@ -78,11 +89,15 @@ open class GridCellRenderer : DefaultTableCellRenderer() {
         // so files without any formulas pay nothing per painted cell.
         val isFormula = sheetModel != null && modelRow >= 0 && sheetModel.hasFormulas() &&
             sheetModel.isFormula(modelRow, table.convertColumnIndexToModel(column))
-        val baseBg = when {
+        var baseBg = when {
             modelRow == 0 -> UIUtil.getPanelBackground() // header row joins the chrome
             isFormula -> formulaBg // rare + informative; everything else stays flat
             else -> table.background
         }
+        // Non-filtering search: matched cells wear the editor's search-result tint (rows stay put —
+        // context preserved, unlike the filter). Selection still wins over the search tint.
+        val matcher = searchMatcher()
+        if (matcher != null && modelRow != 0 && text.isNotEmpty() && matcher(text)) baseBg = searchBg()
         // Excel model: the lead cell shows the ring over its NORMAL background; only the other
         // selected cells fill with the range tint, and the range gets a 1px outline around its
         // outside edges. (When the grid itself isn't focused, the lead cell tints too, so an active

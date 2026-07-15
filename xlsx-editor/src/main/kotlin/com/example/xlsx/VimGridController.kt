@@ -30,6 +30,9 @@ class VimGridController(
     private val onPrevSheet: () -> Unit = {},
     /** Visual mode entered/left — the panel shows "-- VISUAL --" in the status bar. */
     private val onVisualModeChanged: () -> Unit = {},
+    /** `n`/`N` first offer the jump to the panel's highlight-search (returns true when it consumed
+     *  the key — an active search pattern outranks the last `*`/`#` value, like vim's `/` search). */
+    private val onPatternSearch: (dir: Int) -> Boolean = { false },
 ) : VimTableController(table) {
 
     private enum class VisualMode { NONE, LINE, CELL }
@@ -170,8 +173,9 @@ class VimGridController(
         repeatSearch(dir)
     }
 
-    /** `n` / `N`: jump to the next/previous row matching the last `*`/`#` value in its column (wraps). */
+    /** `n` / `N`: jump within the active highlight search if any, else repeat the last `*`/`#` value. */
     private fun repeatSearch(dir: Int) {
+        if (onPatternSearch(dir)) return
         val value = searchValue ?: return
         val n = table.rowCount
         if (n == 0 || searchCol !in 0 until table.columnCount) return

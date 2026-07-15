@@ -89,6 +89,15 @@ xlsx-editor/
   correct under a filter.
   Pressing **Enter** in the filter field applies the filter immediately and returns focus to the grid
   (so vim navigation resumes without a mouse click).
+
+  The bar's **mode chip** (or **`Alt+H`**, both in the grid and in the field) switches the query
+  between **▼ Filter** (rows hidden, as above) and
+  **⌕ Highlight** — a NON-filtering search: rows stay put (context preserved), matching **cells**
+  are tinted with the editor scheme's search-result color (live theme/scheme aware), the bar shows
+  the matched-cell count, **Enter** jumps to the first match, and **`n`/`N`** jump between matches
+  (an active highlight search outranks the last `*`/`#` value; with no search active `n`/`N` repeat
+  `*`/`#` as before). Column filters still apply in highlight mode — only the text query stops hiding
+  rows.
 - **Vim navigation (always on):** `VimGridController` installs modal keybindings on the table's
   `WHEN_FOCUSED` InputMap (a-z are all captured so a mark name is read — the grid is read-only, so vim
   owns the keys):
@@ -103,7 +112,8 @@ xlsx-editor/
   - **Copy:** `yy` copies the current cell; `v` starts a cell-wise visual block (extend with `hjkl`)
     and `V` a row-wise visual selection (`j`/`k`) — `y` copies the selection with tabs between cells
     and newlines between rows (pastes straight into Excel), Esc cancels, `Ctrl+C` also works.
-  - **Other:** `gt`/`gT` next/previous sheet, `/` focus filter, `?` shortcut cheat-sheet popup.
+  - **Other:** `gt`/`gT` next/previous sheet, **`Alt+S`** type-to-filter sheet jump popup,
+    `/` focus filter, `?` shortcut cheat-sheet popup.
 
   (`Ctrl+D`/`U`/`E`/`Y` and `Ctrl+Alt+F` use `registerCustomShortcutSet` to beat IDE-global bindings.)
   The grid is read-only, so there are no editing commands. IdeaVim can't be reused — it targets text

@@ -1,3 +1,5 @@
+@file:OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class) // Jewel Tooltip
+
 package com.example.xlsx
 
 import androidx.compose.foundation.background
@@ -23,6 +25,7 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.isAltPressed
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
@@ -31,6 +34,7 @@ import org.jetbrains.jewel.bridge.JewelComposePanel
 import org.jetbrains.jewel.ui.Outline
 import org.jetbrains.jewel.ui.component.Text
 import org.jetbrains.jewel.ui.component.TextField
+import org.jetbrains.jewel.ui.component.Tooltip
 import javax.swing.JComponent
 
 /** A removable active column-filter chip ([count] = how many values are kept for that column). */
@@ -45,6 +49,10 @@ data class ChromeData(
     val regexValid: Boolean = true,
     val chips: List<FilterChip> = emptyList(),
     val streaming: Boolean = false,
+    /** 하이라이트 모드: the query tints matching cells in place instead of hiding rows. */
+    val highlightMode: Boolean = false,
+    /** Matched-cell count while the highlight search is active (-1 = no active search). */
+    val matchCount: Int = -1,
 )
 
 private fun Int.commas() = "%,d".format(this)
@@ -62,6 +70,7 @@ fun createFilterBar(
     onEnter: () -> Unit,
     onClearChip: (Int) -> Unit,
     onClearAll: () -> Unit,
+    onToggleMode: () -> Unit = {},
 ): JComponent = JewelComposePanel {
     // Mirror Swing's debounced filter: notify on every text change (the editor debounces).
     LaunchedEffect(Unit) {
@@ -70,27 +79,45 @@ fun createFilterBar(
     val data = chrome.value
     Column(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Text("Filter:")
+            // Mode chip, ICON-ONLY (click or Alt+H): ▼ Filter(rows hidden) ↔ ⌕ Highlight(rows kept,
+            // matches tinted). The tooltip carries the words; the bar stays quiet.
+            Tooltip(tooltip = { Text(if (data.highlightMode) "Highlight mode — rows stay, n/N jumps (Alt+H)" else "Filter mode — rows hidden (Alt+H)") }) {
+                Text(
+                    if (data.highlightMode) "⌕" else "▼",
+                    Modifier
+                        .background(Color(0x33808080), RoundedCornerShape(4.dp))
+                        .clickable { onToggleMode() }
+                        .padding(horizontal = 7.dp, vertical = 1.dp),
+                )
+            }
             Spacer(Modifier.width(8.dp))
             TextField(
                 state = query,
                 // Red outline when the query isn't a valid regex (it still filters as literal text).
                 outline = if (data.regexValid) Outline.None else Outline.Error,
-                placeholder = { Text("Filter rows (regex) across all columns…") },
+                placeholder = {
+                    Text(
+                        if (data.highlightMode) "Search cells (rows stay · n/N jumps · Alt+H to switch)…"
+                        else "Filter rows (regex) across all columns… (Alt+H: highlight mode)",
+                    )
+                },
                 modifier = Modifier.weight(1f).focusRequester(focusRequester).onPreviewKeyEvent { e ->
-                    if (e.type == KeyEventType.KeyDown && e.key == Key.Enter) {
-                        onEnter()
-                        true
-                    } else {
-                        false
+                    when {
+                        e.type != KeyEventType.KeyDown -> false
+                        e.key == Key.Enter -> { onEnter(); true }
+                        e.key == Key.H && e.isAltPressed -> { onToggleMode(); true } // consume: macOS Alt+H types a dead char
+                        else -> false
                     }
                 },
             )
             Spacer(Modifier.width(10.dp))
-            // Live match count: visible/total while filtering, else just the row count.
+            // Live counts: matched cells in highlight mode, visible/total while filtering, else rows.
             Text(
-                if (data.filterActive) "${data.visible.commas()} / ${data.total.commas()}"
-                else "${data.total.commas()} rows",
+                when {
+                    data.matchCount >= 0 -> "${data.matchCount.commas()} matches"
+                    data.filterActive -> "${data.visible.commas()} / ${data.total.commas()}"
+                    else -> "${data.total.commas()} rows"
+                },
             )
             // Clear every filter (text query + all column filters) at once.
             if (data.filterActive) {

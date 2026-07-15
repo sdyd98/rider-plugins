@@ -241,6 +241,7 @@ class XlsxFileEditor(
                 onNextSheet = { switchSheet(1) },
                 onPrevSheet = { switchSheet(-1) },
                 onFocusFilter = { focusSharedFilter() },
+                onShowSheetPopup = { showSheetJumpPopup() },
             )
         }
         panels = built
@@ -266,11 +267,18 @@ class XlsxFileEditor(
                 filterDebounce.stop()
                 activeSheet?.applyFilter(filterQuery.text.toString())
                 activeSheet?.focusGrid()
+                activeSheet?.navigateSearch(1) // highlight mode: land on the first match (no-op otherwise)
             },
             onClearChip = { col -> activeSheet?.clearColumnFilter(col) },
             onClearAll = {
                 filterQuery.edit { replace(0, length, "") }
                 activeSheet?.clearAllFilters()
+            },
+            onToggleMode = {
+                activeSheet?.let { p ->
+                    p.setHighlightMode(!p.isHighlightMode())
+                    p.refreshStatus() // the bar re-renders from ChromeData (mode chip + counts)
+                }
             },
         ).apply { preferredSize = Dimension(0, JBUI.scale(FILTER_BAR_H)) }
         filterBar = fb
@@ -335,6 +343,25 @@ class XlsxFileEditor(
         if (idx < 0) return false
         tabbedPane?.let { if (it.selectedIndex != idx) it.selectedIndex = idx } // ChangeListener → setActiveSheet
         return panels[idx].revealRow(columnHeader, value)
+    }
+
+    /** Alt+S: type-to-filter sheet jump — the shared modern Compose jump popup ([showJumpPopup]). */
+    private fun showSheetJumpPopup() {
+        val active = activeSheet ?: return
+        if (panels.size <= 1) return
+        val current = tabbedPane?.selectedIndex ?: -1
+        val items = panels.mapIndexed { i, p ->
+            JumpItem(
+                index = i,
+                primary = p.model.sheetName,
+                secondary = "%,d rows".format(p.model.loadedRowCount()),
+                current = i == current,
+            )
+        }
+        showJumpPopup(active.table, "Jump to sheet", items) { item ->
+            tabbedPane?.selectedIndex = item.index // ChangeListener → setActiveSheet
+            panels.getOrNull(item.index)?.focusGrid()
+        }
     }
 
     /** vim `gt`/`gT`: cycle to the next/previous sheet and focus its grid. */

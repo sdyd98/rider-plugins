@@ -5,7 +5,6 @@ import com.intellij.openapi.actionSystem.CustomShortcutSet
 import com.intellij.openapi.fileEditor.FileEditorManager
 import com.intellij.openapi.project.DumbAwareAction
 import com.intellij.openapi.project.Project
-import com.intellij.openapi.ui.popup.JBPopupFactory
 import com.intellij.openapi.util.text.StringUtil
 import com.intellij.openapi.wm.ToolWindowManager
 import com.intellij.ui.ColorUtil
@@ -41,6 +40,7 @@ class SheetPanel(
     onNextSheet: () -> Unit = {},
     onPrevSheet: () -> Unit = {},
     onFocusFilter: () -> Unit = {},
+    private val onShowSheetPopup: () -> Unit = {},
 ) {
 
     val table: JBTable = object : JBTable(model) {
@@ -53,7 +53,7 @@ class SheetPanel(
     }.apply {
         autoResizeMode = JTable.AUTO_RESIZE_OFF
         cellSelectionEnabled = true
-        setDefaultRenderer(Any::class.java, GridCellRenderer())
+        setDefaultRenderer(Any::class.java, GridCellRenderer(searchMatcher = { searchMatcherFn }))
         // Excel-style: a flat background with light gridlines on BOTH axes. Row separation comes from
         // the hairlines, not zebra striping — a pre-tinted half of the grid drowned out the selection
         // tint (see GridCellRenderer), so unselected cells carry no color at all.
@@ -115,6 +115,13 @@ class SheetPanel(
     private var regexValid = true
     private var cachedChips: List<FilterChip> = emptyList()
 
+    // ---- Non-filtering search (하이라이트 모드): rows stay put, matching CELLS get the editor's
+    // search tint, n/N jump between matches. The same query text drives either the filter or the
+    // search, switched by [highlightMode] (the bar's toggle).
+    private var highlightMode = false
+    @Volatile private var searchMatcherFn: ((String) -> Boolean)? = null // read by the renderer per paint
+    private var searchMatchCount = -1
+
     private var sorter: TableRowSorter<SheetTableModel>? = null
 
     private val columnFilter = ColumnFilterController(table, model) {
@@ -132,6 +139,71 @@ class SheetPanel(
         regexValid = q.isEmpty() || compiledRegex != null
         cachedChips = columnFilter.activeFilters().entries.sortedBy { it.key }
             .map { (col, vals) -> FilterChip(col, chipLabel(col), vals.size) }
+        // Highlight-search matcher: the same query, matching cells in place instead of hiding rows
+        // (invalid regex falls back to a literal contains, same as the filter path).
+        searchMatcherFn = if (highlightMode && q.isNotEmpty()) {
+            val rx = compiledRegex
+            if (rx != null) { s: String -> rx.containsMatchIn(s) } else { s: String -> StringUtil.containsIgnoreCase(s, q) }
+        } else {
+            null
+        }
+        recomputeSearchCount()
+    }
+
+    /** Count matched cells over the current VIEW (what n/N can reach). Runs on the debounced query
+     *  edit path only — same order of work the filter's own full pass already does per keystroke. */
+    private fun recomputeSearchCount() {
+        val m = searchMatcherFn ?: run { searchMatchCount = -1; return }
+        var count = 0
+        for (r in 0 until table.rowCount) {
+            if (isHeaderViewRow(r)) continue // model row 0 renders as chrome — never tinted, so never counted
+            for (c in 0 until table.columnCount) {
+                val v = table.getValueAt(r, c)?.toString()
+                if (!v.isNullOrEmpty() && m(v)) count++
+            }
+        }
+        searchMatchCount = count
+    }
+
+    /** The field-code header (model row 0) is painted as chrome and never gets the search tint
+     *  ([GridCellRenderer]); the count and n/N must agree with the renderer and skip it. */
+    private fun isHeaderViewRow(viewRow: Int): Boolean = table.convertRowIndexToModel(viewRow) == 0
+
+    /** Toggle 필터 ↔ 하이라이트 for the current query (from the bar's mode chip). */
+    fun setHighlightMode(on: Boolean) {
+        if (highlightMode == on) return
+        highlightMode = on
+        recomputeFilterState()
+        rebuildRowFilter() // the query stops/starts hiding rows
+        table.repaint()
+        updateStatus()
+    }
+
+    fun isHighlightMode(): Boolean = highlightMode
+
+    /** True when n/N should jump between highlight matches (an active search outranks `*`/`#`). */
+    private fun hasActiveSearch(): Boolean = searchMatcherFn != null
+
+    /** Jump to the next/previous matched cell from the cursor, wrapping; false = no active search. */
+    fun navigateSearch(dir: Int): Boolean {
+        val m = searchMatcherFn ?: return false
+        val rows = table.rowCount
+        val cols = table.columnCount
+        if (rows == 0 || cols == 0) return true // active but empty view — still consume n/N
+        var r = table.selectedRow.coerceAtLeast(0)
+        var c = table.selectedColumn.coerceAtLeast(0)
+        repeat(rows * cols) {
+            c += dir
+            if (c >= cols) { c = 0; r = (r + 1) % rows }
+            if (c < 0) { c = cols - 1; r = (r - 1 + rows) % rows }
+            val v = table.getValueAt(r, c)?.toString()
+            if (!v.isNullOrEmpty() && m(v) && !isHeaderViewRow(r)) { // skip the untinted header row
+                table.changeSelection(r, c, false, false)
+                table.scrollRectToVisible(table.getCellRect(r, c, true))
+                return true
+            }
+        }
+        return true // no match anywhere — consumed, cursor stays
     }
 
     // Vim mode is always on; mode is not displayed. `/` focuses the editor's shared filter bar.
@@ -141,6 +213,7 @@ class SheetPanel(
         onNextSheet = onNextSheet,
         onPrevSheet = onPrevSheet,
         onVisualModeChanged = { updateStatus() }, // show/clear "-- VISUAL --" immediately
+        onPatternSearch = { dir -> navigateSearch(dir) }, // n/N: highlight search outranks `*`/`#`
     )
 
     val component: JComponent = JPanel(BorderLayout()).apply {
@@ -165,6 +238,8 @@ class SheetPanel(
         registerShortcut("alt BACK_SLASH") { showColumnJumpPopup() }
         registerShortcut("alt shift F") { toggleFreezeAtCurrent() }
         registerShortcut("alt K") { cycleKeyRow() }
+        registerShortcut("alt H") { setHighlightMode(!highlightMode) } // filter ↔ highlight for the current query
+        registerShortcut("alt S") { onShowSheetPopup() } // type-to-filter sheet jump (like Alt+\ for columns)
         // Ctrl+R: show the selected row's record in the relationship explorer (needs the action's project).
         object : DumbAwareAction() {
             override fun actionPerformed(e: AnActionEvent) = showRelationships(e.project)
@@ -252,6 +327,7 @@ class SheetPanel(
         filterQueryText = query
         recomputeFilterState()
         rebuildRowFilter()
+        if (highlightMode) table.repaint() // matched-cell tint follows the query as it is typed
         updateStatus()
     }
 
@@ -409,29 +485,28 @@ class SheetPanel(
 
     // ---- Alt+\ column jump ----
 
-    private class ColItem(val index: Int, val label: String) {
-        override fun toString() = label
-    }
-
     private fun keyRowLabel(col: Int): String {
         if (keyRow < 0 || keyRow >= model.rowCount) return ""
         return model.getValueAt(keyRow, col).toString().trim()
     }
 
+    /** Alt+\: type-to-filter column jump — the shared modern Compose jump popup ([showJumpPopup]). The
+     *  key-row name is the primary label (what you search), the column letter is grayed context. */
     private fun showColumnJumpPopup() {
         if (model.columnCount == 0) return
+        val curModelCol = table.selectedColumn.takeIf { it >= 0 }?.let { table.convertColumnIndexToModel(it) } ?: -1
         val items = (0 until model.columnCount).map { c ->
             val letter = CellReference.convertNumToColString(c)
             val name = keyRowLabel(c)
-            ColItem(c, if (name.isNotEmpty()) "$letter · $name" else letter)
+            JumpItem(
+                index = c,
+                primary = name.ifEmpty { letter },
+                secondary = if (name.isNotEmpty()) letter else "",
+                current = c == curModelCol,
+            )
         }
-        JBPopupFactory.getInstance()
-            .createPopupChooserBuilder(items)
-            .setTitle(if (keyRow >= 0) "Jump to column (names from row ${keyRow + 1})" else "Jump to column")
-            .setNamerForFiltering { it.label }
-            .setItemChosenCallback { jumpToColumn(it.index) }
-            .createPopup()
-            .showInCenterOf(table)
+        val title = if (keyRow >= 0) "Jump to column (names from row ${keyRow + 1})" else "Jump to column"
+        showJumpPopup(table, title, items) { jumpToColumn(it.index) }
     }
 
     private fun jumpToColumn(modelCol: Int) {
@@ -456,10 +531,11 @@ class SheetPanel(
         }
     }
 
-    /** Combine the global text query, the per-column value filters, and the frozen-row exclusion. */
+    /** Combine the global text query, the per-column value filters, and the frozen-row exclusion.
+     *  In highlight mode the query never hides rows — it only drives the search tint / n-N jumps. */
     private fun rebuildRowFilter() {
         val s = sorter ?: return
-        val query = filterQueryText.trim()
+        val query = if (highlightMode) "" else filterQueryText.trim()
         val columns = columnFilter.activeFilters()
         val frozen = frozenRowCount
         if (query.isEmpty() && columns.isEmpty() && frozen == 0) {
@@ -510,7 +586,7 @@ class SheetPanel(
         val total = model.loadedRowCount()
         val rowsText = if (visible == total) "%,d rows".format(total) else "%,d / %,d rows".format(visible, total)
         val colFilters = columnFilter.activeFilters()
-        val queryActive = filterQueryText.isNotBlank()
+        val queryActive = filterQueryText.isNotBlank() && !highlightMode // in highlight mode the query hides nothing
         val filterCount = colFilters.size + (if (queryActive) 1 else 0)
         val formula = if (valid) {
             val mr = table.convertRowIndexToModel(r)
@@ -536,6 +612,8 @@ class SheetPanel(
                 regexValid = regexValid,
                 chips = cachedChips,
                 streaming = !ready,
+                highlightMode = highlightMode,
+                matchCount = if (hasActiveSearch()) searchMatchCount else -1,
             ),
         )
     }
