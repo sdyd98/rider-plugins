@@ -78,6 +78,29 @@ class RefsWriteValidationTest {
         assertTrue(!RefsWriteValidation.isFilled(entry("""{"file": "a.xlsx", "sheet": "S", "id": []}""")))
     }
 
+    // ---- classify(): the shape buckets behind list_unfilled_tables (progress tracking) ----
+
+    @Test
+    fun `classify buckets skeletons, undecided refs-and-display orthogonally, and malformed entries`() {
+        val tables = entry(
+            """{
+              "Skeleton":    {"file": "a.xlsx", "sheet": "A"},
+              "Complete":    {"file": "a.xlsx", "sheet": "B", "id": ["Id"], "display": "Name", "refs": []},
+              "NoRefsKey":   {"file": "a.xlsx", "sheet": "C", "id": ["Id"], "display": "Name"},
+              "NoDisplay":   {"file": "a.xlsx", "sheet": "D", "id": ["Id"], "refs": []},
+              "NeitherYet":  {"file": "a.xlsx", "sheet": "E", "id": ["Id"]},
+              "DisplayNull": {"file": "a.xlsx", "sheet": "F", "id": ["Id"], "display": null, "refs": []},
+              "Broken":      "not an object"
+            }""",
+        )
+        val p = RefsWriteValidation.classify(tables)
+        assertEquals(listOf("Skeleton"), p.unfilled)
+        assertEquals(listOf("NoRefsKey", "NeitherYet"), p.undecidedRefs)
+        assertEquals(listOf("NoDisplay", "NeitherYet"), p.undecidedDisplay) // orthogonal: NeitherYet in both
+        assertEquals(listOf("Broken"), p.malformed) // counted in NO bucket (used to inflate "filled")
+        // display: null and refs: [] are explicit "decided: none" — Complete/DisplayNull in no list.
+    }
+
     // ---- SheetScanner.rowValues: the header lookup the field-code check runs on ----
 
     @Test

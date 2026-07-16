@@ -254,9 +254,13 @@ The tools are deliberately **judgment-free** — they enumerate, extract, comput
   concentrated in one table point at a wrong layout/id judgment, spread-out breaks at a wrong target
   or missing `when`.
 - **Large schemas span sessions**, so `list_unfilled_tables` is the mechanical progress query: which
-  entries are still `{file, sheet}` skeletons (no `id`), and which have an id but no `refs` key yet
-  (the convention is to write `refs: []` explicitly once a table is decided to have none) — counts
-  plus paged table keys, so the AI picks its next work batch without ever loading the whole file.
+  entries are still `{file, sheet}` skeletons (no `id`), which have an id but no `refs` key yet
+  (write `refs: []` explicitly once a table is decided to have none), and which have an id but no
+  `display` key yet (write `display: null` once a table is decided to have no name-like column —
+  an omitted display leaves records rendering with blank names, which matters to everything that
+  shows record names). The two undecided lists are orthogonal; malformed (non-object) entries are
+  reported separately instead of silently counting as filled. Counts plus paged table keys, so the
+  AI picks its next work batch without ever loading the whole file.
 
 A client connects via the repo-local `.mcp.json` (loopback SSE to the running IDE); the MCP dependency
 is **optional**, so the viewer still loads on an IDE without (or with a disabled) MCP server.

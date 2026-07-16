@@ -390,11 +390,15 @@ class RefsMcpToolset : McpToolset {
     @McpDescription(
         "Progress query for a large indexing job — mechanically classify every refs.json entry by SHAPE, " +
             "no interpretation: \"unfilled\" entries have NO \"id\" yet (build_refs skeletons whose " +
-            "layout/id judgment isn't recorded; the viewer/validation exclude them until filled), " +
+            "layout/id judgment isn't recorded; the viewer/validation exclude them until filled); " +
             "\"undecidedRefs\" entries have an id but NO \"refs\" key (write \"refs\": [] explicitly once " +
-            "you decide a table has no outgoing refs, so done and not-yet-looked-at stay distinguishable). " +
-            "Returns counts plus up to <limit> table keys per list (<offset> pages). Use this to pick the " +
-            "next work batch across sessions instead of reading the whole file with read_refs.",
+            "you decide a table has no outgoing refs); \"undecidedDisplay\" entries have an id but NO " +
+            "\"display\" key (write \"display\": null explicitly once you decide a table has no name-like " +
+            "column — display names records in the graph and inline views, so leaving it undecided means " +
+            "records render with BLANK names). The two undecided lists are orthogonal (a table can be on " +
+            "both); done and not-yet-looked-at stay distinguishable. Returns counts plus up to <limit> " +
+            "table keys per list (<offset> pages); malformed (non-object) entries are listed separately. " +
+            "Use this to pick the next work batch across sessions instead of reading the whole file.",
     )
     suspend fun list_unfilled_tables(
         @McpDescription("Absolute path to the data folder (holds refs.json).") dir: String,
@@ -406,23 +410,17 @@ class RefsMcpToolset : McpToolset {
         val tablesObj = runCatching { JsonParser.parseString(refsFile.readText()) }.getOrNull()
             ?.takeIf { it.isJsonObject }?.asJsonObject?.get("tables")?.takeIf { it.isJsonObject }?.asJsonObject
             ?: return@io err("refs.json does not parse as a JSON object with \"tables\"")
-        val unfilled = ArrayList<String>()
-        val undecided = ArrayList<String>()
-        for ((key, el) in tablesObj.entrySet()) {
-            val t = el.takeIf { it.isJsonObject }?.asJsonObject ?: continue
-            val hasId = (t.get("id")?.takeIf { it.isJsonArray }?.asJsonArray?.size() ?: 0) > 0
-            when {
-                !hasId -> unfilled.add(key)
-                t.get("refs") == null -> undecided.add(key)
-            }
-        }
+        val p = RefsWriteValidation.classify(tablesObj)
         gson.toJson(JsonObject().apply {
             addProperty("tablesTotal", tablesObj.size())
-            addProperty("filled", tablesObj.size() - unfilled.size)
-            addProperty("unfilled", unfilled.size)
-            addProperty("undecidedRefs", undecided.size)
-            add("unfilledTables", arrayOf(unfilled.drop(offset).take(limit)))
-            add("undecidedRefsTables", arrayOf(undecided.drop(offset).take(limit)))
+            addProperty("filled", tablesObj.size() - p.unfilled.size - p.malformed.size)
+            addProperty("unfilled", p.unfilled.size)
+            addProperty("undecidedRefs", p.undecidedRefs.size)
+            addProperty("undecidedDisplay", p.undecidedDisplay.size)
+            add("unfilledTables", arrayOf(p.unfilled.drop(offset).take(limit)))
+            add("undecidedRefsTables", arrayOf(p.undecidedRefs.drop(offset).take(limit)))
+            add("undecidedDisplayTables", arrayOf(p.undecidedDisplay.drop(offset).take(limit)))
+            if (p.malformed.isNotEmpty()) add("malformedEntries", arrayOf(p.malformed.take(limit)))
         })
     }
 
@@ -488,7 +486,7 @@ class RefsMcpToolset : McpToolset {
             addProperty("tablesInSchema", tablesObj.size())
             addProperty("tablesAddedThisRun", addedKeys.size)
             addProperty("_note", "SKELETON entries only ({file, sheet}) — the tool made no other decision. Re-runs only ADD new sheets (existing entries are never touched).")
-            addProperty("_next", "Every added table needs YOUR decisions: (1) sample_rows → decide headerRow/dataStartRow/id/display; (2) read the game source → design refs (\"when\" for polymorphic columns, _source: \"code\"); (3) check_ref each hypothesis; (4) write_table_refs (bulk: table=\"\" + {tableId: entry, ...}); (5) validate_refs (scope it with <tables> to the area you filled). Delete non-data sheets via write_table_refs(delete=true). Across sessions, pick the next batch with list_unfilled_tables — skeletons stay out of the graph/validation until filled.")
+            addProperty("_next", "Every added table needs YOUR decisions: (1) sample_rows → decide headerRow/dataStartRow/id/display (record \"display\": null when a table has no name-like column — an OMITTED display leaves records unnamed and counts as undecided); (2) read the game source → design refs (\"when\" for polymorphic columns, _source: \"code\"); (3) check_ref each hypothesis; (4) write_table_refs (bulk: table=\"\" + {tableId: entry, ...}); (5) validate_refs (scope it with <tables> to the area you filled). Delete non-data sheets via write_table_refs(delete=true). Across sessions, pick the next batch with list_unfilled_tables — skeletons stay out of the graph/validation until filled.")
         })
     }
 

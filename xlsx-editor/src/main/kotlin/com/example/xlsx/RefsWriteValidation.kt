@@ -97,6 +97,41 @@ internal object RefsWriteValidation {
     fun fileOf(entry: JsonObject): String? = entry.get("file")?.takeIf { it.isJsonPrimitive }?.asString
     fun sheetOf(entry: JsonObject): String? = entry.get("sheet")?.takeIf { it.isJsonPrimitive }?.asString
 
+    /** Shape classification behind list_unfilled_tables — the cross-session progress query. */
+    class TableProgress(
+        /** No (non-empty) `id` yet — build_refs skeletons awaiting the layout/id judgment. */
+        val unfilled: List<String>,
+        /** Has an id but NO `refs` key — `refs: []` is the explicit "decided: no outgoing refs". */
+        val undecidedRefs: List<String>,
+        /** Has an id but NO `display` key — `display: null` is the explicit "decided: no name column".
+         *  Orthogonal to [undecidedRefs]: a table can be undecided on both. */
+        val undecidedDisplay: List<String>,
+        /** Non-object entries — counted in NO bucket (previously they inflated "filled" silently). */
+        val malformed: List<String>,
+    )
+
+    /** Classify every entry of a refs.json `tables` object by SHAPE only — no interpretation. */
+    fun classify(tablesObj: JsonObject): TableProgress {
+        val unfilled = ArrayList<String>()
+        val undecidedRefs = ArrayList<String>()
+        val undecidedDisplay = ArrayList<String>()
+        val malformed = ArrayList<String>()
+        for ((key, el) in tablesObj.entrySet()) {
+            val t = el.takeIf { it.isJsonObject }?.asJsonObject
+            if (t == null) {
+                malformed.add(key)
+                continue
+            }
+            if (!isFilled(t)) {
+                unfilled.add(key)
+                continue
+            }
+            if (!t.has("refs")) undecidedRefs.add(key) // key present (even as []) = decided
+            if (!t.has("display")) undecidedDisplay.add(key) // key present (even as null) = decided
+        }
+        return TableProgress(unfilled, undecidedRefs, undecidedDisplay, malformed)
+    }
+
     /** The entry's 1-based header row (same default the loader applies). */
     fun headerRowOf(entry: JsonObject): Int =
         runCatching { entry.get("headerRow")?.takeIf { it.isJsonPrimitive }?.asInt }.getOrNull() ?: 1
