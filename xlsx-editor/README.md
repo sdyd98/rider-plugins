@@ -188,7 +188,10 @@ cross-references and shows them as a graph, driven by a `refs.json` schema that 
   most-connected table (`RefGraphPanel`, Compose `Canvas` + force layout; pan/zoom/drag/hover).
 - **데이터 연결** — record-level **data lineage**: centre on one row and see the rows it references
   (outgoing) and the rows that reference it (incoming), with usage counts and group members
-  (`DataGraphView`).
+  (`DataGraphView`). Incoming **fan-in is clustered per table**: more than 3 referencing rows from
+  one table fold into a single `× N` card with one aggregated edge (a hub record referenced by
+  hundreds of rows stays readable); expanding the card lists members (first 40), and clicking a
+  member re-centres on it. Small fan-ins stay individual nodes.
 - **검사** — a workbook-wide **integrity check**: dangling/broken references (a cell points at an id
   that has no row); the tab badges the broken count. There is deliberately NO orphan
   (unreferenced-record) detection — unreferenced rows are normal in game data (content is authored

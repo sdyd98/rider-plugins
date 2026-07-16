@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -49,6 +50,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import org.jetbrains.jewel.ui.component.Text
 
 private const val PADX = 12f
@@ -65,7 +69,10 @@ private const val TITLEH = 30f
 @OptIn(ExperimentalComposeUiApi::class)
 @Composable
 fun RefGraphView(graph: RefGraph, fgArgb: Int, bgArgb: Int, onOpenTable: (String) -> Unit = {}, centerRequest: TableRef? = null) {
-    val measurer = rememberTextMeasurer()
+    // Sized to the WORKING SET (a hub's subgraph = centre + every referrer, easily 100+ cards × ~3
+    // layouts each) — the default cache (8) re-shaped every string every frame. Styles passed to
+    // measure() must stay CONSTANT across frames; animated alpha/hover colors apply at DRAW time.
+    val measurer = rememberTextMeasurer(cacheSize = 2048)
     val fg = Color(fgArgb)
     val bg = Color(bgArgb)
     val accent = Color(0xFF3574F0)
@@ -74,7 +81,9 @@ fun RefGraphView(graph: RefGraph, fgArgb: Int, bgArgb: Int, onOpenTable: (String
     val cardBg = if (bgLum > 0.5f) androidx.compose.ui.graphics.lerp(bg, Color.White, 0.6f) else androidx.compose.ui.graphics.lerp(bg, Color.White, 0.08f)
     val titleStyle = TextStyle(color = fg, fontSize = 13.sp, fontWeight = FontWeight.Bold)
     val rowStyle = TextStyle(color = fg.copy(alpha = 0.88f), fontSize = 12.sp)
+    val rowStyleBold = rowStyle.copy(fontWeight = FontWeight.Bold)
     val badgeStyle = TextStyle(color = fg.copy(alpha = 0.7f), fontSize = 11.sp)
+    fun fade(c: Color, a: Float) = c.copy(alpha = c.alpha * a)
 
     fun rowsOf(t: RefTable): List<RefColumn> = t.columns.filter { it.isId || it.refTo != null }
     fun sizeOf(t: RefTable): Size {
@@ -120,7 +129,11 @@ fun RefGraphView(graph: RefGraph, fgArgb: Int, bgArgb: Int, onOpenTable: (String
     var hoveredKey by remember { mutableStateOf<Pair<String, String>?>(null) } // (tableId, ref column) under the cursor
 
     val sizes = remember(sub) { sub.tables.associate { it.id to sizeOf(it) } }
-    val positions = remember(sub) { mutableStateMapOf<String, Offset>().apply { putAll(forceLayout(sub, sizes)) } }
+    // Force layout is O(n²·iters): on a hub subgraph (hundreds of referrers) computing it inside
+    // remember{} froze the EDT for seconds during composition. Compute OFF-thread; the canvas shows
+    // a placeholder until the first layout lands (layoutReady), then frames the graph.
+    val positions = remember(sub) { mutableStateMapOf<String, Offset>() }
+    var layoutReady by remember(sub) { mutableStateOf(false) }
     val prevPositions = remember { mutableStateMapOf<String, Offset>() }
     var layoutGen by remember { mutableStateOf(0) }
     val glide = remember { Animatable(1f) }
@@ -148,12 +161,25 @@ fun RefGraphView(graph: RefGraph, fgArgb: Int, bgArgb: Int, onOpenTable: (String
     // Re-frame + fade when the centre changes (new subgraph).
     val appear = remember { Animatable(0f) }
     LaunchedEffect(center) { appear.snapTo(0f); fit(); appear.animateTo(1f, tween(380)) }
+    // The initial layout for this subgraph, computed off the EDT (see `positions` above); fit()
+    // re-frames once the real coordinates exist (the LaunchedEffect(center) fit ran on an empty map).
+    LaunchedEffect(sub) {
+        val computed = withContext(Dispatchers.Default) { forceLayout(sub, sizes) }
+        positions.putAll(computed)
+        layoutReady = true
+        fit()
+    }
     LaunchedEffect(hovered) { if (hovered != null) lastHovered = hovered }
     val focusNode = hovered ?: lastHovered
     val hoverFocus by animateFloatAsState(if (hovered != null) 1f else 0f, tween(140), label = "hover")
 
-    fun drawShadow(scope: DrawScope, rect: Rect, elevated: Boolean, a: Float) {
+    fun drawShadow(scope: DrawScope, rect: Rect, elevated: Boolean, a: Float, cheap: Boolean) {
         with(scope) {
+            if (cheap) { // one soft layer — the full stack is hundreds of rects/frame on a hub subgraph
+                val o = rect.inflate(1.5f).translate(0f, 5f)
+                drawRoundRect(Color.Black.copy(alpha = 0.05f * a), o.topLeft, o.size, CornerRadius(14f))
+                return
+            }
             val layers = if (elevated) 6 else 4
             val maxOff = if (elevated) 13f else 7f
             for (i in 1..layers) {
@@ -164,6 +190,7 @@ fun RefGraphView(graph: RefGraph, fgArgb: Int, bgArgb: Int, onOpenTable: (String
         }
     }
 
+    val scope = rememberCoroutineScope()
     val nodeIdAt by rememberUpdatedState({ p: Offset -> nodeAt(p)?.id })
     val onHoverAt by rememberUpdatedState({ p: Offset ->
         val w = toWorld(p)
@@ -190,9 +217,12 @@ fun RefGraphView(graph: RefGraph, fgArgb: Int, bgArgb: Int, onOpenTable: (String
             Text(center ?: "-", fontWeight = FontWeight.Bold)
             Spacer(Modifier.width(18.dp))
             Text("↻", Modifier.clickable {
-                prevPositions.clear(); sub.tables.forEach { prevPositions[it.id] = drawnPos(it.id) }
-                positions.clear(); positions.putAll(forceLayout(sub, sizes))
-                layoutGen++; fit()
+                scope.launch { // off-EDT for the same reason as the initial layout
+                    prevPositions.clear(); sub.tables.forEach { prevPositions[it.id] = drawnPos(it.id) }
+                    val computed = withContext(Dispatchers.Default) { forceLayout(sub, sizes) }
+                    positions.clear(); positions.putAll(computed)
+                    layoutGen++; fit()
+                }
             })
             Spacer(Modifier.width(14.dp))
             Text("⊡", Modifier.clickable { fit() })
@@ -237,6 +267,11 @@ fun RefGraphView(graph: RefGraph, fgArgb: Int, bgArgb: Int, onOpenTable: (String
                         x += step
                     }
                 }
+                if (!layoutReady) { // coordinates are still computing off-thread — don't draw a pile at (0,0)
+                    val lay = measurer.measure("레이아웃 계산 중…", badgeStyle, softWrap = false)
+                    drawText(lay, topLeft = Offset((size.width - lay.size.width) / 2f, size.height / 2f))
+                    return@Canvas
+                }
                 val a = appear.value
                 withTransform({ translate(pan.x, pan.y); scale(zoom, zoom, pivot = Offset.Zero) }) {
                     val keyActive = hoveredKey
@@ -266,35 +301,40 @@ fun RefGraphView(graph: RefGraph, fgArgb: Int, bgArgb: Int, onOpenTable: (String
                             drawCurvedEdge(start, end, edgeCol, 1.5f + (if (onPath) 0.9f else 0f) * hoverFocus)
                         }
                     }
-                    // nodes — same chrome as the data-connection cards (soft card + table-colour dot + hue badges)
+                    // nodes — same chrome as the data-connection cards (soft card + table-colour dot + hue
+                    // badges). PERF CONTRACT: measure() only sees the constant style variants; animated
+                    // alpha/hover colors go through drawText(color = …) so the layout cache always hits.
+                    val manyNodes = sub.tables.size > 40
                     sub.tables.forEach { t ->
                         val r = rectOf(t)
                         val isCenter = t.id == center
                         val hue = tableColor(t.id, bgArgb)
-                        drawShadow(this, r, isCenter || (t.id == focusNode && hoverFocus > 0.3f), a)
+                        val elevated = isCenter || (t.id == focusNode && hoverFocus > 0.3f)
+                        drawShadow(this, r, elevated, a, cheap = manyNodes && !elevated)
                         drawRoundRect(cardBg.copy(alpha = a), r.topLeft, r.size, CornerRadius(12f))
                         drawRoundRect((if (isCenter) accent else fg.copy(alpha = 0.16f)).copy(alpha = a), r.topLeft, r.size, CornerRadius(12f), style = Stroke(width = if (isCenter) 2f else 1f))
                         val cy0 = r.top + TITLEH / 2f
                         drawCircle(hue.copy(alpha = a), 4.5f, Offset(r.left + 14f, cy0)) // table identity dot
-                        val nameLay = measurer.measure(t.display, titleStyle.dim(a), softWrap = false)
-                        drawText(nameLay, topLeft = Offset(r.left + 26f, cy0 - nameLay.size.height / 2f))
+                        val nameLay = measurer.measure(t.display, titleStyle, softWrap = false)
+                        drawText(nameLay, color = fade(titleStyle.color, a), topLeft = Offset(r.left + 26f, cy0 - nameLay.size.height / 2f))
                         drawLine(fg.copy(alpha = 0.10f * a), Offset(r.left + 10f, r.top + TITLEH), Offset(r.right - 10f, r.top + TITLEH), 1f)
                         rowsOf(t).forEachIndexed { i, c ->
                             val y = r.top + TITLEH + i * ROWH
                             val rowActive = (t.id to c.name) in activeKeys
                             if (rowActive) drawRoundRect(pathHi.copy(alpha = 0.12f * a * hoverFocus), Offset(r.left + 6f, y), Size(r.width - 12f, ROWH), CornerRadius(5f))
                             val mark = if (c.isId) "◆ " else "→ "
-                            val base = if (c.isId) accent else fg.copy(alpha = 0.88f)
+                            val base = if (c.isId) accent else rowStyle.color
                             val txt = if (rowActive) androidx.compose.ui.graphics.lerp(base, pathHi, hoverFocus) else base
-                            drawText(measurer, mark + c.name, topLeft = Offset(r.left + PADX, y + 4f), style = TextStyle(color = txt, fontSize = 12.sp, fontWeight = if (rowActive && hoverFocus > 0.4f) FontWeight.Bold else FontWeight.Normal).dim(a), softWrap = false, overflow = TextOverflow.Visible)
+                            val hotBold = rowActive && hoverFocus > 0.4f // weight DOES affect layout: 2 cache entries max
+                            val rowLay = measurer.measure(mark + c.name, if (hotBold) rowStyleBold else rowStyle, overflow = TextOverflow.Visible, softWrap = false)
+                            drawText(rowLay, color = fade(txt, a), topLeft = Offset(r.left + PADX, y + 4f))
                             if (c.refTo != null) {
                                 val th = tableColor(c.refTo, bgArgb)
-                                val badge = badgeText(c)
                                 val bcolor = if (rowActive) androidx.compose.ui.graphics.lerp(badgeStyle.color, pathHi, hoverFocus) else badgeStyle.color
-                                val bl = measurer.measure(badge, badgeStyle.copy(color = bcolor).dim(a), softWrap = false)
+                                val bl = measurer.measure(badgeText(c), badgeStyle, softWrap = false)
                                 val bx = r.right - 12f - bl.size.width
                                 drawCircle((if (rowActive) androidx.compose.ui.graphics.lerp(th, pathHi, hoverFocus) else th).copy(alpha = a), 3.5f, Offset(bx - 9f, y + ROWH / 2f))
-                                drawText(bl, topLeft = Offset(bx, y + (ROWH - bl.size.height) / 2f))
+                                drawText(bl, color = fade(bcolor, a), topLeft = Offset(bx, y + (ROWH - bl.size.height) / 2f))
                             }
                         }
                         if (t.id == keyTargetId) { // hovering a key row → ring the connected table
@@ -311,8 +351,6 @@ fun RefGraphView(graph: RefGraph, fgArgb: Int, bgArgb: Int, onOpenTable: (String
 /** Ref badge: target table + " str" for embedded refs + " if" for conditional (`when`) refs. */
 private fun badgeText(c: RefColumn): String =
     (c.refTo ?: "") + (if (c.embedded) " str" else "") + (if (c.conditional) " if" else "")
-
-private fun TextStyle.dim(a: Float): TextStyle = if (a >= 1f) this else copy(color = color.copy(alpha = color.alpha * a))
 
 /** Layered left→right layout: pure referrers on the left, leaf tables (only referenced) on the right. */
 private fun layeredLayout(graph: RefGraph, sizes: Map<String, Size>): Map<String, Offset> {
@@ -357,7 +395,12 @@ private fun forceLayout(graph: RefGraph, sizes: Map<String, Size>): Map<String, 
     }.distinct()
     val k = 280f
     var temp = 320f
-    val iters = if (ids.size > 120) 250 else 520
+    // O(n²) per iteration — tiered down for big hub subgraphs (runs off-EDT, but 500²×520 still hurts).
+    val iters = when {
+        ids.size > 300 -> 120
+        ids.size > 120 -> 250
+        else -> 520
+    }
     repeat(iters) {
         val disp = HashMap<String, Offset>()
         ids.forEach { disp[it] = Offset.Zero }

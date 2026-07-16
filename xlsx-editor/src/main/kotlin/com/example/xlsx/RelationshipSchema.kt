@@ -207,6 +207,11 @@ class IndexRecordGraph(private val schema: RefSchema, private val index: GameInd
 
     override fun usageCount(r: RefRecord): Int = index.reverse["${r.table}|${r.id}"]?.size ?: 0
 
+    /** Schema-only (no row reads): distinct source columns of the table's refs — what the explorer
+     *  shows as a neighbour's row count/chevron before its rows are lazily loaded. */
+    override fun refColumnCount(table: String): Int =
+        schema.table(table)?.refs?.mapNotNull { it.fromCols.firstOrNull() }?.distinct()?.size ?: 0
+
     /** Search corpus — built from the index on first use (search/Ctrl+R), not eagerly at open. */
     override val records: List<RefRecord> by lazy {
         val recs = ArrayList<RefRecord>(index.idName.size + index.groupMembers.size)
