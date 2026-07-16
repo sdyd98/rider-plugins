@@ -231,7 +231,8 @@ class IndexRecordGraph(private val schema: RefSchema, private val index: GameInd
         return null
     }
 
-    /** Dangling refs + orphans — computed entirely from the indices (no row reads). */
+    /** Dangling refs — computed entirely from the reverse index (no row reads). Orphan (unreferenced-
+     *  record) detection was removed deliberately; see [ValidationReport]. */
     override fun validate(): ValidationReport {
         val broken = ArrayList<BrokenRef>()
         index.reverse.forEach { (key, backrefs) -> // a token referenced but in neither id-name nor group index = dangling
@@ -240,18 +241,6 @@ class IndexRecordGraph(private val schema: RefSchema, private val index: GameInd
                 backrefs.forEach { br -> broken.add(BrokenRef(RefRecord(br.srcTable, br.srcId, br.srcName), br.column, token, toTable)) }
             }
         }
-        val referenced = schema.tables.flatMap { it.refs.map { r -> r.toTable } }.toSet()
-        val orphans = ArrayList<RefRecord>()
-        index.idName.forEach { (key, name) ->
-            val (t, id) = splitKey(key)
-            if (t !in referenced) return@forEach
-            // Group-keyed tables have composite ids ("groupKey·slot") and are referenced via their GROUP
-            // key, not the full row id. A row is in use if EITHER its full id or its group key is referenced;
-            // otherwise group members would all be mis-flagged as unreferenced.
-            val directlyUsed = (index.reverse[key]?.size ?: 0) > 0
-            val groupUsed = id.contains('·') && (index.reverse["$t|${id.substringBefore('·')}"]?.size ?: 0) > 0
-            if (!directlyUsed && !groupUsed) orphans.add(RefRecord(t, id, name))
-        }
-        return ValidationReport(broken, orphans)
+        return ValidationReport(broken)
     }
 }

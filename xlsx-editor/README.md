@@ -50,7 +50,7 @@ xlsx-editor/
     RelationshipNavigation.kt schema resolution (nearest refs.json) + graph→grid navigation
     RelationshipBus.kt        grid→graph event bus (Ctrl+R record · Ctrl+F table)
     SheetScanner.kt           judgment-free sheet access for the MCP tools (enumerate / raw rows / column values / overlap math)
-    RefsMcpToolset.kt         10 MCP tools for refs.json authoring (IDE built-in MCP server)
+    RefsMcpToolset.kt         11 MCP tools for refs.json authoring (IDE built-in MCP server)
   (shared in ../common: PoiClassLoaders.kt, CellFormatting.kt, and VimTableController.kt —
    the vim key/count/mark/scroll base class VimGridController extends)
 ```
@@ -190,7 +190,9 @@ cross-references and shows them as a graph, driven by a `refs.json` schema that 
   (outgoing) and the rows that reference it (incoming), with usage counts and group members
   (`DataGraphView`).
 - **검사** — a workbook-wide **integrity check**: dangling/broken references (a cell points at an id
-  that has no row) and orphan records (rows nothing references); the tab badges the broken count.
+  that has no row); the tab badges the broken count. There is deliberately NO orphan
+  (unreferenced-record) detection — unreferenced rows are normal in game data (content is authored
+  ahead of whatever will reference it), so flagging them was noise.
 
 **Navigation is bidirectional:** press **`Ctrl+R`** on a grid row to centre the explorer on that
 record, or **`Ctrl+F`** to centre the table-level ER map on the current sheet's table
@@ -230,15 +232,23 @@ The tools are deliberately **judgment-free** — they enumerate, extract, comput
   `id` / `display` itself; `column_values` extracts one column's distinct values + counts for the
   id/enum/reference judgment. The refs are designed from the **game source** — how the loading code
   uses each field (polymorphic columns become conditional `when` refs).
-- **`check_ref` verifies each hypothesis with numbers, not opinions** — pure set arithmetic over the
-  full data: how many distinct from-column tokens exist among the target column's values, plus missing
-  samples. The AI supplies all coordinates (column letters, data start rows, `split`, null
-  placeholders) and judges the result.
+- **`check_ref` verifies each hypothesis with numbers, not opinions** — pure set arithmetic: how many
+  distinct from-column tokens exist among the target column's values, plus missing samples. Honest
+  about its caps: past 5,000 distinct from-values / 500k target ids it flags `fromTruncated` /
+  `toTruncated` so a partial check is never mistaken for a full one. The AI supplies all coordinates
+  (column letters, data start rows, `split`, null placeholders) and judges the result.
 - The AI records its decisions with `write_table_refs` (single or **bulk** — one call fills a whole
   area; there is deliberately NO whole-file write, so a stale copy in the AI's context can never
   clobber filled-in judgments — `read_refs` reads the whole file, `set_null_values` sets the
-  top-level placeholder list), marking each ref `_source: "code"`
-  or `"data"` (the viewer ignores `_`-prefixed keys), and closes the loop with `validate_refs` —
+  top-level placeholder list). **Writes are validated mechanically before anything is written**:
+  field TYPES that would otherwise null the whole schema at load (`display` must be one string or
+  null, `headerRow`/`dataStartRow` numbers, `id`/`from`/`by` arrays of strings), every ref `to` must
+  name an existing (or same-call) table key, every recorded **field code** (`id`, `display`, `from`,
+  `when` columns — and `by` against the target's header) must actually appear in the declared
+  `headerRow` of the declared sheet (catching column letters or typos that would silently blank the
+  table or its display names), and replacing an already-FILLED entry requires `overwrite=true`.
+  Each ref is marked `_source: "code"`
+  or `"data"` (the viewer ignores `_`-prefixed keys), and the loop closes with `validate_refs` —
   scopable to a comma-separated table list with paged examples, so on a large schema the AI validates
   the area it just filled instead of everything. Reading the result is also the AI's job: breaks
   concentrated in one table point at a wrong layout/id judgment, spread-out breaks at a wrong target

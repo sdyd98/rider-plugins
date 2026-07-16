@@ -108,13 +108,15 @@ class RefsMcpToolset : McpToolset {
 
     @McpTool
     @McpDescription(
-        "Verify YOUR hypothesized reference with pure set arithmetic on the FULL data — no thresholds, no " +
-            "proposals: how many distinct tokens of the from-column exist among the to-column's values? " +
-            "Returns fromTokens/matched/coverage and up to 10 missing tokens. YOU decide what the numbers " +
-            "mean (low coverage may be a wrong target, a polymorphic column needing per-\"when\" checks, or " +
-            "genuinely broken data). All coordinates are yours: column LETTERS and 1-based data start rows; " +
-            "<split> for delimited multi-value cells; <ignore> for the game's no-reference placeholders " +
-            "(comma-separated, e.g. \"0,-1\").",
+        "Verify YOUR hypothesized reference with pure set arithmetic — no thresholds, no proposals: how " +
+            "many distinct tokens of the from-column exist among the to-column's values? Returns " +
+            "fromTokens/matched/coverage and up to 10 missing tokens. CAPS: the from-side covers up to " +
+            "5000 DISTINCT cell values (fromTruncated=true past that — the numbers are then a partial " +
+            "check, not a full one) and the to-side up to 500k ids (toTruncated=true). YOU decide what " +
+            "the numbers mean (low coverage may be a wrong target, a polymorphic column needing " +
+            "per-\"when\" checks, or genuinely broken data). All coordinates are yours: column LETTERS " +
+            "and 1-based data start rows; <split> for delimited multi-value cells; <ignore> for the " +
+            "game's no-reference placeholders (comma-separated, e.g. \"0,-1\").",
     )
     suspend fun check_ref(
         @McpDescription("Absolute path to the data folder.") dir: String,
@@ -142,6 +144,7 @@ class RefsMcpToolset : McpToolset {
             add("missingSample", arrayOf(o.missingSample))
             addProperty("toDistinctIds", o.toIds)
             if (o.toTruncated) addProperty("toTruncated", true)
+            if (o.fromTruncated) addProperty("fromTruncated", true) // >5000 distinct from-values: PARTIAL check
         })
     }
 
@@ -189,16 +192,24 @@ class RefsMcpToolset : McpToolset {
             "target: {\"from\": [\"Param\"], \"to\": \"Item\", \"when\": {\"ParamType\": [\"3\", \"4\"]}} — " +
             "the ref applies only to rows where every \"when\" column has one of its accepted values (cell " +
             "display text; a scalar means one value); write sibling refs on the same column with different " +
-            "\"when\" for the other targets. Non-0 \"no reference\" placeholders (-1, None, …) go in the " +
-            "top-level list via set_null_values. Entries are shape-validated before writing (file+sheet " +
-            "present; refs an array of {from[], to, when?}); nothing is written on error. Pass delete=true " +
-            "(with <table>) to REMOVE a non-data sheet (notes/config) from the schema.",
+            "\"when\" for the other targets. Grouped refs use \"by\" (array of the TARGET's id field " +
+            "codes, a strict subset of its composite id); delimited multi-value cells use \"split\"; regex " +
+            "extraction uses \"pattern\". Non-0 \"no reference\" placeholders (-1, None, …) go in the " +
+            "top-level list via set_null_values. VALIDATED BEFORE WRITING (nothing is written on error): " +
+            "field types (headerRow/dataStartRow numbers, display ONE string or null, id/from/by arrays of " +
+            "strings); every ref \"to\" must name an existing (or same-call) table key; and every recorded " +
+            "FIELD CODE (id, display, from, when-columns — and by, against the target) must appear in the " +
+            "declared headerRow of the declared sheet — codes are header CELL TEXT, never column letters. " +
+            "Overwriting an already-FILLED entry (one with an id) requires overwrite=true, so a stale " +
+            "session can't clobber recorded judgments. Pass delete=true (with <table>) to REMOVE a " +
+            "non-data sheet (notes/config) from the schema.",
     )
     suspend fun write_table_refs(
         @McpDescription("Absolute path to the data folder (holds refs.json).") dir: String,
         @McpDescription("Table id (the JSON key in \"tables\"); empty for bulk mode.") table: String,
         @McpDescription("The table entry object, or in bulk mode an object of {tableId: entry}. Ignored when delete=true.") json: String = "",
         @McpDescription("Remove the table's entry instead of writing one.") delete: Boolean = false,
+        @McpDescription("Allow replacing entries that are already FILLED (have an id). Default false.") overwrite: Boolean = false,
     ): String = io {
         val refsFile = File(dir, "refs.json")
         val rootObj: JsonObject
@@ -226,20 +237,80 @@ class RefsMcpToolset : McpToolset {
             val parsed = runCatching { JsonParser.parseString(json) }.getOrNull()
                 ?.takeIf { it.isJsonObject }?.asJsonObject
                 ?: return@io err("<json> is not a JSON object")
+            // Normalize single vs bulk into one key→entry map, then validate EVERYTHING before any
+            // mutation (all-or-nothing, same as the original bulk contract).
+            val writes = LinkedHashMap<String, JsonObject>()
             if (table.isEmpty()) {
-                // bulk: {tableId: entry, ...} — validate everything first, then write all-or-nothing.
                 if (parsed.size() == 0) return@io err("bulk write: <json> has no entries")
                 for ((k, v) in parsed.entrySet()) {
-                    val e = v.takeIf { it.isJsonObject }?.asJsonObject
+                    writes[k] = v.takeIf { it.isJsonObject }?.asJsonObject
                         ?: return@io err("bulk write: \"$k\" is not an entry object — did you mean to pass <table> for a single write?")
-                    validateTableEntry(e)?.let { return@io err("\"$k\": $it") }
                 }
-                parsed.entrySet().forEach { (k, v) -> tablesObj.add(k, v); written.add(k) }
             } else {
-                validateTableEntry(parsed)?.let { return@io err(it) }
-                tablesObj.add(table, parsed)
-                written.add(table)
+                writes[table] = parsed
             }
+            for ((k, e) in writes) RefsWriteValidation.shape(e)?.let { return@io err("\"$k\": $it") }
+            // Overwrite guard: a FILLED entry (has an id) holds recorded judgments — never replace it
+            // silently (a stale session that thinks the table is unfilled must be told, not obeyed).
+            if (!overwrite) {
+                val clobbered = writes.keys.filter { k ->
+                    tablesObj.get(k)?.takeIf { it.isJsonObject }?.asJsonObject
+                        ?.let { RefsWriteValidation.isFilled(it) } == true
+                }
+                if (clobbered.isNotEmpty()) {
+                    return@io err(
+                        "already FILLED (their judgments would be lost): ${clobbered.joinToString(", ")} — " +
+                            "read_table_refs to inspect them, then pass overwrite=true to replace deliberately",
+                    )
+                }
+            }
+            // Every ref target must be a table key — existing, or written in this same call.
+            val knownKeys = tablesObj.keySet() + writes.keys
+            for ((k, e) in writes) {
+                RefsWriteValidation.refTargets(e).firstOrNull { it !in knownKeys }?.let { unknown ->
+                    return@io err("\"$k\": ref target \"$unknown\" is not a table in refs.json (typo? run list_unfilled_tables/read_refs to see keys)")
+                }
+            }
+            // Every recorded FIELD CODE must exist in the declared header row — this is where a column
+            // LETTER (or a typo'd code) written instead of header cell text gets caught, instead of the
+            // table silently going invisible (id/from) or every name rendering blank (display).
+            val headerCache = HashMap<String, Map<String, String>?>()
+            fun headerOf(file: String, sheet: String, row: Int): Map<String, String>? =
+                headerCache.getOrPut("$file|$sheet|$row") { SheetScanner.rowValues(File(dir), file, sheet, row) }
+            for ((k, e) in writes) {
+                val codes = RefsWriteValidation.ownSheetCodes(e)
+                if (codes.isEmpty()) continue // bare skeleton — nothing claimed, nothing to verify
+                val file = RefsWriteValidation.fileOf(e) ?: continue
+                val sheet = RefsWriteValidation.sheetOf(e) ?: continue
+                val headerRow = RefsWriteValidation.headerRowOf(e)
+                val header = headerOf(file, sheet, headerRow)
+                    ?: return@io err("\"$k\": workbook/sheet not found: $file / $sheet")
+                if (header.isEmpty()) return@io err("\"$k\": header row $headerRow of \"$sheet\" has no values — check headerRow")
+                val values = header.values.toSet()
+                codes.firstOrNull { it !in values }?.let { missing ->
+                    return@io err(
+                        "\"$k\": field code \"$missing\" is not in header row $headerRow of \"$sheet\". " +
+                            "Codes are header CELL TEXT (not column letters). Header: ${header.entries.joinToString(", ") { (c, v) -> "$c=$v" }}",
+                    )
+                }
+                // `by` codes live in the TARGET's header. Only checkable when the target is FILLED
+                // (its headerRow judgment exists) — checking a skeleton against the default row 1
+                // could reject a correct `by`, which is worse than deferring to validate_refs.
+                for ((to, byCodes) in RefsWriteValidation.byCodesPerTarget(e)) {
+                    val target = writes[to]
+                        ?: tablesObj.get(to)?.takeIf { it.isJsonObject }?.asJsonObject
+                        ?: continue
+                    if (!RefsWriteValidation.isFilled(target)) continue
+                    val tFile = RefsWriteValidation.fileOf(target) ?: continue
+                    val tSheet = RefsWriteValidation.sheetOf(target) ?: continue
+                    val tHeader = headerOf(tFile, tSheet, RefsWriteValidation.headerRowOf(target)) ?: continue
+                    if (tHeader.isEmpty()) continue
+                    byCodes.firstOrNull { it !in tHeader.values.toSet() }?.let { missing ->
+                        return@io err("\"$k\": \"by\" code \"$missing\" is not in the header row of target \"$to\" (${tSheet})")
+                    }
+                }
+            }
+            writes.forEach { (k, v) -> tablesObj.add(k, v); written.add(k) }
         }
         refsFile.writeText(gson.toJson(rootObj))
         gson.toJson(JsonObject().apply {
@@ -248,32 +319,6 @@ class RefsMcpToolset : McpToolset {
             addProperty("tablesInSchema", tablesObj.size())
             addProperty("path", refsFile.path.replace('\\', '/'))
         })
-    }
-
-    /** Structural check of one table entry, so a bad write can't silently invalidate the whole schema
-     *  (the viewer's loader rejects refs.json wholesale when a field has the wrong shape). */
-    private fun validateTableEntry(entry: JsonObject): String? {
-        if (entry.get("file")?.takeIf { it.isJsonPrimitive } == null) return "entry is missing \"file\" (workbook path relative to the data folder)"
-        if (entry.get("sheet")?.takeIf { it.isJsonPrimitive } == null) return "entry is missing \"sheet\""
-        val id = entry.get("id")
-        if (id != null && !id.isJsonArray) return "\"id\" must be an array of column field codes"
-        val refs = entry.get("refs") ?: return null
-        if (!refs.isJsonArray) return "\"refs\" must be an array"
-        val arr = refs.asJsonArray
-        for (i in 0 until arr.size()) {
-            val ro = arr[i].takeIf { it.isJsonObject }?.asJsonObject ?: return "refs[$i] is not an object"
-            if (ro.get("from")?.takeIf { it.isJsonArray } == null) return "refs[$i] is missing \"from\" (array of column field codes)"
-            if (ro.get("to")?.takeIf { it.isJsonPrimitive } == null) return "refs[$i] is missing \"to\" (target table id)"
-            val w = ro.get("when")
-            if (w != null) {
-                if (!w.isJsonObject) return "refs[$i] \"when\" must be an object of column -> accepted value(s)"
-                for ((c, v) in w.asJsonObject.entrySet()) {
-                    if (!(v.isJsonPrimitive || (v.isJsonArray && v.asJsonArray.all { it.isJsonPrimitive })))
-                        return "refs[$i] \"when\".$c must be a value or an array of values"
-                }
-            }
-        }
-        return null
     }
 
     @McpTool
@@ -303,10 +348,11 @@ class RefsMcpToolset : McpToolset {
 
     @McpTool
     @McpDescription(
-        "Validate refs.json against the data: dangling (broken) references and unreferenced (orphan) " +
-            "records. Run after writing refs. Scope with <tables> (comma-separated table ids — broken refs " +
-            "whose SOURCE or TARGET table is listed, orphans in listed tables; empty = whole schema) and " +
-            "page the examples with <limit>/<offset> — on a large schema validate the area you just filled, " +
+        "Validate refs.json against the data: dangling (broken) references — a cell pointing at an id " +
+            "with no row. (No orphan/unreferenced-record detection — deliberate: unreferenced rows are " +
+            "normal in game data.) Run after writing refs. Scope with <tables> (comma-separated table ids " +
+            "— broken refs whose SOURCE or TARGET table is listed; empty = whole schema) and page the " +
+            "examples with <limit>/<offset> — on a large schema validate the area you just filled, " +
             "not everything. Unfilled skeleton entries (no \"id\" yet) and refs pointing at them are " +
             "EXCLUDED from validation (counts reported back) — track them with list_unfilled_tables. " +
             "Reading the result is YOUR job: broken refs concentrated in one table usually mean that " +
@@ -317,7 +363,7 @@ class RefsMcpToolset : McpToolset {
     suspend fun validate_refs(
         @McpDescription("Absolute path to the data folder.") dir: String,
         @McpDescription("Comma-separated table ids to scope the report to (empty = whole schema).") tables: String = "",
-        @McpDescription("Max broken/orphan examples returned.") limit: Int = 10,
+        @McpDescription("Max broken-ref examples returned.") limit: Int = 10,
         @McpDescription("Examples to skip first (paging through a long list).") offset: Int = 0,
     ): String = io {
         val schema = loadRefSchema(File(dir)) ?: return@io err("no valid refs.json in $dir")
@@ -329,13 +375,10 @@ class RefsMcpToolset : McpToolset {
             return@io err("tables not filled in refs.json (or absent): ${unknown.joinToString(", ")}")
         val report = IndexRecordGraph(schema, GameDataLoader.loadOrBuildIndex(schema)).validate()
         val broken = if (scope.isEmpty()) report.broken else report.broken.filter { it.from.table in scope || it.toTable in scope }
-        val orphans = if (scope.isEmpty()) report.orphans else report.orphans.filter { it.table in scope }
         gson.toJson(JsonObject().apply {
             if (scope.isNotEmpty()) addProperty("scope", scope.joinToString(","))
             addProperty("broken", broken.size)
-            addProperty("orphans", orphans.size)
             add("brokenSample", JsonArray().apply { broken.drop(offset).take(limit).forEach { add("${it.from.table}#${it.from.id}.${it.column} -> ${it.toTable}#${it.missingId} (missing)") } })
-            add("orphanSample", JsonArray().apply { orphans.drop(offset).take(limit).forEach { add("${it.table}#${it.id}") } })
             if (schema.unfilledTables.isNotEmpty()) {
                 addProperty("unfilledTablesExcluded", schema.unfilledTables.size)
                 addProperty("refsToUnfilledTargetsExcluded", schema.refsToUnfilled)
@@ -399,7 +442,7 @@ class RefsMcpToolset : McpToolset {
             "INTERACTION POLICY (follow before running): if you do NOT already know the data ROOT folder, " +
             "ASK the user for the top folder path — do not guess it; for an INCREMENTAL build, ASK which " +
             "base/anchor table (or area) to start from — OR pass the whole root to enumerate everything at " +
-            "once. Table keys: the sheet name, qualified as \"<file>#<sheet>\" when the same sheet name " +
+            "once. Table keys: the sheet name, qualified as \"<file-without-extension>#<sheet>\" when the same sheet name " +
             "appears in several workbooks.",
     )
     suspend fun build_refs(

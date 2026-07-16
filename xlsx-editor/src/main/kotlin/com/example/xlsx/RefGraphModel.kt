@@ -50,7 +50,9 @@ data class RefLink(val from: RefRecord, val column: String, val to: RefRecord, v
 data class BrokenRef(val from: RefRecord, val column: String, val missingId: String, val toTable: String)
 
 /** Workbook-wide integrity result: dangling refs + records nothing references (dead content). */
-data class ValidationReport(val broken: List<BrokenRef>, val orphans: List<RefRecord>)
+// No orphan (unreferenced-record) detection — firm user decision: unreferenced rows are normal in
+// game data (content authored ahead of use), so flagging them was noise, not signal.
+data class ValidationReport(val broken: List<BrokenRef>)
 
 /**
  * What the data explorer needs from a record graph: the searchable record list, and a record's

@@ -200,7 +200,7 @@ private fun NoSchemaView(project: com.intellij.openapi.project.Project, fgArgb: 
     }
 }
 
-/** Workbook integrity report: dangling references + unreferenced (orphan) records, click to open. */
+/** Workbook integrity report: dangling references, click to open. (No orphan section — deliberate.) */
 @Composable
 private fun ValidationView(report: ValidationReport?, fgArgb: Int, bgArgb: Int, onOpen: (RefRecord) -> Unit) {
     val fg = Color(fgArgb)
@@ -212,26 +212,13 @@ private fun ValidationView(report: ValidationReport?, fgArgb: Int, bgArgb: Int, 
     val muted = fg.copy(alpha = 0.55f)
     val scroll = rememberScrollState()
     Column(Modifier.fillMaxSize().verticalScroll(scroll).padding(16.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            ValStatChip(report.broken.size, "깨진 참조", danger)
-            Spacer(Modifier.width(10.dp))
-            ValStatChip(report.orphans.size, "미참조", muted)
-        }
+        ValStatChip(report.broken.size, "깨진 참조", if (report.broken.isEmpty()) muted else danger)
         Spacer(Modifier.height(22.dp))
 
         ValSectionHeader("깨진 참조", report.broken.size, if (report.broken.isEmpty()) muted else danger, fg)
         Spacer(Modifier.height(8.dp))
         if (report.broken.isEmpty()) ValOkRow("깨진 참조 없음", fg)
         else report.broken.forEach { b -> ValBrokenRow(b, bgArgb, fg, danger, onOpen) }
-
-        Spacer(Modifier.height(24.dp))
-        ValSectionHeader("미참조 — 어디서도 참조되지 않는 레코드", report.orphans.size, muted, fg)
-        Spacer(Modifier.height(8.dp))
-        if (report.orphans.isEmpty()) ValOkRow("모든 레코드가 참조됨", fg)
-        else {
-            report.orphans.take(300).forEach { o -> ValOrphanRow(o, bgArgb, fg, muted, onOpen) }
-            if (report.orphans.size > 300) Text("… 외 ${report.orphans.size - 300}개", color = muted, fontSize = 12.sp, modifier = Modifier.padding(start = 4.dp, top = 6.dp))
-        }
     }
 }
 
@@ -284,20 +271,6 @@ private fun ValBrokenRow(b: BrokenRef, bgArgb: Int, fg: Color, danger: Color, on
         Text("${b.toTable} #${b.missingId}", color = danger, fontSize = 12.sp)
         Spacer(Modifier.width(8.dp))
         Text("없음", Modifier.background(danger.copy(alpha = 0.18f), RoundedCornerShape(5.dp)).padding(horizontal = 6.dp, vertical = 1.dp), color = danger, fontSize = 10.sp, fontWeight = FontWeight.Bold)
-    }
-}
-
-@Composable
-private fun ValOrphanRow(o: RefRecord, bgArgb: Int, fg: Color, muted: Color, onOpen: (RefRecord) -> Unit) {
-    Row(
-        Modifier.fillMaxWidth().padding(vertical = 2.dp).clip(RoundedCornerShape(8.dp)).background(fg.copy(alpha = 0.04f)).clickable { onOpen(o) }.padding(horizontal = 12.dp, vertical = 8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Box(Modifier.size(8.dp).background(tableColor(o.table, bgArgb), CircleShape))
-        Spacer(Modifier.width(9.dp))
-        Text(o.name.ifEmpty { o.id }, color = fg.copy(alpha = 0.9f), fontSize = 12.sp)
-        Spacer(Modifier.width(8.dp))
-        Text("${o.table} #${o.id}", color = muted, fontSize = 11.sp)
     }
 }
 

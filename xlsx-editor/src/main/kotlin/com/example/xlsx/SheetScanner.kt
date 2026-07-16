@@ -88,6 +88,9 @@ object SheetScanner {
         val missingSample: List<String>,
         val toIds: Int,
         val toTruncated: Boolean,
+        /** True when the FROM column had more than [MAX_DISTINCT] distinct cell values — the numbers
+         *  then cover only the first 5000 and the caller must not read them as a full check. */
+        val fromTruncated: Boolean,
     )
 
     /** Value-overlap NUMBERS between a hypothesized reference column and a target column — pure set
@@ -110,7 +113,16 @@ object SheetScanner {
             .filter { it.isNotEmpty() && it !in ignore }
             .toSet()
         val missing = tokens.filter { it !in target.distinct }
-        return Overlap(tokens.size, tokens.size - missing.size, missing.take(10), target.distinct.size, target.truncated)
+        return Overlap(tokens.size, tokens.size - missing.size, missing.take(10), target.distinct.size, target.truncated, source.truncated)
+    }
+
+    /** The trimmed non-empty cells of EXACTLY 1-based [row] (column letter → value). Empty map when
+     *  that row holds no values (e.g. a wrong headerRow judgment); null if the file/sheet is missing.
+     *  Used by write_table_refs to verify recorded FIELD CODES actually exist in the header row. */
+    fun rowValues(baseDir: File, relFile: String, sheet: String, row: Int): Map<String, String>? {
+        val collector = SingleRowCollector(row - 1)
+        if (!parseOneSheet(baseDir, relFile, sheet, collector)) return null
+        return collector.cells.entries.associate { (c, v) -> CellReference.convertNumToColString(c) to v }
     }
 
     /** Column index from letters ("A" → 0, "AB" → 27); null if not pure letters. */
@@ -165,6 +177,30 @@ object SheetScanner {
 
 /** Aborts a streaming parse once a collector has what it needs. */
 private class StopParsing : RuntimeException()
+
+/** Captures exactly one 0-based row's non-empty cells, then aborts the parse. */
+private class SingleRowCollector(private val rowIdx: Int) : XSSFSheetXMLHandler.SheetContentsHandler {
+    val cells = java.util.TreeMap<Int, String>()
+    private var rowNum = -1
+
+    override fun startRow(rowNum: Int) {
+        if (rowNum > rowIdx) throw StopParsing()
+        this.rowNum = rowNum
+    }
+
+    override fun cell(cellReference: String?, formattedValue: String?, comment: XSSFComment?) {
+        if (rowNum != rowIdx) return
+        val col = SheetScanner.colIndexOf((cellReference ?: return).takeWhile { it.isLetter() }) ?: return
+        val v = formattedValue?.trim().orEmpty()
+        if (v.isNotEmpty()) cells[col] = v
+    }
+
+    override fun endRow(rowNum: Int) {
+        if (rowNum >= rowIdx) throw StopParsing()
+    }
+
+    override fun headerFooter(text: String?, isHeader: Boolean, tagName: String?) {}
+}
 
 /** Buffers non-empty rows at/after [fromIdx] (0-based), verbatim, up to [limit] rows. */
 private class RowWindowCollector(private val fromIdx: Int, private val limit: Int) : XSSFSheetXMLHandler.SheetContentsHandler {
