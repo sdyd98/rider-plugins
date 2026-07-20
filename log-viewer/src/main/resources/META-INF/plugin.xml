@@ -11,6 +11,18 @@
     ]]></description>
 
     <change-notes><![CDATA[
+        <b>0.6.0</b>
+        <ul>
+            <li><b>실행(Run) 세션에도 "로그 뷰어" 탭</b> — 디버그뿐 아니라 일반 실행(Shift+F10)에도 실행
+                툴윈도우에 로그 뷰어 탭이 자동으로 생깁니다. 필터/하이라이트/에러 요약/vim을 실행 콘솔
+                출력에 그대로 사용. 설정 없음.</li>
+            <li><b>인코딩 자동 감지</b> — UTF-8로 열었는데 바이트가 유효하지 않으면 CP949로 자동 재읽기
+                (검증 실패 시 UTF-8 복귀). 결과는 소스별로 기억되고 상태바에 표시됩니다.</li>
+            <li><b>검색 문맥(grep -C)</b> — 필터 바의 "문맥" 토글로 매치 주변 ±3/±10줄을 함께 표시합니다.</li>
+            <li><b>수정</b> — 개행 없이 끝난(크래시로 잘린) 로컬 파일의 마지막 줄이 표시되지 않던 문제:
+                파일이 잠시 조용하면 그 줄을 표시합니다.</li>
+        </ul>
+
         <b>0.5.1</b>
         <ul>
             <li><b>긴급 수정</b> — 디버그 세션에서 프로세스 출력이 빠르면 IDE 전체가 멈추던 EDT 교착을
@@ -121,11 +133,13 @@
         <toolWindow id="로그 뷰어" anchor="bottom" factoryClass="com.example.logview.LogToolWindowFactory"/>
     </extensions>
 
-    <!-- Debug tool window integration: every debug session gets a "로그 뷰어" tab next to the Console,
-         fed by the SAME process output pipe (see debug/DebugLogTabListener). -->
+    <!-- Debug/Run tool window integration: every debug AND run session gets a "로그 뷰어" tab next to
+         the Console, fed by the session's console output (see debug/ProcessLogTab). -->
     <projectListeners>
         <listener class="com.example.logview.debug.DebugLogTabListener"
                   topic="com.intellij.xdebugger.XDebuggerManagerListener"/>
+        <listener class="com.example.logview.debug.RunLogTabListener"
+                  topic="com.intellij.execution.ExecutionListener"/>
     </projectListeners>
 
     <actions>
