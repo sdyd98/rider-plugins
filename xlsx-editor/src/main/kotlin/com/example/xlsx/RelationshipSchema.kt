@@ -35,23 +35,44 @@ data class SchemaTable(
     val headerRow: Int = 1,      // 1-based row holding field codes
     val dataStartRow: Int = 4,   // 1-based first data row
     val displayCol: String? = "Name",
+    /** Table-level row filter (`"rowFilter"` in refs.json — same clause syntax as a ref's `when`):
+     *  rows failing ANY clause are dropped at load, so they are neither indexed as records nor
+     *  evaluated for refs (e.g. `{"Unused": ["", "0"]}` keeps only active rows). Null = keep all. */
+    val rowFilter: List<WhenClause>? = null,
 )
+
+/**
+ * One condition clause of a `when` / `rowFilter`: the row's [col] value must be in [values]
+ * ([negated] = false) or must NOT be ([negated] = true — the `{"notIn": [...]}` form). A cell that is
+ * empty or entirely absent from the row map reads as "" — so `""` in [values] matches blank and
+ * missing cells alike (rows sparse-store only non-empty cells).
+ */
+data class WhenClause(val col: String, val values: Set<String>, val negated: Boolean = false) {
+    fun matches(row: Map<String, String>): Boolean = ((row[col] ?: "").trim() in values) != negated
+}
 
 data class SchemaRef(
     val fromCols: List<String>,
-    val toTable: String,
+    /** Target table(s). Usually one; SEVERAL model a logical table split across workbooks (e.g.
+     *  Npc.xls#Basic + Npc2.xls#Basic loaded as one) — a token resolves against the UNION, landing on
+     *  the first listed table that contains it (`"to": ["Npc", "Npc2"]` in refs.json). */
+    val toTables: List<String>,
     val byCols: List<String>,
     val split: String? = null,
     val pattern: String? = null,
-    /** Conditional (polymorphic) ref: the ref applies to a row only when EVERY entry matches — column →
-     *  accepted values (OR within a column, AND across columns). E.g. `"when": {"ParamType": ["3", "4"]}`
-     *  makes `Param` reference this ref's target only on rows whose ParamType is 3 or 4; a sibling ref on
-     *  the same column with a different `when` can target another table. Null = unconditional. */
-    val whenCond: Map<String, List<String>>? = null,
+    /** Conditional (polymorphic) ref: the ref applies to a row only when EVERY clause matches
+     *  (values OR-ed within a clause, clauses AND-ed). E.g. `"when": {"ParamType": ["3", "4"]}` makes
+     *  `Param` reference this ref's target only on rows whose ParamType is 3 or 4; a sibling ref on
+     *  the same column with a different `when` can target another table. `{"notIn": [...]}` negates a
+     *  clause. Null = unconditional. */
+    val whenCond: List<WhenClause>? = null,
 ) {
+    /** The primary target — labels, group refs, and the common single-target case. */
+    val toTable: String get() = toTables.first()
+
     /** Does this ref apply to the row with the given (field code → rendered value) map? */
     fun appliesTo(values: Map<String, String>): Boolean =
-        whenCond == null || whenCond.all { (col, accepted) -> values[col]?.trim() in accepted }
+        whenCond == null || whenCond.all { it.matches(values) }
 }
 
 /**
@@ -64,9 +85,16 @@ data class SchemaRef(
  * counted in [RefSchema.refsToUnfilled]) — otherwise every skeleton would be parsed with the default 1/4
  * layout and flood the index/validation with garbage while the schema is still being authored.
  */
-fun loadRefSchema(baseDir: File): RefSchema? {
+fun loadRefSchema(baseDir: File): RefSchema? = loadRefSchemaResult(baseDir).getOrNull()
+
+/**
+ * [loadRefSchema] with the failure PRESERVED: a refs.json that stops parsing (usually a hand edit —
+ * tool writes are shape-validated) must report WHY, not collapse into a generic "no valid refs.json".
+ * The MCP tools surface `exceptionOrNull()?.message`; the viewer keeps using the nullable wrapper.
+ */
+fun loadRefSchemaResult(baseDir: File): Result<RefSchema> {
     val file = File(baseDir, "refs.json")
-    if (!file.isFile) return null
+    if (!file.isFile) return Result.failure(java.io.FileNotFoundException("no refs.json in ${baseDir.path}"))
     return runCatching {
         val root = JsonParser.parseString(file.readText()).asJsonObject
         val tablesObj = root.getAsJsonObject("tables")
@@ -81,18 +109,19 @@ fun loadRefSchema(baseDir: File): RefSchema? {
             val refs = t.getAsJsonArray("refs")?.mapNotNull { r ->
                 val ro = r.asJsonObject
                 fun roOpt(name: String) = ro.get(name)?.takeIf { !it.isJsonNull }
-                val to = ro.get("to").asString
-                if (to in unfilled) { refsToUnfilled++; return@mapNotNull null }
+                // "to": "Npc" or ["Npc", "Npc2"] (a union of tables loaded as one logical table).
+                // Unfilled targets are dropped from the union; a ref with NO filled target is dropped whole.
+                val toEl = ro.get("to")
+                val toAll = if (toEl.isJsonArray) toEl.asJsonArray.map { it.asString } else listOf(toEl.asString)
+                val to = toAll.filter { it !in unfilled }
+                if (to.isEmpty()) { refsToUnfilled++; return@mapNotNull null }
                 SchemaRef(
                     fromCols = ro.getAsJsonArray("from").map { it.asString },
-                    toTable = to,
-                    byCols = roOpt("by")?.asJsonArray?.map { it.asString } ?: idColsOf[to] ?: listOf("Id"),
+                    toTables = to,
+                    byCols = roOpt("by")?.asJsonArray?.map { it.asString } ?: idColsOf[to.first()] ?: listOf("Id"),
                     split = roOpt("split")?.asString,
                     pattern = roOpt("pattern")?.asString,
-                    // "when": {"Col": "v"} or {"Col": ["v1", "v2"]} — a scalar is a single accepted value.
-                    whenCond = roOpt("when")?.asJsonObject?.entrySet()?.associate { (c, v) ->
-                        c to (if (v.isJsonArray) v.asJsonArray.map { it.asString } else listOf(v.asString))
-                    },
+                    whenCond = roOpt("when")?.asJsonObject?.let { parseWhenClauses(it) },
                 )
             }.orEmpty()
             SchemaTable(
@@ -104,12 +133,32 @@ fun loadRefSchema(baseDir: File): RefSchema? {
                 headerRow = opt("headerRow")?.asInt ?: 1,
                 dataStartRow = opt("dataStartRow")?.asInt ?: 4,
                 displayCol = opt("display")?.asString,
+                rowFilter = opt("rowFilter")?.asJsonObject?.let { parseWhenClauses(it) },
             )
         }
         val nullValues = root.getAsJsonArray("nullValues")?.map { it.asString }?.toSet() ?: setOf("0")
         RefSchema(baseDir, tables, nullValues, unfilled.sorted(), refsToUnfilled)
-    }.getOrNull()
+    }
 }
+
+/**
+ * Parse a `when` / `rowFilter` object into clauses. Accepted value forms per column:
+ * `"v"` / `["v1", "v2"]` (value must be IN the set), or `{"in": ...}` / `{"notIn": ...}` with the
+ * same scalar/array payload (`notIn` negates). Empty string `""` matches blank AND absent cells.
+ * Internal (not private): check_ref reuses the exact same syntax with column-LETTER keys.
+ */
+internal fun parseWhenClauses(obj: com.google.gson.JsonObject): List<WhenClause> =
+    obj.entrySet().map { (col, v) ->
+        fun valuesOf(el: com.google.gson.JsonElement): Set<String> =
+            if (el.isJsonArray) el.asJsonArray.map { it.asString }.toSet() else setOf(el.asString)
+        if (v.isJsonObject) {
+            val o = v.asJsonObject
+            o.get("notIn")?.let { WhenClause(col, valuesOf(it), negated = true) }
+                ?: WhenClause(col, valuesOf(o.get("in")))
+        } else {
+            WhenClause(col, valuesOf(v))
+        }
+    }
 
 // ---- Builders: schema (+ data) -> the view models used by RefGraphView / DataGraphView ----
 
@@ -123,14 +172,17 @@ fun buildRefGraph(schema: RefSchema): RefGraph {
         st.refs.forEach { r ->
             r.fromCols.forEach { fc ->
                 val embedded = r.split != null || r.pattern != null
-                val key = if (r.whenCond == null) fc else "$fc→${r.toTable}"
-                cols[key] = RefColumn(
-                    fc,
-                    isId = cols[fc]?.isId == true,
-                    refTo = r.toTable,
-                    embedded = embedded,
-                    conditional = r.whenCond != null,
-                )
+                // Union refs draw one edge per target table (same column, keyed "col→target").
+                r.toTables.forEach { to ->
+                    val key = if (r.whenCond == null && r.toTables.size == 1) fc else "$fc→$to"
+                    cols[key] = RefColumn(
+                        fc,
+                        isId = cols[fc]?.isId == true,
+                        refTo = to,
+                        embedded = embedded,
+                        conditional = r.whenCond != null,
+                    )
+                }
             }
         }
         RefTable(st.tableId, st.tableId, cols.values.toList(), Offset.Zero)
@@ -138,13 +190,22 @@ fun buildRefGraph(schema: RefSchema): RefGraph {
     return RefGraph(tables)
 }
 
-internal fun parseTokens(raw: String, r: SchemaRef): List<String> {
+internal fun parseTokens(raw: String, r: SchemaRef): List<String> = parseTokensCounted(raw, r).first
+
+/** [parseTokens] plus how many non-empty parts the `pattern` regex failed to extract from —
+ *  silently-dropped parts are exactly what validate_refs' stats must surface. */
+internal fun parseTokensCounted(raw: String, r: SchemaRef): Pair<List<String>, Int> {
     var parts = if (r.split != null) raw.split(r.split).map { it.trim() } else listOf(raw.trim())
+    var misses = 0
     if (r.pattern != null) {
         val rx = Regex(r.pattern)
-        parts = parts.flatMap { p -> rx.find(p)?.groupValues?.drop(1) ?: emptyList() }
+        parts = parts.flatMap { p ->
+            val groups = rx.find(p)?.groupValues?.drop(1)
+            if (groups == null && p.isNotEmpty()) misses++
+            groups ?: emptyList()
+        }
     }
-    return parts.filter { it.isNotEmpty() }
+    return parts.filter { it.isNotEmpty() } to misses
 }
 
 /**
@@ -165,12 +226,22 @@ class IndexRecordGraph(private val schema: RefSchema, private val index: GameInd
         synchronized(loaded) { loaded.getOrPut(tableId) { GameDataLoader.loadTable(schema, tableId) } }
 
     private fun isGroupRef(ref: SchemaRef): Boolean {
+        if (ref.toTables.size > 1) return false // union refs resolve as single records, never groups
         val target = schema.table(ref.toTable) ?: return false
         return ref.byCols.size < target.idCols.size
     }
-    private fun single(toTable: String, token: String): RefRecord {
-        val key = "$toTable|$token"
-        return RefRecord(toTable, token, index.idName[key].orEmpty(), broken = key !in index.idName)
+    /** Resolve [token] against a (usually 1-element) target union: the first table containing it wins;
+     *  in none → a broken record labeled with the primary target. For a UNION the group index is
+     *  consulted too, matching how buildIndex resolves union backrefs (a composite-id union member's
+     *  group key must not read as broken here while the reverse index resolved it). */
+    private fun single(toTables: List<String>, token: String): RefRecord {
+        for (t in toTables) {
+            index.idName["$t|$token"]?.let { return RefRecord(t, token, it) }
+            if (toTables.size > 1) {
+                index.groupMembers["$t|$token"]?.let { return RefRecord(t, token, "", isGroup = true, members = it) }
+            }
+        }
+        return RefRecord(toTables.first(), token, "", broken = true)
     }
     private fun groupRec(toTable: String, token: String): RefRecord {
         val members = index.groupMembers["$toTable|$token"]
@@ -191,7 +262,7 @@ class IndexRecordGraph(private val schema: RefSchema, private val index: GameInd
             val grp = isGroupRef(ref)
             parseTokens(row.values[ref.fromCols.first()].orEmpty(), ref).forEach { tok ->
                 if (tok.isNotEmpty() && tok !in schema.nullValues) {
-                    val to = if (grp) groupRec(ref.toTable, tok) else single(ref.toTable, tok)
+                    val to = if (grp) groupRec(ref.toTable, tok) else single(ref.toTables, tok)
                     links.add(RefLink(r, ref.fromCols.first(), to, embedded, broken = to.broken))
                 }
             }

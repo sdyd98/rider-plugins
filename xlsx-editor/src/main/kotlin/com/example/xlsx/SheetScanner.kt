@@ -3,6 +3,7 @@ package com.example.xlsx
 import org.apache.poi.openxml4j.opc.OPCPackage
 import org.apache.poi.openxml4j.opc.PackageAccess
 import org.apache.poi.ss.usermodel.DataFormatter
+import org.apache.poi.ss.usermodel.Workbook
 import org.apache.poi.ss.usermodel.WorkbookFactory
 import org.apache.poi.ss.util.CellReference
 import org.apache.poi.util.XMLHelper
@@ -36,15 +37,21 @@ object SheetScanner {
             .sortedBy { it.invariantSeparatorsPath }
             .toList()
 
+    /** [listSheets]' result: every readable sheet, plus the files POI could NOT read with the actual
+     *  parser error — a swallowed error made an unreadable workbook look like it had no sheets. */
+    class SheetListing(val sheets: List<Pair<String, String>>, val errors: List<Pair<String, String>>)
+
     /** (root-relative file, sheet name) for every sheet under [baseDir] — reads only sheet NAMES,
-     *  never row data (sheet bodies are not decompressed for .xlsx). */
-    fun listSheets(baseDir: File): List<Pair<String, String>> = withPoiClassLoader {
+     *  never row data (sheet bodies are not decompressed for .xlsx). Unreadable files land in
+     *  [SheetListing.errors] instead of silently vanishing. */
+    fun listSheets(baseDir: File): SheetListing = withPoiClassLoader {
         val out = ArrayList<Pair<String, String>>()
+        val errors = ArrayList<Pair<String, String>>()
         spreadsheetFilesUnder(baseDir).forEach { file ->
             val rel = file.relativeTo(baseDir).invariantSeparatorsPath
             runCatching {
                 if (file.name.endsWith(".xls", true)) {
-                    WorkbookFactory.create(file, null, true).use { wb ->
+                    openXlsWorkbook(file).use { wb ->
                         for (i in 0 until wb.numberOfSheets) out.add(rel to wb.getSheetName(i))
                     }
                 } else {
@@ -56,9 +63,9 @@ object SheetScanner {
                         }
                     }
                 }
-            }
+            }.onFailure { e -> errors.add(rel to (e.message ?: e.javaClass.simpleName)) }
         }
-        out
+        SheetListing(out, errors)
     }
 
     /** The first [limit] non-empty rows at/after 1-based [startRow], VERBATIM: (1-based row number →
@@ -91,29 +98,51 @@ object SheetScanner {
         /** True when the FROM column had more than [MAX_DISTINCT] distinct cell values — the numbers
          *  then cover only the first 5000 and the caller must not read them as a full check. */
         val fromTruncated: Boolean,
+        /** With a [WhenClause] condition: rows that passed / failed it (-1 = no condition given). */
+        val rowsEvaluated: Int = -1,
+        val rowsSkipped: Int = -1,
     )
 
     /** Value-overlap NUMBERS between a hypothesized reference column and a target column — pure set
      *  arithmetic on coordinates the AI supplies; no thresholds, no proposal. [split] (optional) splits
-     *  multi-value cells; [ignore] holds the AI-declared no-reference placeholders to drop. */
+     *  multi-value cells; [ignore] holds the AI-declared no-reference placeholders to drop.
+     *  [fromWhere] (optional) restricts the FROM side to rows matching clauses keyed by column LETTER
+     *  (same semantics as a ref's `when` — "" matches empty/absent cells) so a conditional/polymorphic
+     *  hypothesis can be checked per branch BEFORE it is written. */
     fun overlap(
         baseDir: File,
         fromFile: String, fromSheet: String, fromColumn: String, fromStartRow: Int, split: String?,
         toFile: String, toSheet: String, toColumn: String, toStartRow: Int,
         ignore: Set<String>,
+        fromWhere: List<WhenClause>? = null,
     ): Overlap? {
         val toCol = colIndexOf(toColumn) ?: return null
         val fromCol = colIndexOf(fromColumn) ?: return null
         val target = ColumnCollector(toCol, toStartRow - 1, MAX_ID_SET)
         if (!parseOneSheet(baseDir, toFile, toSheet, target)) return null
-        val source = ColumnCollector(fromCol, fromStartRow - 1, MAX_DISTINCT)
+        val source = if (fromWhere.isNullOrEmpty()) {
+            ColumnCollector(fromCol, fromStartRow - 1, MAX_DISTINCT)
+        } else {
+            ConditionalColumnCollector(fromCol, fromStartRow - 1, MAX_DISTINCT, fromWhere)
+        }
         if (!parseOneSheet(baseDir, fromFile, fromSheet, source)) return null
-        val tokens = source.distinct
+        val (distinct, truncated) = when (source) {
+            is ColumnCollector -> source.distinct to source.truncated
+            is ConditionalColumnCollector -> source.distinct to source.truncated
+            else -> return null
+        }
+        val tokens = distinct
             .flatMap { v -> if (split.isNullOrEmpty()) listOf(v) else v.split(split).map(String::trim) }
             .filter { it.isNotEmpty() && it !in ignore }
             .toSet()
         val missing = tokens.filter { it !in target.distinct }
-        return Overlap(tokens.size, tokens.size - missing.size, missing.take(10), target.distinct.size, target.truncated, source.truncated)
+        val cond = source as? ConditionalColumnCollector
+        return Overlap(
+            tokens.size, tokens.size - missing.size, missing.take(10), target.distinct.size,
+            target.truncated, truncated,
+            rowsEvaluated = cond?.rowsEvaluated ?: -1,
+            rowsSkipped = cond?.rowsSkipped ?: -1,
+        )
     }
 
     /** The trimmed non-empty cells of EXACTLY 1-based [row] (column letter → value). Empty map when
@@ -137,13 +166,15 @@ object SheetScanner {
         return c - 1
     }
 
-    /** Stream ONE sheet of [relFile] into [handler]; false when the file/sheet is missing/unreadable. */
+    /** Stream ONE sheet of [relFile] into [handler]. False = the file exists but has no such sheet;
+     *  a missing or UNREADABLE file throws [SheetScanException] with the actual parser error (a
+     *  swallowed error used to surface as a misleading "no such sheet"). */
     private fun parseOneSheet(baseDir: File, relFile: String, sheet: String, handler: XSSFSheetXMLHandler.SheetContentsHandler): Boolean = withPoiClassLoader {
         val file = File(baseDir, relFile)
-        if (!file.isFile) return@withPoiClassLoader false
-        runCatching {
+        if (!file.isFile) throw SheetScanException("no such file: $relFile")
+        try {
             if (file.name.endsWith(".xls", true)) {
-                WorkbookFactory.create(file, null, true).use { wb ->
+                openXlsWorkbook(file).use { wb ->
                     val idx = (0 until wb.numberOfSheets).firstOrNull { wb.getSheetName(it) == sheet } ?: return@use false
                     runCatching { feedXlsSheet(wb.getSheetAt(idx), DataFormatter(), handler) }
                         .exceptionOrNull()?.let { if (it !is StopParsing) throw it } // StopParsing = collector done
@@ -171,9 +202,36 @@ object SheetScanner {
                     found
                 }
             }
-        }.getOrDefault(false)
+        } catch (e: SheetScanException) {
+            throw e
+        } catch (e: Exception) {
+            throw SheetScanException("failed to read $relFile: ${e.message ?: ""} (${e.javaClass.simpleName})", e)
+        }
     }
 }
+
+/** A workbook the scanner could not read — carries the ACTUAL parser error to the MCP response. */
+class SheetScanException(message: String, cause: Throwable? = null) : RuntimeException(message, cause)
+
+/**
+ * Open a legacy `.xls`, falling back from POI's random-access read-only open to a full in-memory
+ * stream read — some BIFF files that fail the file-backed open parse fine from a stream. Throws
+ * [SheetScanException] with BOTH errors when neither path works.
+ */
+internal fun openXlsWorkbook(file: File): Workbook =
+    try {
+        WorkbookFactory.create(file, null, true)
+    } catch (first: Exception) {
+        try {
+            file.inputStream().buffered().use { WorkbookFactory.create(it) }
+        } catch (second: Exception) {
+            throw SheetScanException(
+                "POI cannot read ${file.name}: ${first.message ?: first.javaClass.simpleName} " +
+                    "(stream fallback also failed: ${second.message ?: second.javaClass.simpleName})",
+                second,
+            )
+        }
+    }
 
 /** Aborts a streaming parse once a collector has what it needs. */
 private class StopParsing : RuntimeException()
@@ -223,6 +281,61 @@ private class RowWindowCollector(private val fromIdx: Int, private val limit: In
         if (rowNum >= fromIdx && cur.isNotEmpty()) {
             rows.add(rowNum to cur)
             if (rows.size >= limit) throw StopParsing()
+        }
+    }
+
+    override fun headerFooter(text: String?, isHeader: Boolean, tagName: String?) {}
+}
+
+/**
+ * [ColumnCollector] restricted to rows matching [clauses] (columns keyed by LETTER — check_ref's
+ * coordinate system). Rows are assembled cell-by-cell so a missing/blank condition cell reads as ""
+ * — identical semantics to a ref's `when` at index time. Rows with no cells at all count in neither
+ * evaluated nor skipped.
+ */
+private class ConditionalColumnCollector(
+    private val colIdx: Int,
+    private val fromIdx: Int,
+    private val maxDistinct: Int,
+    private val clauses: List<WhenClause>,
+) : XSSFSheetXMLHandler.SheetContentsHandler {
+    val distinct = LinkedHashSet<String>()
+    var truncated = false
+    var rowsEvaluated = 0
+    var rowsSkipped = 0
+    private val condCols: Map<Int, String> =
+        clauses.mapNotNull { c -> SheetScanner.colIndexOf(c.col)?.let { it to c.col } }.toMap()
+    private var rowNum = -1
+    private var sawAny = false
+    private var fromValue = ""
+    private val condValues = HashMap<String, String>()
+
+    override fun startRow(rowNum: Int) {
+        this.rowNum = rowNum
+        sawAny = false
+        fromValue = ""
+        condValues.clear()
+    }
+
+    override fun cell(cellReference: String?, formattedValue: String?, comment: XSSFComment?) {
+        if (rowNum < fromIdx) return
+        val col = SheetScanner.colIndexOf((cellReference ?: return).takeWhile { it.isLetter() }) ?: return
+        val v = formattedValue?.trim().orEmpty()
+        if (v.isEmpty()) return
+        sawAny = true
+        if (col == colIdx) fromValue = v
+        condCols[col]?.let { condValues[it] = v }
+    }
+
+    override fun endRow(rowNum: Int) {
+        if (rowNum < fromIdx || !sawAny) return
+        if (clauses.all { it.matches(condValues) }) {
+            rowsEvaluated++
+            if (fromValue.isNotEmpty()) {
+                if (distinct.size < maxDistinct) distinct.add(fromValue) else if (fromValue !in distinct) truncated = true
+            }
+        } else {
+            rowsSkipped++
         }
     }
 

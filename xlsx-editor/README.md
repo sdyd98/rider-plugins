@@ -202,13 +202,21 @@ record, or **`Ctrl+F`** to centre the table-level ER map on the current sheet's 
 (`RelationshipBus` → tool window); click a graph node to open its workbook and select the
 row (`RelationshipNavigation` → `XlsxFileEditor.revealSheetRow`).
 
-**`refs.json`** describes each table (`file`, `sheet`, `headerRow`, `dataStartRow`, `id`, `display`)
-and its `refs` (a `from` column → a `to` table, with `by` / `split` for grouped or delimited
-multi-value refs, and `when` for **conditional/polymorphic** refs — e.g.
+**`refs.json`** describes each table (`file`, `sheet`, `headerRow`, `dataStartRow`, `id`, `display`,
+and optionally a `rowFilter`) and its `refs` (a `from` column → a `to` table, with `by` / `split` for
+grouped or delimited multi-value refs, and `when` for **conditional/polymorphic** refs — e.g.
 `{"from": ["Param"], "to": "Item", "when": {"ParamType": ["3", "4"]}}` applies only to rows whose
 `ParamType` is 3 or 4; sibling refs on the same column with different `when` values target other
-tables; the ER map badges such refs `if`). A top-level `"nullValues": ["0", "-1"]` lists the
-placeholder values that mean "no reference" (default `["0"]`) so they are never counted as broken. The graph reads workbooks with streaming POI and a compact index cached on disk
+tables; the ER map badges such refs `if`). Condition clauses accept a scalar, an array, or
+`{"in"/"notIn": …}`; the empty string `""` matches **empty and absent cells alike** (rows store only
+non-empty cells). A table-level `"rowFilter"` uses the same clause syntax and **drops** non-matching
+rows entirely — they are neither indexed as records nor evaluated for refs (e.g.
+`{"Unused": ["", "0"]}` keeps only active rows). A `to` may also be an **array** —
+`"to": ["Npc", "Npc2"]` — for one logical table split across workbooks: a token resolves against the
+union (first listed table containing it wins; missing from all = one broken ref against the union).
+A top-level `"nullValues": ["0", "-1"]` lists the placeholder values that mean "no reference"
+(default `["0"]`) so they are never counted as broken. The graph reads workbooks with streaming POI
+and a compact index cached on disk
 (`.idx`, keyed by file mtime/size + `refs.json`), so reopening is fast and nothing is held in memory
 whole. See `samples/gamedata/refs.json` for a worked example.
 
@@ -230,13 +238,20 @@ The tools are deliberately **judgment-free** — they enumerate, extract, comput
   is guessed — ever. Skeletons are inert until filled: entries without an `id` (and refs pointing at
   them) are **excluded from the graph, the index, and validation**, so a half-authored schema never
   draws or validates default-layout guesses.
-- **The AI fills every entry.** `sample_rows` shows a sheet's raw top rows verbatim (1-based row
+- **The AI fills every entry.** `list_tables` pages huge roots (`limit`/`offset` + include/exclude
+  globs on the relative path; `sheetsTotal` always reports the full filtered count) and lists files
+  POI could not read in `unreadableFiles` with the ACTUAL parser error (`.xls` opens fall back from
+  the random-access read-only path to a full stream read before giving up). `sample_rows` shows a
+  sheet's raw top rows verbatim (1-based row
   numbers, column letters, no header/data assumption) so the AI decides `headerRow` / `dataStartRow` /
   `id` / `display` itself; `column_values` extracts one column's distinct values + counts for the
   id/enum/reference judgment. The refs are designed from the **game source** — how the loading code
   uses each field (polymorphic columns become conditional `when` refs).
 - **`check_ref` verifies each hypothesis with numbers, not opinions** — pure set arithmetic: how many
-  distinct from-column tokens exist among the target column's values, plus missing samples. Honest
+  distinct from-column tokens exist among the target column's values, plus missing samples. A
+  conditional/polymorphic hypothesis is checked per branch with `where` (clauses keyed by column
+  LETTER, same syntax as a ref's `when` including `""` for empty cells and `notIn`); the response
+  reports `rowsEvaluated`/`rowsSkipped` and warns when the condition matched no rows. Honest
   about its caps: past 5,000 distinct from-values / 500k target ids it flags `fromTruncated` /
   `toTruncated` so a partial check is never mistaken for a full one. The AI supplies all coordinates
   (column letters, data start rows, `split`, null placeholders) and judges the result.
@@ -250,10 +265,19 @@ The tools are deliberately **judgment-free** — they enumerate, extract, comput
   `when` columns — and `by` against the target's header) must actually appear in the declared
   `headerRow` of the declared sheet (catching column letters or typos that would silently blank the
   table or its display names), and replacing an already-FILLED entry requires `overwrite=true`.
+  Explicit `display: null` markers on untouched entries are preserved byte-for-byte across writes
+  (the serializer keeps JSON nulls), so "decided: no display" never silently reverts to "undecided".
   Each ref is marked `_source: "code"`
   or `"data"` (the viewer ignores `_`-prefixed keys), and the loop closes with `validate_refs` —
   scopable to a comma-separated table list with paged examples, so on a large schema the AI validates
-  the area it just filled instead of everything. Reading the result is also the AI's job: breaks
+  the area it just filled instead of everything. Its `warnings` are always on — a relation whose
+  `when`/`rowFilter` excluded EVERY row, a `pattern` that extracted nothing, or a **schema workbook
+  that could not be indexed at all** (missing/unreadable file — its tables validated against nothing)
+  says so instead of reading as "0 broken = success" — and `stats=true` adds per-relation numbers
+  (rows, evaluatedRows, skippedByWhen, tokens, placeholderTokens, patternMisses, brokenRefs). A
+  refs.json that stops PARSING (a hand edit — tool writes are shape-validated) reports the actual
+  parse error, not a generic "no valid refs.json".
+  Reading the result is also the AI's job: breaks
   concentrated in one table point at a wrong layout/id judgment, spread-out breaks at a wrong target
   or missing `when`.
 - **Large schemas span sessions**, so `list_unfilled_tables` is the mechanical progress query: which

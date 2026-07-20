@@ -48,6 +48,36 @@ class RefsWriteValidationTest {
     }
 
     @Test
+    fun `union to, in-notIn when clauses, and rowFilter validate by shape`() {
+        val base = """"file": "a.xlsx", "sheet": "S", "id": ["Id"]"""
+        fun ref(body: String) = entry("""{$base, "refs": [{"from": ["X"], $body}]}""")
+
+        // union "to": non-empty array of table-id strings
+        assertNull(RefsWriteValidation.shape(ref(""""to": ["Npc", "Npc2"]""")))
+        assertTrue(RefsWriteValidation.shape(ref(""""to": []"""))!!.contains("to"))
+        assertTrue(RefsWriteValidation.shape(ref(""""to": [1, 2]"""))!!.contains("to"))
+        // "by" needs a single target — rejected with a multi-target union
+        assertTrue(RefsWriteValidation.shape(ref(""""to": ["A", "B"], "by": ["GroupId"]"""))!!.contains("by"))
+        assertNull(RefsWriteValidation.shape(ref(""""to": ["A"], "by": ["GroupId"]""")))
+
+        // when clause forms: scalar / array / {"in"/"notIn": ...}; anything else is named in the error
+        assertNull(RefsWriteValidation.shape(ref(""""to": "T", "when": {"Unused": ["", "0"]}""")))
+        assertNull(RefsWriteValidation.shape(ref(""""to": "T", "when": {"Type": {"notIn": ["9"]}}""")))
+        assertNull(RefsWriteValidation.shape(ref(""""to": "T", "when": {"Type": {"in": "3"}}""")))
+        assertTrue(RefsWriteValidation.shape(ref(""""to": "T", "when": {"Type": {"between": [1, 9]}}"""))!!.contains("Type"))
+
+        // table-level rowFilter: same clause syntax
+        assertNull(RefsWriteValidation.shape(entry("""{$base, "rowFilter": {"Unused": ["", "0"]}}""")))
+        assertNull(RefsWriteValidation.shape(entry("""{$base, "rowFilter": {"Grade": {"notIn": "99"}}}""")))
+        assertTrue(RefsWriteValidation.shape(entry("""{$base, "rowFilter": ["Unused"]}"""))!!.contains("rowFilter"))
+
+        // refTargets sees every union member; rowFilter columns join the own-sheet field-code check
+        val e = entry("""{$base, "rowFilter": {"Unused": ""}, "refs": [{"from": ["X"], "to": ["Npc", "Npc2"]}]}""")
+        assertEquals(listOf("Npc", "Npc2"), RefsWriteValidation.refTargets(e))
+        assertTrue(RefsWriteValidation.ownSheetCodes(e).containsAll(listOf("Id", "X", "Unused")))
+    }
+
+    @Test
     fun `underscore-prefixed AI metadata is never validated`() {
         assertNull(
             RefsWriteValidation.shape(
@@ -125,8 +155,13 @@ class RefsWriteValidationTest {
 
         // A row with no values (wrong headerRow judgment) is an EMPTY map, not the next row's values.
         assertEquals(emptyMap<String, String>(), SheetScanner.rowValues(dir, "core.xlsx", "Item", 3))
-        // Missing sheet/file → null (distinguishable from "empty header row").
+        // Missing SHEET → null (distinguishable from "empty header row").
         assertNull(SheetScanner.rowValues(dir, "core.xlsx", "Nope", 2))
-        assertNull(SheetScanner.rowValues(dir, "missing.xlsx", "Item", 2))
+        // Missing/unreadable FILE → SheetScanException carrying the real reason (was a silent null
+        // that the tools rendered as a misleading "no such sheet").
+        val e = org.junit.jupiter.api.assertThrows<SheetScanException> {
+            SheetScanner.rowValues(dir, "missing.xlsx", "Item", 2)
+        }
+        assertTrue(e.message!!.contains("missing.xlsx"), e.message)
     }
 }

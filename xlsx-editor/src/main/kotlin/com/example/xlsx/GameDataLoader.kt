@@ -7,7 +7,6 @@ import org.apache.poi.openxml4j.opc.PackageAccess
 import org.apache.poi.ss.usermodel.CellType
 import org.apache.poi.ss.usermodel.DataFormatter
 import org.apache.poi.ss.usermodel.Sheet
-import org.apache.poi.ss.usermodel.WorkbookFactory
 import org.apache.poi.ss.util.CellReference
 import org.apache.poi.util.XMLHelper
 import org.apache.poi.xssf.eventusermodel.ReadOnlySharedStringsTable
@@ -58,7 +57,30 @@ class GameIndex(
     val idName: Map<String, String>,            // "table|id" -> display name
     val groupMembers: Map<String, List<String>>, // "table|groupKey" -> member display strings
     val outDeg: Map<String, Int>,               // "table|id" -> outgoing ref count
+    val refStats: List<RefStat> = emptyList(),  // per-relation evaluation tallies (validate_refs)
+    /** Schema workbooks that could not be indexed (file → reason): a missing or unreadable file's
+     *  tables silently vanish from the graph otherwise — validate_refs surfaces these as warnings. */
+    val loadErrors: List<Pair<String, String>> = emptyList(),
 )
+
+/**
+ * Per-relation tallies from the index pass — validate_refs' visibility into what was actually
+ * evaluated. Without these, a `when`/`rowFilter` that excludes EVERY row reads as "0 broken refs =
+ * success"; with them the caller sees 0 evaluated rows and knows the condition is wrong.
+ */
+class RefStat(
+    val table: String,
+    val column: String,
+    /** Target table id, or the comma-joined union ("Npc,Npc2") for a multi-target ref. */
+    val to: String,
+    var rows: Int = 0,              // source rows seen (non-empty id, AFTER the table's rowFilter)
+    var skippedByWhen: Int = 0,     // rows this ref's when-condition excluded
+    var tokens: Int = 0,            // tokens kept → edges (non-empty, non-placeholder)
+    var placeholderTokens: Int = 0, // tokens dropped as nullValues placeholders
+    var patternMisses: Int = 0,     // non-empty parts the "pattern" regex failed to extract from
+) {
+    val evaluatedRows: Int get() = rows - skippedByWhen
+}
 
 /**
  * Reads the xlsx tables named by a [RefSchema] with POI's **streaming** reader (XSSFReader + SAX) rather
@@ -70,7 +92,7 @@ class GameIndex(
  */
 object GameDataLoader {
     private const val CACHE_MAGIC = 0x52465849 // "RFXI" — on-disk index cache marker
-    private const val CACHE_VERSION = 1
+    private const val CACHE_VERSION = 2 // v2: + refStats (per-relation validate_refs tallies)
     private val LOG = Logger.getInstance(GameDataLoader::class.java)
 
     /** Build the index, or load it from the on-disk cache when the source files are unchanged
@@ -106,6 +128,14 @@ object GameDataLoader {
             out.writeInt(idx.groupMembers.size)
             idx.groupMembers.forEach { (k, m) -> out.writeUTF(k); out.writeInt(m.size); m.forEach { out.writeUTF(it) } }
             out.writeInt(idx.outDeg.size); idx.outDeg.forEach { (k, v) -> out.writeUTF(k); out.writeInt(v) }
+            out.writeInt(idx.refStats.size)
+            idx.refStats.forEach { s ->
+                out.writeUTF(s.table); out.writeUTF(s.column); out.writeUTF(s.to)
+                out.writeInt(s.rows); out.writeInt(s.skippedByWhen); out.writeInt(s.tokens)
+                out.writeInt(s.placeholderTokens); out.writeInt(s.patternMisses)
+            }
+            out.writeInt(idx.loadErrors.size)
+            idx.loadErrors.forEach { (f, m) -> out.writeUTF(f); out.writeUTF(m) }
         }
     }
 
@@ -128,7 +158,19 @@ object GameDataLoader {
                     repeat(n) { m.add(inp.readUTF()) }; groupMembers[k] = m
                 }
                 val outDeg = HashMap<String, Int>(); repeat(inp.readInt()) { outDeg[inp.readUTF()] = inp.readInt() }
-                GameIndex(reverse, idName, groupMembers, outDeg)
+                val refStats = ArrayList<RefStat>()
+                repeat(inp.readInt()) {
+                    refStats.add(
+                        RefStat(
+                            inp.readUTF(), inp.readUTF(), inp.readUTF(),
+                            rows = inp.readInt(), skippedByWhen = inp.readInt(), tokens = inp.readInt(),
+                            placeholderTokens = inp.readInt(), patternMisses = inp.readInt(),
+                        ),
+                    )
+                }
+                val loadErrors = ArrayList<Pair<String, String>>()
+                repeat(inp.readInt()) { loadErrors.add(inp.readUTF() to inp.readUTF()) }
+                GameIndex(reverse, idName, groupMembers, outDeg, refStats, loadErrors)
             }
         }.getOrNull()
     }
@@ -139,14 +181,31 @@ object GameDataLoader {
         val idName = HashMap<String, String>()
         val groupMembers = HashMap<String, MutableList<String>>()
         val outDeg = HashMap<String, Int>()
+        val stats = LinkedHashMap<String, RefStat>()
+        // Union-target backrefs can't be keyed during the pass (target membership is only known once
+        // EVERY table has streamed) — buffer them and resolve after the pass.
+        val unionPending = ArrayList<Triple<List<String>, String, Backref>>()
+        val loadErrors = ArrayList<Pair<String, String>>()
         schema.tables.groupBy { it.file }.forEach { (fileName, sts) ->
             val file = File(schema.baseDir, fileName)
-            if (!file.isFile) return@forEach
+            if (!file.isFile) {
+                loadErrors.add(fileName to "file not found")
+                return@forEach
+            }
             runCatching {
-                forEachSchemaSheet(file, sts) { td -> foldIntoIndex(td, schema.nullValues, reverse, idName, groupMembers, outDeg) }
-            }.onFailure { LOG.warn("relationship index: failed to read $fileName (its tables are omitted from the graph)", it) }
+                forEachSchemaSheet(file, sts) { td -> foldIntoIndex(td, schema.nullValues, reverse, idName, groupMembers, outDeg, stats, unionPending) }
+            }.onFailure {
+                LOG.warn("relationship index: failed to read $fileName (its tables are omitted from the graph)", it)
+                loadErrors.add(fileName to (it.message ?: it.javaClass.simpleName))
+            }
         }
-        GameIndex(reverse, idName, groupMembers, outDeg)
+        // Resolve union backrefs: the first target table containing the token wins; a token in NONE
+        // keys under the joined union label, so validate reports it missing from the whole union.
+        unionPending.forEach { (toTables, tok, br) ->
+            val hit = toTables.firstOrNull { "$it|$tok" in idName || "$it|$tok" in groupMembers }
+            reverse.getOrPut("${hit ?: toTables.joinToString(",")}|$tok") { ArrayList() }.add(br)
+        }
+        GameIndex(reverse, idName, groupMembers, outDeg, stats.values.toList(), loadErrors)
     }
 
     /** Load a single table on demand (needed columns only). Null if the file/sheet is missing. */
@@ -167,7 +226,7 @@ object GameDataLoader {
     private inline fun forEachSchemaSheet(file: File, sts: List<SchemaTable>, body: (TableData) -> Unit) {
         val bySheet = sts.associateBy { it.sheet }
         if (file.name.endsWith(".xls", true)) {
-            WorkbookFactory.create(file, null, true).use { wb ->
+            openXlsWorkbook(file).use { wb -> // shared read-only→stream fallback (see SheetScanner)
                 val fmt = DataFormatter()
                 for (i in 0 until wb.numberOfSheets) {
                     val st = bySheet[wb.getSheetName(i)] ?: continue
@@ -211,9 +270,15 @@ object GameDataLoader {
         idName: HashMap<String, String>,
         groupMembers: HashMap<String, MutableList<String>>,
         outDeg: HashMap<String, Int>,
+        stats: LinkedHashMap<String, RefStat>,
+        unionPending: ArrayList<Triple<List<String>, String, Backref>>,
     ) {
         val st = td.schema
         val skip = st.idCols.firstOrNull()
+        val statOf = st.refs.associateWith { ref ->
+            val toLabel = ref.toTables.joinToString(",")
+            stats.getOrPut("${st.tableId}|${ref.fromCols.first()}|$toLabel") { RefStat(st.tableId, ref.fromCols.first(), toLabel) }
+        }
         td.rows.forEach { row ->
             val recId = if (st.idCols.size == 1) row.values[st.idCols.first()].orEmpty() else row.displayId(st.idCols)
             if (recId.isEmpty()) return@forEach
@@ -227,14 +292,26 @@ object GameDataLoader {
             }
             var deg = 0
             st.refs.forEach { ref ->
-                if (!ref.appliesTo(row.values)) return@forEach // conditional (when) ref inactive on this row
+                val stat = statOf.getValue(ref)
+                stat.rows++
+                if (!ref.appliesTo(row.values)) { // conditional (when) ref inactive on this row
+                    stat.skippedByWhen++
+                    return@forEach
+                }
                 val embedded = ref.split != null || ref.pattern != null
-                parseTokens(row.values[ref.fromCols.first()].orEmpty(), ref).forEach { tok ->
-                    if (tok.isNotEmpty() && tok !in nullValues) {
-                        deg++
-                        reverse.getOrPut("${ref.toTable}|$tok") { ArrayList() }
-                            .add(Backref(st.tableId, recId, name, ref.fromCols.first(), embedded))
+                val (tokens, misses) = parseTokensCounted(row.values[ref.fromCols.first()].orEmpty(), ref)
+                stat.patternMisses += misses
+                tokens.forEach { tok ->
+                    if (tok.isEmpty()) return@forEach
+                    if (tok in nullValues) {
+                        stat.placeholderTokens++
+                        return@forEach
                     }
+                    deg++
+                    stat.tokens++
+                    val br = Backref(st.tableId, recId, name, ref.fromCols.first(), embedded)
+                    if (ref.toTables.size == 1) reverse.getOrPut("${ref.toTable}|$tok") { ArrayList() }.add(br)
+                    else unionPending.add(Triple(ref.toTables, tok, br)) // resolved after the pass
                 }
             }
             if (deg > 0) outDeg[recKey] = deg
@@ -248,9 +325,10 @@ object GameDataLoader {
  */
 private class SheetCollector(private val st: SchemaTable) : XSSFSheetXMLHandler.SheetContentsHandler {
     // null = keep every column (group tables render all member columns); else the id/ref/display set —
-    // including `when` condition columns, which must be present to evaluate conditional refs per row.
+    // including `when`/`rowFilter` condition columns, which must be present to evaluate them per row.
     private val needed: Set<String>? = if (st.idCols.size > 1) null else
-        (st.idCols + st.refs.flatMap { it.fromCols + it.whenCond?.keys.orEmpty() } + listOfNotNull(st.displayCol)).toSet()
+        (st.idCols + st.refs.flatMap { r -> r.fromCols + r.whenCond.orEmpty().map { it.col } } +
+            st.rowFilter.orEmpty().map { it.col } + listOfNotNull(st.displayCol)).toSet()
     private val headerIdx = st.headerRow - 1
     private val firstDataIdx = st.dataStartRow - 1
     private val colNames = HashMap<Int, String>()
@@ -273,7 +351,9 @@ private class SheetCollector(private val st: SchemaTable) : XSSFSheetXMLHandler.
     }
 
     override fun endRow(rowNum: Int) {
-        if (rowNum >= firstDataIdx && cur.isNotEmpty()) rows.add(DataRow(st.tableId, cur))
+        if (rowNum < firstDataIdx || cur.isEmpty()) return
+        if (st.rowFilter?.all { it.matches(cur) } == false) return // table-level rowFilter drops the row
+        rows.add(DataRow(st.tableId, cur))
     }
 
     override fun headerFooter(text: String?, isHeader: Boolean, tagName: String?) {}

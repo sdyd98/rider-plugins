@@ -37,16 +37,46 @@ class RefsMcpToolset : McpToolset {
 
     @McpTool
     @McpDescription(
-        "List every sheet in the .xlsx/.xls workbooks under <dir> (recursing): file + sheet name ONLY. " +
+        "List sheets in the .xlsx/.xls workbooks under <dir> (recursing): file + sheet name ONLY. " +
             "Nothing is interpreted — use sample_rows to look inside a sheet and decide its layout, id, and " +
-            "refs yourself.",
+            "refs yourself. On big roots (thousands of sheets) page with <limit>/<offset> and narrow with " +
+            "<glob>/<exclude> (comma-separated, * and ?, matched against the dir-relative file path — e.g. " +
+            "glob=\"Reward/*\" or exclude=\"*L10N*\"); sheetsTotal always reports the full filtered count. " +
+            "Files POI cannot read are listed in unreadableFiles with the actual parser error.",
     )
-    suspend fun list_tables(@McpDescription("Absolute path to the folder holding the workbooks.") dir: String): String = io {
-        val arr = JsonArray()
-        SheetScanner.listSheets(File(dir)).forEach { (file, sheet) ->
-            arr.add(JsonObject().apply { addProperty("file", file); addProperty("sheet", sheet) })
+    suspend fun list_tables(
+        @McpDescription("Absolute path to the folder holding the workbooks.") dir: String,
+        @McpDescription("Max sheets returned (paging).") limit: Int = 500,
+        @McpDescription("Sheets to skip first (paging).") offset: Int = 0,
+        @McpDescription("Comma-separated include globs on the relative file path; empty = all.") glob: String = "",
+        @McpDescription("Comma-separated exclude globs on the relative file path; applied after <glob>.") exclude: String = "",
+    ): String = io {
+        val listing = SheetScanner.listSheets(File(dir))
+        val inc = globs(glob)
+        val exc = globs(exclude)
+        val filtered = listing.sheets.filter { (f, _) ->
+            (inc.isEmpty() || inc.any { it.matches(f) }) && exc.none { it.matches(f) }
         }
-        gson.toJson(arr)
+        val page = filtered.drop(offset.coerceAtLeast(0)).take(limit.coerceAtLeast(1))
+        gson.toJson(JsonObject().apply {
+            addProperty("sheetsTotal", filtered.size)
+            addProperty("filesTotal", filtered.asSequence().map { it.first }.distinct().count())
+            addProperty("offset", offset.coerceAtLeast(0))
+            addProperty("returned", page.size)
+            if (offset.coerceAtLeast(0) + page.size < filtered.size) addProperty("truncated", true)
+            add("sheets", JsonArray().apply {
+                page.forEach { (file, sheet) ->
+                    add(JsonObject().apply { addProperty("file", file); addProperty("sheet", sheet) })
+                }
+            })
+            if (listing.errors.isNotEmpty()) {
+                add("unreadableFiles", JsonArray().apply {
+                    listing.errors.forEach { (f, m) ->
+                        add(JsonObject().apply { addProperty("file", f); addProperty("error", m) })
+                    }
+                })
+            }
+        })
     }
 
     @McpTool
@@ -116,7 +146,12 @@ class RefsMcpToolset : McpToolset {
             "the numbers mean (low coverage may be a wrong target, a polymorphic column needing " +
             "per-\"when\" checks, or genuinely broken data). All coordinates are yours: column LETTERS " +
             "and 1-based data start rows; <split> for delimited multi-value cells; <ignore> for the " +
-            "game's no-reference placeholders (comma-separated, e.g. \"0,-1\").",
+            "game's no-reference placeholders (comma-separated, e.g. \"0,-1\"). A CONDITIONAL " +
+            "hypothesis is checked per branch with <where>: a JSON object of column-LETTER clauses in " +
+            "the SAME syntax as a ref's \"when\" — e.g. {\"D\": [\"3\", \"4\"]} or " +
+            "{\"E\": {\"notIn\": [\"9\"]}}; \"\" matches empty/absent cells. Only matching rows feed " +
+            "the from-side, and rowsEvaluated/rowsSkipped report what the condition did (0 evaluated = " +
+            "the condition is wrong — fix it BEFORE writing the ref).",
     )
     suspend fun check_ref(
         @McpDescription("Absolute path to the data folder.") dir: String,
@@ -130,12 +165,24 @@ class RefsMcpToolset : McpToolset {
         @McpDescription("Target sheet's first data row (1-based).") toStartRow: Int,
         @McpDescription("Delimiter for multi-value cells (empty = single-value).") split: String = "",
         @McpDescription("Comma-separated values meaning \"no reference\" to drop, e.g. \"0,-1\".") ignore: String = "",
+        @McpDescription("JSON condition on the FROM rows, clauses keyed by column LETTER (\"when\" syntax); empty = all rows.") where: String = "",
     ): String = io {
         val ignoreSet = ignore.split(',').map(String::trim).filter { it.isNotEmpty() }.toSet()
+        val clauses = if (where.isBlank()) null else {
+            val obj = runCatching { JsonParser.parseString(where) }.getOrNull()?.takeIf { it.isJsonObject }?.asJsonObject
+                ?: return@io err("<where> is not a JSON object — pass e.g. {\"D\": [\"3\", \"4\"]} (clauses keyed by column LETTER)")
+            val parsed = runCatching { parseWhenClauses(obj) }.getOrNull()
+                ?: return@io err("<where> clauses must be a value, an array, or {\"in\"/\"notIn\": value(s)} per column letter")
+            parsed.firstOrNull { SheetScanner.colIndexOf(it.col) == null }?.let {
+                return@io err("<where> key \"${it.col}\" is not a column LETTER (check_ref addresses columns by letter, not field code)")
+            }
+            parsed
+        }
         val o = SheetScanner.overlap(
             File(dir),
             fromFile, fromSheet, fromColumn, fromStartRow, split.ifEmpty { null },
             toFile, toSheet, toColumn, toStartRow, ignoreSet,
+            fromWhere = clauses,
         ) ?: return@io err("sheet or column not found — check the file/sheet names and column letters")
         gson.toJson(JsonObject().apply {
             addProperty("fromTokens", o.fromTokens)
@@ -145,6 +192,11 @@ class RefsMcpToolset : McpToolset {
             addProperty("toDistinctIds", o.toIds)
             if (o.toTruncated) addProperty("toTruncated", true)
             if (o.fromTruncated) addProperty("fromTruncated", true) // >5000 distinct from-values: PARTIAL check
+            if (o.rowsEvaluated >= 0) {
+                addProperty("rowsEvaluated", o.rowsEvaluated)
+                addProperty("rowsSkipped", o.rowsSkipped)
+                if (o.rowsEvaluated == 0) addProperty("warning", "<where> matched no rows — the condition is wrong or the column letter is off")
+            }
         })
     }
 
@@ -191,9 +243,15 @@ class RefsMcpToolset : McpToolset {
             "depends on a type column — decided by reading the game code) are one CONDITIONAL ref per " +
             "target: {\"from\": [\"Param\"], \"to\": \"Item\", \"when\": {\"ParamType\": [\"3\", \"4\"]}} — " +
             "the ref applies only to rows where every \"when\" column has one of its accepted values (cell " +
-            "display text; a scalar means one value); write sibling refs on the same column with different " +
-            "\"when\" for the other targets. Grouped refs use \"by\" (array of the TARGET's id field " +
-            "codes, a strict subset of its composite id); delimited multi-value cells use \"split\"; regex " +
+            "display text; a scalar means one value; \"\" matches EMPTY and ABSENT cells; " +
+            "{\"notIn\": [...]} negates a clause); write sibling refs on the same column with different " +
+            "\"when\" for the other targets. A UNION target — one logical table split across workbooks " +
+            "(e.g. Npc.xls + Npc2.xls loaded as one) — is \"to\": [\"Npc\", \"Npc2\"]: a token resolves " +
+            "against the union (first table containing it wins). A table-level \"rowFilter\" (same clause " +
+            "syntax as \"when\", e.g. {\"Unused\": [\"\", \"0\"]}) DROPS non-matching rows entirely — they " +
+            "are neither indexed as records nor evaluated for refs. Grouped refs use \"by\" (array of the " +
+            "TARGET's id field codes, a strict subset of its composite id; single target only — not with " +
+            "a union \"to\"); delimited multi-value cells use \"split\"; regex " +
             "extraction uses \"pattern\". Non-0 \"no reference\" placeholders (-1, None, …) go in the " +
             "top-level list via set_null_values. VALIDATED BEFORE WRITING (nothing is written on error): " +
             "field types (headerRow/dataStartRow numbers, display ONE string or null, id/from/by arrays of " +
@@ -353,32 +411,77 @@ class RefsMcpToolset : McpToolset {
             "normal in game data.) Run after writing refs. Scope with <tables> (comma-separated table ids " +
             "— broken refs whose SOURCE or TARGET table is listed; empty = whole schema) and page the " +
             "examples with <limit>/<offset> — on a large schema validate the area you just filled, " +
-            "not everything. Unfilled skeleton entries (no \"id\" yet) and refs pointing at them are " +
-            "EXCLUDED from validation (counts reported back) — track them with list_unfilled_tables. " +
-            "Reading the result is YOUR job: broken refs concentrated in one table usually mean that " +
-            "entry's headerRow/dataStartRow/id is wrong (re-inspect with sample_rows), spread-out breaks " +
-            "suggest a wrong target or a missing \"when\" condition, and placeholder ids showing up as " +
-            "broken mean nullValues is incomplete (fix with set_null_values).",
+            "not everything. ALWAYS check \"warnings\": a relation whose \"when\"/\"rowFilter\" excluded " +
+            "EVERY row, or whose \"pattern\" extracted nothing, reports 0 broken while validating nothing " +
+            "— the warning is the only signal. Pass stats=true for per-relation numbers (rows, " +
+            "evaluatedRows, skippedByWhen, tokens, placeholderTokens, patternMisses, brokenRefs). " +
+            "Unfilled skeleton entries (no \"id\" yet) and refs pointing at them are EXCLUDED from " +
+            "validation (counts reported back) — track them with list_unfilled_tables. Reading the result " +
+            "is YOUR job: broken refs concentrated in one table usually mean that entry's " +
+            "headerRow/dataStartRow/id is wrong (re-inspect with sample_rows), spread-out breaks suggest " +
+            "a wrong target or a missing \"when\" condition, and placeholder ids showing up as broken " +
+            "mean nullValues is incomplete (fix with set_null_values).",
     )
     suspend fun validate_refs(
         @McpDescription("Absolute path to the data folder.") dir: String,
         @McpDescription("Comma-separated table ids to scope the report to (empty = whole schema).") tables: String = "",
         @McpDescription("Max broken-ref examples returned.") limit: Int = 10,
         @McpDescription("Examples to skip first (paging through a long list).") offset: Int = 0,
+        @McpDescription("Include per-relation evaluation numbers (relationStats).") stats: Boolean = false,
     ): String = io {
-        val schema = loadRefSchema(File(dir)) ?: return@io err("no valid refs.json in $dir")
+        val schemaResult = loadRefSchemaResult(File(dir))
+        val schema = schemaResult.getOrNull()
+            ?: return@io err("refs.json failed to load: ${schemaResult.exceptionOrNull()?.message ?: "unknown parse error"}")
         if (schema.tables.isEmpty())
             return@io err("refs.json has no filled tables yet (${schema.unfilledTables.size} skeletons) — nothing to validate; see list_unfilled_tables")
         val scope = tables.split(',').map(String::trim).filter { it.isNotEmpty() }.toSet()
         val unknown = scope.filter { schema.table(it) == null }
         if (unknown.isNotEmpty())
             return@io err("tables not filled in refs.json (or absent): ${unknown.joinToString(", ")}")
-        val report = IndexRecordGraph(schema, GameDataLoader.loadOrBuildIndex(schema)).validate()
+        val index = GameDataLoader.loadOrBuildIndex(schema)
+        val report = IndexRecordGraph(schema, index).validate()
         val broken = if (scope.isEmpty()) report.broken else report.broken.filter { it.from.table in scope || it.toTable in scope }
+        // Union targets are labeled "A,B" in stats — in scope when ANY member (or the source) is.
+        val statsInScope = index.refStats.filter { s ->
+            scope.isEmpty() || s.table in scope || s.to.split(',').any { it in scope }
+        }
         gson.toJson(JsonObject().apply {
             if (scope.isNotEmpty()) addProperty("scope", scope.joinToString(","))
             addProperty("broken", broken.size)
             add("brokenSample", JsonArray().apply { broken.drop(offset).take(limit).forEach { add("${it.from.table}#${it.from.id}.${it.column} -> ${it.toTable}#${it.missingId} (missing)") } })
+            // A condition that filtered out EVERYTHING looks like success (0 broken) — warn, always.
+            // Same for a schema workbook that could not be indexed: its tables validated NOTHING.
+            add("warnings", JsonArray().apply {
+                index.loadErrors.forEach { (f, m) ->
+                    add("schema workbook not indexed — its tables were validated against NOTHING: $f ($m)")
+                }
+                statsInScope.forEach { s ->
+                    if (s.rows > 0 && s.evaluatedRows == 0) {
+                        add("${s.table}.${s.column} -> ${s.to}: \"when\" excluded every row (0 of ${s.rows} evaluated) — nothing was validated; check the condition values")
+                    } else if (s.evaluatedRows > 0 && s.tokens == 0 && s.patternMisses > 0) {
+                        add("${s.table}.${s.column} -> ${s.to}: \"pattern\" extracted 0 tokens (${s.patternMisses} non-empty cells unmatched) — nothing was validated; check the regex")
+                    }
+                }
+            })
+            if (stats) {
+                val brokenBy = report.broken.groupingBy { Triple(it.from.table, it.column, it.toTable) }.eachCount()
+                add("relationStats", JsonArray().apply {
+                    statsInScope.forEach { s ->
+                        add(JsonObject().apply {
+                            addProperty("table", s.table)
+                            addProperty("column", s.column)
+                            addProperty("to", s.to)
+                            addProperty("rows", s.rows)
+                            addProperty("evaluatedRows", s.evaluatedRows)
+                            addProperty("skippedByWhen", s.skippedByWhen)
+                            addProperty("tokens", s.tokens)
+                            addProperty("placeholderTokens", s.placeholderTokens)
+                            addProperty("patternMisses", s.patternMisses)
+                            addProperty("brokenRefs", brokenBy[Triple(s.table, s.column, s.to)] ?: 0)
+                        })
+                    }
+                })
+            }
             if (schema.unfilledTables.isNotEmpty()) {
                 addProperty("unfilledTablesExcluded", schema.unfilledTables.size)
                 addProperty("refsToUnfilledTargetsExcluded", schema.refsToUnfilled)
@@ -447,8 +550,18 @@ class RefsMcpToolset : McpToolset {
         @McpDescription("Absolute path to the root data folder; its refs.json is written/extended here.") dir: String,
     ): String = io {
         val root = File(dir)
-        val sheets = SheetScanner.listSheets(root)
-        if (sheets.isEmpty()) return@io err("no .xlsx/.xls sheets found under $dir")
+        val listing = SheetScanner.listSheets(root)
+        val sheets = listing.sheets
+        if (sheets.isEmpty()) {
+            return@io if (listing.errors.isEmpty()) {
+                err("no .xlsx/.xls sheets found under $dir")
+            } else {
+                err(
+                    "no readable sheets under $dir — unreadable files: " +
+                        listing.errors.joinToString("; ") { (f, m) -> "$f ($m)" },
+                )
+            }
+        }
         val refsFile = File(root, "refs.json")
         val rootObj: JsonObject
         if (refsFile.isFile) {
@@ -485,13 +598,43 @@ class RefsMcpToolset : McpToolset {
             addProperty("refs_json", refsFile.path.replace('\\', '/'))
             addProperty("tablesInSchema", tablesObj.size())
             addProperty("tablesAddedThisRun", addedKeys.size)
+            if (listing.errors.isNotEmpty()) {
+                add("unreadableFiles", JsonArray().apply {
+                    listing.errors.forEach { (f, m) ->
+                        add(JsonObject().apply { addProperty("file", f); addProperty("error", m) })
+                    }
+                })
+            }
             addProperty("_note", "SKELETON entries only ({file, sheet}) — the tool made no other decision. Re-runs only ADD new sheets (existing entries are never touched).")
             addProperty("_next", "Every added table needs YOUR decisions: (1) sample_rows → decide headerRow/dataStartRow/id/display (record \"display\": null when a table has no name-like column — an OMITTED display leaves records unnamed and counts as undecided); (2) read the game source → design refs (\"when\" for polymorphic columns, _source: \"code\"); (3) check_ref each hypothesis; (4) write_table_refs (bulk: table=\"\" + {tableId: entry, ...}); (5) validate_refs (scope it with <tables> to the area you filled). Delete non-data sheets via write_table_refs(delete=true). Across sessions, pick the next batch with list_unfilled_tables — skeletons stay out of the graph/validation until filled.")
         })
     }
 
-    private val gson = GsonBuilder().setPrettyPrinting().disableHtmlEscaping().create()
-    private suspend fun <T> io(block: () -> T): T = withContext(Dispatchers.IO) { block() }
+    // serializeNulls is LOAD-BEARING: entries carry explicit "display": null ("decided: no display
+    // column"). Without it, rewriting the file drops every such key from UNTOUCHED entries — 91 tables
+    // silently regressed to "undecided" in the field — and read_table_refs hides the nulls too.
+    private val gson = GsonBuilder().setPrettyPrinting().disableHtmlEscaping().serializeNulls().create()
+    private suspend fun io(block: () -> String): String = withContext(Dispatchers.IO) {
+        // Surface the scanner's ACTUAL parser error (was a misleading "no such sheet" / silent skip).
+        try { block() } catch (e: SheetScanException) { err(e.message ?: "read failed") }
+    }
     private fun err(message: String): String = """{"error": ${JsonPrimitive(message)}}"""
     private fun arrayOf(items: Iterable<String>): JsonArray = JsonArray().apply { items.forEach { add(it) } }
+
+    /** Simple glob → regex for list_tables filters: `*` = any run, `?` = one char; case-insensitive,
+     *  matched against the WHOLE dir-relative path. Mechanical — no hidden exclusions. */
+    private fun globToRegex(glob: String): Regex {
+        val sb = StringBuilder()
+        for (ch in glob) {
+            when (ch) {
+                '*' -> sb.append(".*")
+                '?' -> sb.append('.')
+                else -> sb.append(Regex.escape(ch.toString()))
+            }
+        }
+        return Regex(sb.toString(), RegexOption.IGNORE_CASE)
+    }
+
+    private fun globs(csv: String): List<Regex> =
+        csv.split(',').map(String::trim).filter { it.isNotEmpty() }.map(::globToRegex)
 }

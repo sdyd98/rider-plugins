@@ -32,6 +32,10 @@ internal object RefsWriteValidation {
             // display: null is the explicit "decided: no display column" marker — allowed.
             if (!d.isJsonPrimitive) return "\"display\" must be ONE field-code string (or null for 'no display column') — multi-column display is not supported"
         }
+        entry.get("rowFilter")?.takeIf { !it.isJsonNull }?.let { rf ->
+            if (!rf.isJsonObject) return "\"rowFilter\" must be an object of column -> accepted value(s) (same syntax as a ref's \"when\")"
+            conditionShapeError(rf.asJsonObject, "\"rowFilter\"")?.let { return it }
+        }
         val refs = entry.get("refs") ?: return null
         if (!refs.isJsonArray) return "\"refs\" must be an array"
         val arr = refs.asJsonArray
@@ -39,9 +43,18 @@ internal object RefsWriteValidation {
             val ro = arr[i].takeIf { it.isJsonObject }?.asJsonObject ?: return "refs[$i] is not an object"
             val from = ro.get("from")?.takeIf { it.isJsonArray } ?: return "refs[$i] is missing \"from\" (array of column field codes)"
             if (!from.asJsonArray.all { it.isJsonPrimitive }) return "refs[$i] \"from\" elements must be field-code strings"
-            if (ro.get("to")?.takeIf { it.isJsonPrimitive } == null) return "refs[$i] is missing \"to\" (target table id)"
+            // "to": one table id, or a NON-EMPTY array of ids (a union of tables loaded as one logical table).
+            val to = ro.get("to") ?: return "refs[$i] is missing \"to\" (target table id, or an array of ids for a union)"
+            val toIsUnion = to.isJsonArray
+            if (toIsUnion) {
+                val ta = to.asJsonArray
+                if (ta.size() == 0 || !ta.all { it.isJsonPrimitive && it.asJsonPrimitive.isString }) return "refs[$i] \"to\" array must hold at least one table-id string"
+            } else if (!to.isJsonPrimitive) {
+                return "refs[$i] \"to\" must be a table id or an array of table ids"
+            }
             ro.get("by")?.takeIf { !it.isJsonNull }?.let { by ->
                 if (!by.isJsonArray || !by.asJsonArray.all { it.isJsonPrimitive }) return "refs[$i] \"by\" must be an array of the TARGET's id field codes"
+                if (toIsUnion && to.asJsonArray.size() > 1) return "refs[$i] \"by\" is not supported with a union \"to\" — group refs need a single target"
             }
             for (k in listOf("split", "pattern")) {
                 val v = ro.get(k)?.takeIf { !it.isJsonNull } ?: continue
@@ -50,11 +63,24 @@ internal object RefsWriteValidation {
             val w = ro.get("when")
             if (w != null) {
                 if (!w.isJsonObject) return "refs[$i] \"when\" must be an object of column -> accepted value(s)"
-                for ((c, v) in w.asJsonObject.entrySet()) {
-                    if (!(v.isJsonPrimitive || (v.isJsonArray && v.asJsonArray.all { it.isJsonPrimitive })))
-                        return "refs[$i] \"when\".$c must be a value or an array of values"
-                }
+                conditionShapeError(w.asJsonObject, "refs[$i] \"when\"")?.let { return it }
             }
+        }
+        return null
+    }
+
+    /** Shape check shared by `when` and `rowFilter` clause objects: each column maps to a value, an
+     *  array of values, or `{"in": ...}` / `{"notIn": ...}` with the same scalar/array payload. */
+    private fun conditionShapeError(obj: JsonObject, label: String): String? {
+        fun scalarOrArray(v: com.google.gson.JsonElement): Boolean =
+            v.isJsonPrimitive || (v.isJsonArray && v.asJsonArray.all { it.isJsonPrimitive })
+        for ((c, v) in obj.entrySet()) {
+            val ok = scalarOrArray(v) || (
+                v.isJsonObject && v.asJsonObject.entrySet().let { es ->
+                    es.size == 1 && es.all { (k, vv) -> (k == "in" || k == "notIn") && scalarOrArray(vv) }
+                }
+                )
+            if (!ok) return "$label.$c must be a value, an array of values, or {\"in\"/\"notIn\": value(s)}"
         }
         return null
     }
@@ -64,11 +90,13 @@ internal object RefsWriteValidation {
         (runCatching { entry.getAsJsonArray("id") }.getOrNull()?.size() ?: 0) > 0
 
     /** Every field code the entry claims exists in ITS OWN sheet's header row: id + display +
-     *  each ref's from + each ref's when-condition columns. (`by` names TARGET columns — separate.) */
+     *  rowFilter columns + each ref's from + each ref's when-condition columns.
+     *  (`by` names TARGET columns — separate.) */
     fun ownSheetCodes(entry: JsonObject): List<String> {
         val codes = ArrayList<String>()
         entry.get("id")?.takeIf { it.isJsonArray }?.asJsonArray?.forEach { codes.add(it.asString) }
         entry.get("display")?.takeIf { it.isJsonPrimitive }?.let { codes.add(it.asString) }
+        entry.get("rowFilter")?.takeIf { it.isJsonObject }?.asJsonObject?.keySet()?.forEach { codes.add(it) }
         entry.get("refs")?.takeIf { it.isJsonArray }?.asJsonArray?.forEach { r ->
             val ro = r.takeIf { it.isJsonObject }?.asJsonObject ?: return@forEach
             ro.get("from")?.takeIf { it.isJsonArray }?.asJsonArray?.forEach { codes.add(it.asString) }
@@ -77,17 +105,28 @@ internal object RefsWriteValidation {
         return codes.filter { it.isNotBlank() }.distinct()
     }
 
-    /** Target table ids named by the entry's refs. */
+    /** The (1..n) target table ids of one ref's `to` — a string, or an array for a union. */
+    private fun toTargetsOf(ro: JsonObject): List<String> =
+        ro.get("to")?.let { to ->
+            when {
+                to.isJsonPrimitive -> listOf(to.asString)
+                to.isJsonArray -> to.asJsonArray.filter { it.isJsonPrimitive }.map { it.asString }
+                else -> emptyList()
+            }
+        } ?: emptyList()
+
+    /** Target table ids named by the entry's refs (union targets each count). */
     fun refTargets(entry: JsonObject): List<String> =
         entry.get("refs")?.takeIf { it.isJsonArray }?.asJsonArray
-            ?.mapNotNull { r -> r.takeIf { it.isJsonObject }?.asJsonObject?.get("to")?.takeIf { it.isJsonPrimitive }?.asString }
+            ?.flatMap { r -> r.takeIf { it.isJsonObject }?.asJsonObject?.let { toTargetsOf(it) } ?: emptyList() }
             ?.distinct() ?: emptyList()
 
-    /** (target table, by-codes) pairs — `by` field codes live in the TARGET's header row. */
+    /** (target table, by-codes) pairs — `by` field codes live in the TARGET's header row. (`by` is
+     *  rejected with a multi-target union at shape(), so a single target is guaranteed here.) */
     fun byCodesPerTarget(entry: JsonObject): List<Pair<String, List<String>>> =
         entry.get("refs")?.takeIf { it.isJsonArray }?.asJsonArray?.mapNotNull { r ->
             val ro = r.takeIf { it.isJsonObject }?.asJsonObject ?: return@mapNotNull null
-            val to = ro.get("to")?.takeIf { it.isJsonPrimitive }?.asString ?: return@mapNotNull null
+            val to = toTargetsOf(ro).singleOrNull() ?: return@mapNotNull null
             val by = ro.get("by")?.takeIf { it.isJsonArray }?.asJsonArray
                 ?.filter { it.isJsonPrimitive }?.map { it.asString }?.filter { it.isNotBlank() }
                 ?.takeIf { it.isNotEmpty() } ?: return@mapNotNull null
