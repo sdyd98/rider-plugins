@@ -37,6 +37,13 @@ interface LogReader : Closeable {
      * continue from the CURRENT END of the source (the unread gap is skipped). No-op when idle.
      */
     fun cancelInitial() {}
+
+    /**
+     * True when the initial read saw byte sequences invalid under the decoding charset (probed over
+     * the head of the stream — see [ByteLineSplitter.charsetLooksWrong]). The panel uses this to
+     * auto-correct a wrong default charset. Default: no evidence (sources without raw bytes).
+     */
+    fun charsetLooksWrong(): Boolean = false
 }
 
 /** Tail connection state, surfaced in the status bar. */

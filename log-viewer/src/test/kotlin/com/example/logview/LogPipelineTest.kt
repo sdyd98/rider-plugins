@@ -159,6 +159,34 @@ class LogPipelineTest {
     }
 
     @Test
+    fun `charset probe flags CP949 bytes decoded as UTF-8 and passes matching charsets`() {
+        val cp949 = java.nio.charset.Charset.forName("MS949")
+        val bytes = "한글 로그 감지 테스트\n".toByteArray(cp949)
+        val sink: (List<String>) -> Unit = {}
+
+        // CP949 bytes under the UTF-8 default → invalid sequences → the probe flags a wrong charset.
+        assertTrue(ByteLineSplitter(charset = Charsets.UTF_8).apply { feed(bytes, bytes.size, sink) }.charsetLooksWrong())
+        // The same bytes under the right charset are clean.
+        assertFalse(ByteLineSplitter(charset = cp949).apply { feed(bytes, bytes.size, sink) }.charsetLooksWrong())
+        // Genuine UTF-8 (Korean included) is clean under UTF-8.
+        val utf8 = "한글 UTF-8 로그\n".toByteArray(Charsets.UTF_8)
+        assertFalse(ByteLineSplitter(charset = Charsets.UTF_8).apply { feed(utf8, utf8.size, sink) }.charsetLooksWrong())
+        // UTF-8 Korean under CP949 (odd byte count → a dangling lead byte) is flagged — the revert signal.
+        val odd = "안\n".toByteArray(Charsets.UTF_8)
+        assertTrue(ByteLineSplitter(charset = cp949).apply { feed(odd, odd.size, sink) }.charsetLooksWrong())
+    }
+
+    @Test
+    fun `charset probe ignores a crash-truncated partial line flushed at EOF`() {
+        // A tail cut mid-character is legitimate truncation, not charset evidence.
+        val bytes = "한글".toByteArray(Charsets.UTF_8).copyOfRange(0, 4) // ends mid-syllable, no newline
+        val s = ByteLineSplitter(charset = Charsets.UTF_8)
+        s.feed(bytes, bytes.size) {}
+        s.flushPartial {}
+        assertFalse(s.charsetLooksWrong())
+    }
+
+    @Test
     fun `parseLogRow extracts level and time off-EDT and flags continuation candidates`() {
         // parseLogRow is pure (no model/Swing state) so the heavy parse can run off the EDT.
         val primary = parseLogRow("2024-06-28 14:30:00.123 ERROR boom", timeFmt)

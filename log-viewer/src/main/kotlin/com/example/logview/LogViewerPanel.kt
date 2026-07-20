@@ -118,6 +118,7 @@ class LogViewerPanel(
     private var queryText = ""
     private var useRegex = true        // .* toggle — when off, the query is a literal substring
     private var caseSensitive = false  // Aa toggle
+    private var contextLines = 0       // 문맥 toggle — rows kept around each match (grep -C); 0 = off
     private val enabledLevels: MutableSet<LogLevel> = (LogLevel.REAL + LogLevel.OTHER).toMutableSet()
 
     private val renderer = LogCellRenderer(
@@ -136,6 +137,9 @@ class LogViewerPanel(
     @Volatile private var streaming = true
     @Volatile private var tailing = false
     private var statusError: String? = null // a read failure to surface in the status bar; null = none
+    private var statusNotice: String? = null // a non-error status-bar note (e.g. charset auto-detected)
+    // Charset auto-detection: 0 = not probed, 1 = corrective CP949 re-read in flight, 2 = settled.
+    private var charsetAuto = 0
     private var maxLineWidth = JBUI.scale(200) // widest measured line; the column is max(this, viewport width)
 
     // Display options (⚙ menu): raw (unparsed) view, long-line handling. (Density is always comfortable.)
@@ -257,6 +261,7 @@ class LogViewerPanel(
             onToggleFollow = { toggleFollow() },
             onToggleRegex = { toggleRegex() },
             onToggleCase = { toggleCase() },
+            onCycleContext = { cycleContext() },
             onClear = { clearFilters() },
             onOpenRules = { openRulesDialog() },
             onDisplayMenu = { showDisplayMenu() },
@@ -386,6 +391,7 @@ class LogViewerPanel(
     private fun reopenWith(cs: java.nio.charset.Charset) {
         if (cs == charset) return
         charset = cs
+        statusNotice = null // a manual choice supersedes any auto-detection note
         SourcePrefsStore.getInstance().rememberCharset(sourceKey, cs.name())
         reread()
     }
@@ -460,6 +466,7 @@ class LogViewerPanel(
             onEdt {
                 if (gen != readerGeneration) return@onEdt // superseded by a newer reopen (charset change)
                 streaming = false
+                if (autoDetectCharset()) return@onEdt // wrong charset — a corrective re-read took over
                 ensureSorterAttached() // deferred during the initial stream — appends stay O(batch)
                 sizeContentColumn()
                 pushChrome()
@@ -533,6 +540,42 @@ class LogViewerPanel(
                 sizeContentColumn()
             }
         }
+    }
+
+    /**
+     * Wrong-charset auto-correction, decided from BYTES (not rendered text): the reader's splitter
+     * strictly re-decodes the head of the stream and reports invalid sequences. A UTF-8 default that
+     * saw invalid bytes is re-read once as CP949 (which practically subsumes EUC-KR); if CP949's own
+     * validation fails too, the viewer reverts to UTF-8. The outcome is remembered per source either
+     * way, so the probe (and its re-reads) runs at most once per source — a re-open never re-probes.
+     * Returns true when a corrective re-read was launched (the caller stops; the re-read's own
+     * completion continues the pipeline).
+     */
+    private fun autoDetectCharset(): Boolean {
+        if (charsetAuto == 2) return false
+        val prefs = SourcePrefsStore.getInstance()
+        if (charsetAuto == 0) {
+            charsetAuto = 2
+            if (prefs.charsetFor(sourceKey) != null) return false // an explicit/remembered choice — trust it
+            val cp949 = LogCharsets.CP949 ?: return false
+            if (charset != LogCharsets.DEFAULT || !reader.charsetLooksWrong()) return false
+            charsetAuto = 1
+            charset = cp949
+            reread()
+            return true
+        }
+        // charsetAuto == 1 — the corrective CP949 re-read finished; verify it before remembering.
+        charsetAuto = 2
+        if (prefs.charsetFor(sourceKey) != null) return false // the user picked one mid-flight — theirs wins
+        if (reader.charsetLooksWrong()) {
+            charset = LogCharsets.DEFAULT // CP949 was no better (not a Korean-codepage file) — back to UTF-8
+            prefs.rememberCharset(sourceKey, charset.name())
+            reread()
+            return true
+        }
+        prefs.rememberCharset(sourceKey, charset.name())
+        statusNotice = "인코딩 자동 감지: ${LogCharsets.label(charset)} (⚙에서 변경)"
+        return false
     }
 
     /**
@@ -645,7 +688,7 @@ class LogViewerPanel(
 
     // The filter semantics live in LogRowFilter (headless-testable); this just snapshots the state.
     private fun buildRowFilter(): RowFilter<LogTableModel, Int> =
-        LogRowFilter(model, queryText, searchPattern, ignoreCase = !caseSensitive, enabledLevels = enabledLevels)
+        LogRowFilter(model, queryText, searchPattern, ignoreCase = !caseSensitive, enabledLevels = enabledLevels, contextLines = contextLines)
 
     private fun toggleLevel(level: LogLevel) {
         if (!enabledLevels.add(level)) enabledLevels.remove(level)
@@ -675,6 +718,17 @@ class LogViewerPanel(
     private fun toggleCase() {
         caseSensitive = !caseSensitive
         recompileSearch()
+        refilter()
+        table.repaint(); pushChrome()
+    }
+
+    /** 문맥 toggle (grep -C): cycle 0 → 3 → 10 → 0 rows of context kept around each match. */
+    private fun cycleContext() {
+        contextLines = when {
+            contextLines <= 0 -> 3
+            contextLines == 3 -> 10
+            else -> 0
+        }
         refilter()
         table.repaint(); pushChrome()
     }
@@ -1019,10 +1073,12 @@ class LogViewerPanel(
             streaming = streaming,
             useRegex = useRegex,
             caseSensitive = caseSensitive,
+            contextLines = contextLines,
             cursor = cursor,
             source = sourceLabel,
             progress = if (streaming) reader.initialProgress() else -1f,
             skipped = reader.skippedHeadBytes().takeIf { it > 0 }?.let(::fmtBytes).orEmpty(),
+            notice = statusNotice.orEmpty(),
         )
     }
 

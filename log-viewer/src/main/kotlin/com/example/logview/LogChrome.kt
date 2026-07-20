@@ -46,12 +46,16 @@ data class LogChromeData(
     val streaming: Boolean = false,
     val useRegex: Boolean = true,
     val caseSensitive: Boolean = false,
+    /** Rows of context kept around each match (grep -C style); 0 = matches only. */
+    val contextLines: Int = 0,
     val cursor: String = "—",
     val source: String = "",
     /** 0..1 while the initial read's size is known (local files); -1 = no progress to show. */
     val progress: Float = -1f,
     /** Human-formatted size skipped by a tail-first open of a huge file ("" = whole file loaded). */
     val skipped: String = "",
+    /** A non-error note for the status bar (e.g. "인코딩 자동 감지: CP949…"); "" = none. */
+    val notice: String = "",
 )
 
 private fun Int.commas() = "%,d".format(this)
@@ -67,6 +71,7 @@ class LogChromeActions(
     val onToggleFollow: () -> Unit,
     val onToggleRegex: () -> Unit,
     val onToggleCase: () -> Unit,
+    val onCycleContext: () -> Unit,
     val onClear: () -> Unit,
     val onOpenRules: () -> Unit,
     val onDisplayMenu: () -> Unit,
@@ -106,6 +111,12 @@ fun createLogFilterBar(
 
             ToolButton(".*", palette = p, accent = data.useRegex) { actions.onToggleRegex() }
             ToolButton("Aa", palette = p, accent = data.caseSensitive) { actions.onToggleCase() }
+            // grep -C style context around matches: off → ±3 → ±10 → off.
+            ToolButton(
+                if (data.contextLines > 0) "문맥 ±${data.contextLines}" else "문맥",
+                palette = p,
+                accent = data.contextLines > 0,
+            ) { actions.onCycleContext() }
             if (query.text.isNotEmpty() || data.filterActive) ToolButton("✕", palette = p) { actions.onClear() }
 
             // match count (accent when a text query narrows the view)
@@ -186,6 +197,10 @@ fun createLogStatusBar(chrome: State<LogChromeData>, onCancelLoad: () -> Unit = 
             if (data.skipped.isNotEmpty()) {
                 Separator(p)
                 Text("앞 ${data.skipped} 건너뜀", color = p.mutedText, fontSize = 11.sp)
+            }
+            if (data.notice.isNotEmpty()) {
+                Separator(p)
+                Text(data.notice, color = p.accent, fontSize = 11.sp)
             }
             if (data.source.isNotEmpty()) {
                 Separator(p)

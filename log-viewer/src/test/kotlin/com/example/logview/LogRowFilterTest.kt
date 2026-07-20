@@ -41,12 +41,14 @@ class LogRowFilterTest {
         query: String = "",
         regex: Boolean = false,
         levels: Set<LogLevel> = allLevels,
+        context: Int = 0,
     ) = LogRowFilter(
         model,
         query,
         pattern = if (regex) Pattern.compile(query, Pattern.CASE_INSENSITIVE) else null,
         ignoreCase = true,
         enabledLevels = levels,
+        contextLines = context,
     )
 
     @Test
@@ -100,5 +102,48 @@ class LogRowFilterTest {
         assertTrue(f.includeRow(2))
         assertFalse(f.includeRow(3))
         assertTrue(f.includeRow(0))
+    }
+
+    // ---- Context mode (grep -C style) ----
+
+    /** 8 single-line records; only row 3 matches "boom". */
+    private fun flatModel(): LogTableModel {
+        val m = LogTableModel()
+        m.appendParsed(listOf("aaa", "bbb", "ccc", "boom failed", "ddd", "eee", "fff", "ggg").map { primary(it) })
+        return m
+    }
+
+    @Test
+    fun `context keeps rows within N of a match and drops the rest`() {
+        val m = flatModel()
+        val f = filter(m, query = "boom", context = 2)
+        // rows 1..5 are within ±2 of the match at 3; rows 0, 6, 7 are not.
+        assertEquals(
+            listOf(false, true, true, true, true, true, false, false),
+            (0..7).map { f.includeRow(it) },
+        )
+        // zero context = matches only (the existing behavior).
+        val f0 = filter(m, query = "boom")
+        assertEquals(listOf(3), (0..7).filter { f0.includeRow(it) })
+    }
+
+    @Test
+    fun `context extends past block edges and blank rows stay dropped`() {
+        val m = sampleModel() // block 0..2 (matching), 3 heartbeat, 4 blank
+        val f = filter(m, query = "Retry.java", context = 1)
+        // block rows 0..2 match; heartbeat (3) is within 1 of row 2; the blank row (4) still drops.
+        assertEquals(listOf(true, true, true, true, false), (0..4).map { f.includeRow(it) })
+    }
+
+    @Test
+    fun `context verdicts stay correct under out-of-order evaluation`() {
+        val m = flatModel()
+        val f = filter(m, query = "boom", context = 1)
+        // Evaluate from the far end first: the lazy forward scan must still resolve earlier rows.
+        assertFalse(f.includeRow(7))
+        assertTrue(f.includeRow(2))
+        assertFalse(f.includeRow(0))
+        assertTrue(f.includeRow(4))
+        assertFalse(f.includeRow(5))
     }
 }

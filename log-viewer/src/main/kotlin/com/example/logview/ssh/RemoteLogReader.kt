@@ -31,9 +31,14 @@ class RemoteLogReader(
         manager.acquire(profile.id)
     }
 
+    // The initial read's splitter, kept for its charset-validity probe (see charsetLooksWrong).
+    @Volatile private var initialSplitter: ByteLineSplitter? = null
+
     override fun readInitial(onBatch: (List<String>) -> Unit) {
-        exec("tail -n $tailLines -- ${shQuote(remotePath)}") { ins -> pump(ins, onBatch) }
+        exec("tail -n $tailLines -- ${shQuote(remotePath)}") { ins -> pump(ins, onBatch, probeCharset = true) }
     }
+
+    override fun charsetLooksWrong(): Boolean = initialSplitter?.charsetLooksWrong() ?: false
 
     override fun startTail(
         onAppend: (List<String>) -> Unit,
@@ -108,9 +113,10 @@ class RemoteLogReader(
     }
 
     /** Decode an stdout stream into raw lines (UTF-8), delivering each read's complete lines promptly. */
-    private fun pump(ins: InputStream, onBatch: (List<String>) -> Unit) {
+    private fun pump(ins: InputStream, onBatch: (List<String>) -> Unit, probeCharset: Boolean = false) {
         val buf = ByteArray(1 shl 16)
         val splitter = ByteLineSplitter(batchSize, charset)
+        if (probeCharset) initialSplitter = splitter
         while (!closed) {
             val read = try {
                 ins.read(buf)

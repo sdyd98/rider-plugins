@@ -15,6 +15,10 @@ object LogCharsets {
 
     val DEFAULT: Charset = Charsets.UTF_8
 
+    /** CP949 (the Korean Windows code page; superset of EUC-KR) — the auto-detection fallback.
+     *  Null only on a JVM without the charset (then auto-detection simply stays off). */
+    val CP949: Charset? = runCatching { Charset.forName("MS949") }.getOrNull()
+
     /**
      * (label, charset) in menu order. `MS949` = `x-windows-949` = the Korean Windows code page 949,
      * which is ALSO what "ANSI" means on a Korean Windows (`native.encoding`), so the CP949 entry doubles
@@ -22,7 +26,7 @@ object LogCharsets {
      */
     val OPTIONS: List<Pair<String, Charset>> = buildList {
         add("UTF-8" to Charsets.UTF_8)
-        runCatching { add("CP949 / Windows-949 (한글 · ANSI)" to Charset.forName("MS949")) }
+        CP949?.let { add("CP949 / Windows-949 (한글 · ANSI)" to it) }
         runCatching { add("EUC-KR (한글)" to Charset.forName("EUC-KR")) }
     }
 

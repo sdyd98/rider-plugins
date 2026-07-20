@@ -59,4 +59,44 @@ class LocalLogReaderTest {
         }
         assertTrue(out.isNotEmpty() && out.size < 50_000)
     }
+
+    // ---- Idle flush of a final line with no trailing newline (maybeFlushIdleTail) ----
+
+    private fun awaitUntil(timeoutMs: Long = 5_000, cond: () -> Boolean) {
+        val deadline = System.currentTimeMillis() + timeoutMs
+        while (!cond() && System.currentTimeMillis() < deadline) Thread.sleep(10)
+    }
+
+    /** Start a fast-polling reader (initial + tail) appending into a synchronized [out] list. */
+    private fun tailToList(file: Path, out: MutableList<String>): LocalLogReader {
+        val reader = LocalLogReader(file, pollMs = 20)
+        reader.readInitial { out.addAll(it) }
+        reader.startTail(onAppend = { out.addAll(it) }, onError = {})
+        return reader
+    }
+
+    @Test
+    fun `a final line without trailing newline is flushed once the file goes quiet`() {
+        val f = dir.resolve("truncated.log")
+        // Crash-truncated: the last (often most important) line has no trailing newline.
+        Files.write(f, "one\ntwo\nlast words".toByteArray())
+        val out = java.util.Collections.synchronizedList(mutableListOf<String>())
+        tailToList(f, out).use {
+            awaitUntil { out.size >= 3 }
+            assertEquals(listOf("one", "two", "last words"), out.toList())
+        }
+    }
+
+    @Test
+    fun `a partial line completed before the quiet threshold arrives whole with no duplicate`() {
+        val f = dir.resolve("resumed.log")
+        Files.write(f, "one\npart".toByteArray())
+        val out = java.util.Collections.synchronizedList(mutableListOf<String>())
+        tailToList(f, out).use {
+            // Complete the line well inside the quiet window — it must arrive as ONE whole line.
+            Files.write(f, "ial\n".toByteArray(), java.nio.file.StandardOpenOption.APPEND)
+            awaitUntil { out.size >= 2 }
+            assertEquals(listOf("one", "partial"), out.toList())
+        }
+    }
 }

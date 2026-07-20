@@ -20,6 +20,8 @@ class LocalLogReader(
     charset: Charset = Charsets.UTF_8,
     /** Tail-first threshold override (tests use a tiny value; production keeps the default). */
     private val tailOpenBytes: Long = TAIL_OPEN_BYTES,
+    /** Tail poll interval override (tests use a tiny value; production keeps the default). */
+    private val pollMs: Long = POLL_MS,
 ) : LogReader {
 
     private val file = path.toFile()
@@ -36,7 +38,8 @@ class LocalLogReader(
     @Volatile private var initialRead = 0L
     @Volatile private var skippedHead = 0L
 
-    private val pollMs = 300L
+    // Consecutive polls with no growth while a partial line is buffered (see maybeFlushIdleTail).
+    private var quietPolls = 0
 
     override fun readInitial(onBatch: (List<String>) -> Unit) {
         RandomAccessFile(file, "r").use { raf ->
@@ -129,7 +132,11 @@ class LocalLogReader(
             offset = 0
             splitter.reset()
         }
-        if (len == offset) return
+        if (len == offset) {
+            maybeFlushIdleTail(onAppend)
+            return
+        }
+        quietPolls = 0
         RandomAccessFile(file, "r").use { raf ->
             raf.seek(offset)
             val batch = ArrayList<String>()
@@ -137,6 +144,24 @@ class LocalLogReader(
             offset = raf.filePointer
             if (batch.isNotEmpty()) onAppend(batch)
         }
+    }
+
+    /**
+     * A final line with no trailing newline would stay buffered forever on a file that stopped
+     * growing — and a crash-truncated last line is often the one that matters most. Once the file has
+     * been quiet for [QUIET_POLLS_TO_FLUSH] polls, emit the buffered partial as a line. If the file
+     * later resumes mid-line (rare), the remainder shows as its own line — nothing is ever lost.
+     */
+    private fun maybeFlushIdleTail(onAppend: (List<String>) -> Unit) {
+        if (!splitter.hasPartial()) {
+            quietPolls = 0
+            return
+        }
+        if (++quietPolls < QUIET_POLLS_TO_FLUSH) return
+        quietPolls = 0
+        val batch = ArrayList<String>()
+        splitter.flushPartial { batch.addAll(it) }
+        if (batch.isNotEmpty()) onAppend(batch)
     }
 
     /** Read everything from the raf's current pointer, emitting complete lines and buffering the tail.
@@ -153,6 +178,8 @@ class LocalLogReader(
         splitter.flush(onBatch)
     }
 
+    override fun charsetLooksWrong(): Boolean = splitter.charsetLooksWrong()
+
     override fun close() {
         closed = true
         follow?.interrupt()
@@ -163,5 +190,10 @@ class LocalLogReader(
         /** Files larger than this open from their last chunk (~1M lines at ~100 B/line — the model
          *  cap) instead of parsing the whole file; the skipped size is surfaced in the status bar. */
         const val TAIL_OPEN_BYTES = 100L * 1024 * 1024
+
+        const val POLL_MS = 300L
+
+        /** Quiet polls (no growth) before a buffered final partial line is flushed (~1.2 s). */
+        const val QUIET_POLLS_TO_FLUSH = 4
     }
 }
