@@ -7,7 +7,7 @@ plugins {
 }
 
 group = "com.example.xlsx"
-version = "0.13.0"
+version = "0.13.1"
 
 repositories {
     mavenCentral()
@@ -82,7 +82,10 @@ intellijPlatform {
     pluginConfiguration {
         ideaVersion {
             sinceBuild = "261"
-            untilBuild = "261.*"
+            // No upper bound (JetBrains' recommendation): the plugin uses only stable core APIs, so a
+            // 261.* cap would needlessly block install on later IDEs and force a re-release each time.
+            // provider { null } explicitly clears it — otherwise the Gradle plugin re-derives "261.*".
+            untilBuild = provider { null }
         }
     }
 }
