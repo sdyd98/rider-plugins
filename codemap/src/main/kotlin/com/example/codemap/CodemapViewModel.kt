@@ -88,6 +88,19 @@ class CodemapViewModel(private val project: Project) {
     private var runner: AnalysisRunner? = null
 
     private val store: NoteStore? get() = project.getService(CodemapStore::class.java).store
+
+    /**
+     * Absolute paths whose content the current verdict depends on — the note's covered files.
+     *
+     * Freshness is computed from these files' hashes, so a change to any of them invalidates what the
+     * panel is showing. Without this the panel keeps asserting a verdict about a file that has since
+     * been edited, which is worse than showing nothing.
+     */
+    @Volatile
+    private var watched: Set<String> = emptySet()
+
+    fun dependsOn(path: String): Boolean = path in watched
+
     private val generation = AtomicLong()
     private var current: VirtualFile? = null
 
@@ -96,6 +109,10 @@ class CodemapViewModel(private val project: Project) {
         // than replacing it with "outside the codemap root".
         if (file is CodemapGraphFile) return
         current = file
+        // Deliberately NOT clearing `usages` here: a search can make the IDE navigate, and wiping the
+        // result on the way out (or on the way back) would delete the very answer we just asked for.
+        // The view only renders a result whose file+symbol match what is on screen, so a leftover is
+        // invisible rather than wrong.
         focusedFunction = null
         reload()
     }
@@ -115,7 +132,10 @@ class CodemapViewModel(private val project: Project) {
             .filter { it.value.rel == rel && it.value.line <= line }
             .maxByOrNull { it.value.line }
             ?.key
-        if (hit != focusedFunction) focusedFunction = hit
+        if (hit != focusedFunction) {
+            focusedFunction = hit
+            usages = Usages.Idle
+        }
     }
 
     /** Re-read from disk — after a request is queued, or when the AI has written a note meanwhile. */
@@ -152,6 +172,12 @@ class CodemapViewModel(private val project: Project) {
         val rel = s.relativize(io) ?: return CodemapState.Outside(file.path, s.root.absolutePath)
         val note = s.readNote(rel)
         val freshness = s.freshness(note)
+        watched = buildSet {
+            add(io.absolutePath)
+            (note?.get("files") as? com.google.gson.JsonArray)
+                ?.mapNotNull { it.asString }
+                ?.forEach { add(s.resolve(it).absolutePath) }
+        }
         // Drift is only worth a git call when the note has actually gone stale — that is the one place
         // the number is shown.
         val since = if (freshness != NoteStore.Freshness.STALE) null else {
@@ -227,36 +253,6 @@ class CodemapViewModel(private val project: Project) {
 
 
     /**
-     * Hand the question "where is this actually called from?" to Rider.
-     *
-     * The note's call graph is curated and file-scoped; the exhaustive answer lives in the ReSharper
-     * backend, which the frontend cannot query directly — but it CAN put the caret on the symbol and
-     * let Rider's own action run. The resolution is then the backend's, so overloads, macros and
-     * templates come out right, and there is nothing here to keep in sync with a Rider release.
-     *
-     * The column is found by locating the bare name inside its own anchor line: text arithmetic over a
-     * line we already know, not an attempt to parse anything.
-     */
-    fun showUsages(loc: CodemapState.FnLoc, name: String) {
-        val root = project.getService(CodemapStore::class.java).root ?: return
-        val file = LocalFileSystem.getInstance().findFileByPath(File(root, loc.rel).path) ?: return
-        val bare = name.substringAfterLast("::")
-        ApplicationManager.getApplication().invokeLater {
-            val doc = FileDocumentManager.getInstance().getDocument(file) ?: return@invokeLater
-            val lineIdx = (loc.line - 1).coerceIn(0, (doc.lineCount - 1).coerceAtLeast(0))
-            val lineText = doc.getText(TextRange(doc.getLineStartOffset(lineIdx), doc.getLineEndOffset(lineIdx)))
-            val column = lineText.indexOf(bare).coerceAtLeast(0)
-            val editor = FileEditorManager.getInstance(project)
-                .openTextEditor(OpenFileDescriptor(project, file, lineIdx, column), true) ?: return@invokeLater
-
-            val am = ActionManager.getInstance()
-            val action = am.getAction("ShowUsages") ?: am.getAction("FindUsages") ?: return@invokeLater
-            val ctx = DataManager.getInstance().getDataContext(editor.contentComponent)
-            ActionUtil.invokeAction(action, ctx, ActionPlaces.UNKNOWN, null, null)
-        }
-    }
-
-    /**
      * Run the analysis now, instead of queueing it for someone to ask Claude about later.
      *
      * The CLI is given read-only tools and answers with JSON on stdout; [AnalysisRunner] hands that to
@@ -271,7 +267,7 @@ class CodemapViewModel(private val project: Project) {
         analysis = Analysis.Running(loaded.rel)
         val r = AnalysisRunner(s).also { runner = it }
         ApplicationManager.getApplication().executeOnPooledThread {
-            val explicit = com.intellij.openapi.application.ApplicationManager.getApplication()
+            val explicit = ApplicationManager.getApplication()
                 .getService(CodemapSettings::class.java)?.claudePath
             val result = r.analyze(loaded.rel, question, explicitPath = explicit)
             ApplicationManager.getApplication().invokeLater {
@@ -294,11 +290,56 @@ class CodemapViewModel(private val project: Project) {
         ApplicationManager.getApplication().invokeLater { openCallGraph(project, name) }
     }
 
+    /** What the usage search is doing for the function currently in focus. */
+    sealed interface Usages {
+        data object Idle : Usages
+        data object Searching : Usages
+        data class Found(val rel: String, val symbol: String, val hits: List<UsageFinder.Hit>) : Usages
+        data class Failed(val reason: String) : Usages
+    }
+
+    var usages: Usages by mutableStateOf(Usages.Idle)
+        private set
+
+    /**
+     * Find where [name] is actually used — resolved by Rider's backend, listed in our panel.
+     *
+     * The plugin's own call graph only knows what the notes recorded; this is the exhaustive answer, and
+     * it belongs on the same screen rather than in a separate window the user has to go read.
+     */
+    fun findUsages(loc: CodemapState.FnLoc, name: String) {
+        val root = project.getService(CodemapStore::class.java).root ?: return
+        usages = Usages.Searching
+        UsageFinder.find(project, root, loc.rel, loc.line, name) { result ->
+            usages = when (result) {
+                is UsageFinder.Result.Found -> Usages.Found(loc.rel, name, result.hits)
+                is UsageFinder.Result.Failed -> Usages.Failed(result.reason)
+            }
+        }
+    }
+
+    fun clearUsages() { usages = Usages.Idle }
+
     /** Publish only if no newer load started meanwhile. */
     private fun publish(gen: Long, produce: () -> CodemapState) {
         ApplicationManager.getApplication().invokeLater {
-            if (generation.get() == gen) state = produce()
+            if (generation.get() != gen) return@invokeLater
+            state = produce()
+            if (state is CodemapState.Loaded) primeCaret()
         }
+    }
+
+    /**
+     * Seed the focused function from where the caret already is.
+     *
+     * A caret listener only fires when the caret MOVES. Opening a file — including the jump from the
+     * function list, which switches tabs — places the caret without moving it, so without this the panel
+     * would sit empty while the caret is plainly inside a recorded function.
+     */
+    private fun primeCaret() {
+        val editor = FileEditorManager.getInstance(project).selectedTextEditor ?: return
+        val file = FileDocumentManager.getInstance().getFile(editor.document) ?: return
+        onCaret(file, editor.caretModel.logicalPosition.line + 1)
     }
 
     /** Seed from whatever tab is already open when the tool window is first shown. */

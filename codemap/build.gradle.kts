@@ -88,6 +88,11 @@ intellijPlatform {
 //   ./gradlew :codemap:runIde -PrunIdeProject=/path/to/a/cpp/project
 tasks.runIde {
     providers.gradleProperty("runIdeProject").orNull?.let { args(it) }
+
+    // A GUI-launched IDE does not inherit a login shell's PATH, and neither does this fork reliably.
+    // Handing it the usual tool locations is what lets a CMake project actually configure in the
+    // sandbox — without it Rider reports "Cannot run program cmake" and never indexes the C++ code.
+    environment("PATH", listOf("/opt/homebrew/bin", "/usr/local/bin", System.getenv("PATH")).joinToString(":"))
 }
 
 tasks.test {

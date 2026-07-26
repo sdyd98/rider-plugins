@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.input.TextFieldState
 import androidx.compose.runtime.Composable
@@ -40,6 +41,7 @@ import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -390,6 +392,7 @@ fun FunctionRow(
                 name,
                 if (located) palette.accent else palette.mutedText,
                 weight = FontWeight.Medium,
+                modifier = Modifier.weight(1f, fill = false),
             )
             badges.forEach { (label, color) -> MiniBadge(label, color) }
             if (ambiguous) MiniBadge("중복", palette.warn)
@@ -405,15 +408,28 @@ fun FunctionRow(
     }
 }
 
-/** A very small inline tag (thread, lock) that rides next to a function name. */
+/**
+ * A very small inline tag (thread, lock) that rides next to a function name.
+ *
+ * Hard-capped to one line and a sane width: these carry free text a note author chose, and a long one
+ * ("Acceptor 워커(CreateSession)") in a narrow panel otherwise wraps to a single character per line and
+ * turns the row into a vertical ribbon.
+ */
 @Composable
 fun MiniBadge(label: String, color: Color) {
     Box(
         Modifier
+            .widthIn(max = 96.dp)
             .background(color.copy(alpha = 0.13f), RoundedCornerShape(Radii.sm))
             .padding(horizontal = Space.xs, vertical = 1.dp),
     ) {
-        Text(label, color = color, fontSize = Type.micro)
+        Text(
+            label,
+            color = color,
+            fontSize = Type.micro,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
     }
 }
 

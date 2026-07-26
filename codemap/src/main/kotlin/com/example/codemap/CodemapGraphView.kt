@@ -56,6 +56,8 @@ private val G_COL_GAP: Dp = 16.dp
 fun CodemapGraphView(vm: GraphViewModel) {
     val p = rememberCodemapPalette()
     var tick by remember { mutableStateOf(0) }
+    var usages by remember { mutableStateOf<UsageFinder.Result?>(null) }
+    var searching by remember { mutableStateOf(false) }
     val graph = remember(tick) { vm.graph() }
     val analyzed = remember(tick) { vm.analyzedFiles() }
 
@@ -83,8 +85,18 @@ fun CodemapGraphView(vm: GraphViewModel) {
             }
             Box(Modifier.width(Space.md))
             graph.layers.getOrNull(graph.focusIndex)?.firstOrNull()?.let { self ->
-                ActionButton("Rider로 정확히 찾기", p, primary = false) { vm.showUsages(self) }
+                ActionButton("사용처 찾기", p, primary = false) {
+                    searching = true
+                    vm.findUsages(self) { r -> searching = false; usages = r }
+                }
                 ActionButton("코드로 이동", p, primary = false) { vm.jumpTo(self) }
+            }
+            if (searching) Text("찾는 중…", color = p.mutedText, fontSize = Type.micro)
+            (usages as? UsageFinder.Result.Found)?.let {
+                Text("사용처 %,d곳".format(it.hits.size), color = p.accent, fontSize = Type.micro)
+            }
+            (usages as? UsageFinder.Result.Failed)?.let {
+                Text(it.reason, color = p.warn, fontSize = Type.micro)
             }
         }
 

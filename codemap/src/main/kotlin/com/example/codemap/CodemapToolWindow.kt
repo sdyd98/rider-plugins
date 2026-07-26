@@ -51,14 +51,18 @@ class CodemapToolWindow : ToolWindowFactory, DumbAware {
             toolWindow.disposable,
         )
 
-        // Reload when the store changes on disk, so editing the note in an editor tab (or a write that
-        // arrives over MCP while you watch) shows up without anyone pressing refresh.
+        // Reload when either side of the verdict changes on disk: the note itself (written over MCP, by
+        // the CLI, or edited in a tab) or the SOURCE the verdict is about. Watching only the store would
+        // leave the panel asserting "분석됨" about a file that has since been edited.
         project.messageBus.connect(toolWindow.disposable)
             .subscribe(
                 VirtualFileManager.VFS_CHANGES,
                 object : BulkFileListener {
                     override fun after(events: List<VFileEvent>) {
-                        if (events.any { it.path.contains("/${CodemapPaths.DIR}/") }) vm.reload()
+                        val touched = events.any { e ->
+                            e.path.contains("/${CodemapPaths.DIR}/") || vm.dependsOn(e.path)
+                        }
+                        if (touched) vm.reload()
                     }
                 },
             )

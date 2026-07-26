@@ -1,5 +1,11 @@
 package com.example.codemap
 
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.hoverable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -7,6 +13,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.input.TextFieldState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
@@ -168,9 +175,11 @@ private fun CaretFocus(note: JsonObject, s: CodemapState.Loaded, vm: CodemapView
             // Collapsing them under a single label would make whichever name we chose a lie.
             ActionButton("호출 그래프", p, primary = false) { vm.openGraph(name) }
             s.functionLoc[name]?.let { loc ->
-                ActionButton("사용처 찾기", p, primary = false) { vm.showUsages(loc, name) }
+                ActionButton("사용처 찾기", p, primary = false) { vm.findUsages(loc, name) }
             }
         }
+
+        UsageList(s.rel, name, vm, p)
 
         EditableList(
             f.strings("gotchas"),
@@ -213,6 +222,66 @@ private fun CallGraphFor(
 
     Text("이 파일 안에서", color = p.mutedText, fontSize = Type.micro, modifier = Modifier.padding(top = Space.sm))
     CallGraph(callers.map(::node), name, callees.map(::node), p)
+}
+
+/**
+ * What Rider found, listed here rather than in its own window.
+ *
+ * Grouped by file with the line number kept visible, because a usage list is read to decide where to go
+ * next; each row navigates. The count is stated plainly — unlike the call graph above it, this one IS
+ * exhaustive, and the difference is worth being obvious about.
+ */
+@Composable
+private fun UsageList(rel: String, name: String, vm: CodemapViewModel, p: CodemapPalette) {
+    when (val u = vm.usages) {
+        CodemapViewModel.Usages.Idle -> Unit
+
+        CodemapViewModel.Usages.Searching ->
+            Text("사용처 찾는 중…", color = p.mutedText, fontSize = Type.label, modifier = Modifier.padding(top = Space.xs))
+
+        is CodemapViewModel.Usages.Failed ->
+            Text("사용처 — ${u.reason}", color = p.warn, fontSize = Type.micro, modifier = Modifier.padding(top = Space.xs))
+
+        is CodemapViewModel.Usages.Found -> {
+            // A result belongs to one file's one function; anything else on screen renders nothing.
+            if (u.symbol != name || u.rel != rel) return
+            Row(
+                Modifier.fillMaxWidth().padding(top = Space.sm),
+                horizontalArrangement = Arrangement.spacedBy(Space.xs),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text("사용처", color = p.text, fontSize = Type.label, fontWeight = FontWeight.SemiBold)
+                Text("%,d곳".format(u.hits.size), color = p.mutedText, fontSize = Type.micro)
+                Text("Rider 검색", color = p.mutedText, fontSize = Type.micro)
+            }
+            if (u.hits.isEmpty()) {
+                Text("없음", color = p.mutedText, fontSize = Type.label)
+                return
+            }
+            u.hits.groupBy { it.fileName }.forEach { (file, hits) ->
+                Text(file, color = p.mutedText, fontSize = Type.micro, modifier = Modifier.padding(top = Space.xs))
+                hits.forEach { UsageRow(it, p) }
+            }
+        }
+    }
+}
+
+@Composable
+private fun UsageRow(hit: UsageFinder.Hit, p: CodemapPalette) {
+    val interaction = remember { MutableInteractionSource() }
+    val hovered by interaction.collectIsHoveredAsState()
+    val bg by animateColorAsState(if (hovered && hit.canNavigate) p.surfaceHover else androidx.compose.ui.graphics.Color.Transparent)
+    Row(
+        Modifier.fillMaxWidth()
+            .background(bg, RoundedCornerShape(Radii.sm))
+            .hoverable(interaction)
+            .let { m -> if (hit.canNavigate) m.clickable { hit.navigate() } else m }
+            .padding(horizontal = Space.xs, vertical = 1.dp),
+        horizontalArrangement = Arrangement.spacedBy(Space.sm),
+    ) {
+        Mono("%4d".format(hit.line), p.mutedText, size = Type.micro)
+        Mono(hit.text, if (hit.canNavigate) p.text else p.mutedText, size = Type.micro, modifier = Modifier.weight(1f))
+    }
 }
 
 /**

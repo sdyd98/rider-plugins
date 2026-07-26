@@ -106,8 +106,8 @@ class GraphViewModel(private val project: Project, initialFocus: String) {
         }
     }
 
-    /** Hand the exhaustive question to Rider, from the graph as well as from the panel. */
-    fun showUsages(node: CallIndex.Node) {
+    /** The exhaustive answer, resolved by Rider and reported back here rather than in its own window. */
+    fun findUsages(node: CallIndex.Node, onResult: (UsageFinder.Result) -> Unit) {
         val s = store ?: return
         val note = s.readNote(node.file) ?: return
         val anchor = (note.get("functions") as? com.google.gson.JsonArray)
@@ -118,7 +118,7 @@ class GraphViewModel(private val project: Project, initialFocus: String) {
         covered.forEach { rel ->
             val f = s.resolve(rel).takeIf { it.isFile } ?: return@forEach
             val hit = FileFacts.findAnchors(f, listOf(anchor)).values.firstOrNull() ?: return@forEach
-            CodemapViewModel(project).showUsages(CodemapState.FnLoc(rel, hit.line, hit.occurrences), node.name)
+            UsageFinder.find(project, s.root, rel, hit.line, node.name, onResult)
             return
         }
     }
