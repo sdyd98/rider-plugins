@@ -83,7 +83,6 @@ class NoteStore(val root: File, private val today: () -> String = { LocalDate.no
     fun writeNote(relFile: String, note: JsonObject): JsonObject {
         val key = noteKeyFor(relFile)
         val dirRel = relFile.substringBeforeLast('/', "")
-
         val previous = readNote(relFile)
 
         val stamped = note.deepCopy()
@@ -94,8 +93,10 @@ class NoteStore(val root: File, private val today: () -> String = { LocalDate.no
         // file is written a few functions at a time, and an answer that covers ten of forty functions
         // must not take the other thirty with it.
         if (previous != null) {
-            stamped.add("functions", mergeByName(previous.get("functions") as? JsonArray, stamped.get("functions") as? JsonArray))
-            if (stamped.get("functions").let { it is JsonArray && it.isEmpty }) stamped.remove("functions")
+            listOf("functions", "flows").forEach { key ->
+                stamped.add(key, mergeByName(previous.get(key) as? JsonArray, stamped.get(key) as? JsonArray))
+                if (stamped.get(key).let { it is JsonArray && it.isEmpty }) stamped.remove(key)
+            }
             // Human corrections last: they are restored on top of whatever the analysis produced.
             (previous.get(MANUAL) as? JsonObject)?.let { manual ->
                 overlayManual(stamped, manual)
@@ -235,6 +236,35 @@ class NoteStore(val root: File, private val today: () -> String = { LocalDate.no
         return writeNote(relFile, next)
     }
 
+    /**
+     * Add [flows] to the note's `flows`, matched by `name` — the same upsert as [writeFunctions], for the
+     * same reason turned up a level.
+     *
+     * A sequence diagram is something a person asked for by name ("로그인부터 월드 입장까지"), one at a
+     * time. Each answer must therefore ARRIVE ALONGSIDE the ones already there: replacing the array would
+     * make every new scenario cost you the last one, which is the opposite of how they get collected.
+     */
+    fun writeFlows(relFile: String, flows: JsonArray): JsonObject {
+        val existing = readNote(relFile) ?: JsonObject()
+        val next = existing.deepCopy()
+        next.add("flows", mergeByName(existing.get("flows") as? JsonArray, flows))
+        return writeNote(relFile, next)
+    }
+
+    /** Drop one flow by name — a scenario that came back wrong should not be permanent. */
+    fun removeFlow(relFile: String, name: String): JsonObject? {
+        val existing = readNote(relFile) ?: return null
+        val flows = existing.get("flows") as? JsonArray ?: return null
+        val kept = JsonArray().apply {
+            flows.mapNotNull { it as? JsonObject }.filter { nameOf(it) != name }.forEach(::add)
+        }
+        val next = existing.deepCopy()
+        if (kept.isEmpty) next.remove("flows") else next.add("flows", kept)
+        // Provenance untouched: removing a diagram someone asked for is not a re-reading of the source.
+        putNote(relFile, next)
+        return next
+    }
+
     private fun nameOf(f: JsonObject): String? =
         f.get("name")?.takeIf { it.isJsonPrimitive }?.asString?.takeIf { it.isNotBlank() }
 
@@ -292,6 +322,8 @@ class NoteStore(val root: File, private val today: () -> String = { LocalDate.no
         val requestedAt: String,
         val reason: String,
         val symbol: String = "",
+        /** A scenario to draw as a sequence diagram, in the requester's own words. */
+        val flow: String = "",
     )
 
     private val pendingFile: File get() = File(codemapDir, CodemapPaths.PENDING)
@@ -306,6 +338,7 @@ class NoteStore(val root: File, private val today: () -> String = { LocalDate.no
                 requestedAt = o.get("requestedAt")?.asString.orEmpty(),
                 reason = o.get("reason")?.asString.orEmpty(),
                 symbol = o.get("symbol")?.asString.orEmpty(),
+                flow = o.get("flow")?.asString.orEmpty(),
             )
         }
     }
@@ -318,14 +351,25 @@ class NoteStore(val root: File, private val today: () -> String = { LocalDate.no
      * typed it), the button press is cheap, so pressing 분석 요청 again without typing must not silently
      * throw away what you asked for last time. Passing a non-blank question does replace it.
      */
-    fun addPending(relFile: String, question: String, reason: String, symbol: String = "") {
-        val key = canonicalPendingPath(relFile) to symbol.trim()
+    fun addPending(
+        relFile: String,
+        question: String,
+        reason: String,
+        symbol: String = "",
+        flow: String = "",
+    ) {
+        val path = canonicalPendingPath(relFile)
+        // A file request, a "just this function" request and each requested scenario are different asks on
+        // the same file, so they queue independently instead of overwriting one another.
+        val key = Triple(path, symbol.trim(), flow.trim())
         val all = pending()
-        val existing = all.firstOrNull { canonicalPendingPath(it.path) to it.symbol == key }
-        val kept = all.filter { canonicalPendingPath(it.path) to it.symbol != key }
+        val existing = all.firstOrNull { keyOf(it) == key }
+        val kept = all.filter { keyOf(it) != key }
         val q = question.trim().ifEmpty { existing?.question.orEmpty() }
-        writePending(kept + Pending(key.first, q, today(), reason, key.second))
+        writePending(kept + Pending(path, q, today(), reason, key.second, key.third))
     }
+
+    private fun keyOf(p: Pending) = Triple(canonicalPendingPath(p.path), p.symbol, p.flow)
 
     /** Clear requests for [relFile]; with [symbol] only that one, otherwise every request on the file. */
     fun removePending(relFile: String, symbol: String? = null) {
@@ -333,6 +377,20 @@ class NoteStore(val root: File, private val today: () -> String = { LocalDate.no
         val all = pending()
         val kept = all.filter { canonicalPendingPath(it.path) != key || (symbol != null && it.symbol != symbol) }
         if (kept.size != all.size) writePending(kept)
+    }
+
+    /** Clear one requested scenario — writing that diagram IS answering it. */
+    fun removeFlowPending(relFile: String, flow: String) {
+        val key = canonicalPendingPath(relFile)
+        val all = pending()
+        val kept = all.filter { canonicalPendingPath(it.path) != key || it.flow != flow }
+        if (kept.size != all.size) writePending(kept)
+    }
+
+    /** Scenarios still queued for [relFile] — shown next to the diagrams that already exist. */
+    fun flowRequests(relFile: String): List<Pending> {
+        val key = canonicalPendingPath(relFile)
+        return pending().filter { canonicalPendingPath(it.path) == key && it.flow.isNotEmpty() }
     }
 
     /** The pending entry covering [relFile], if any (a .cpp finds the request filed under its .h). */
@@ -356,6 +414,7 @@ class NoteStore(val root: File, private val today: () -> String = { LocalDate.no
                     addProperty("path", p.path)
                     if (p.question.isNotEmpty()) addProperty("question", p.question)
                     if (p.symbol.isNotEmpty()) addProperty("symbol", p.symbol)
+                    if (p.flow.isNotEmpty()) addProperty("flow", p.flow)
                     addProperty("requestedAt", p.requestedAt)
                     addProperty("reason", p.reason)
                 })

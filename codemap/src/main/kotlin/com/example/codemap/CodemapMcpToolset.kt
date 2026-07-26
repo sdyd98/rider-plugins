@@ -45,6 +45,8 @@ class CodemapMcpToolset : McpToolset {
             "as the brief: answer it in the note (in `gotchas`/`purpose`/`threading` as fits) rather than " +
             "producing a generic summary. A request may also carry a `symbol`, narrowing it to one " +
             "function — answer that one with codemap_write_functions rather than re-analyzing the file. " +
+            "A request carrying a `flow` asks for ONE SCENARIO as a sequence diagram: answer it with " +
+            "codemap_write_flows and nothing else — do not rewrite the note around it. " +
             "A request is cleared automatically when you write its note.",
     )
     suspend fun codemap_next_pending(
@@ -64,6 +66,7 @@ class CodemapMcpToolset : McpToolset {
                         addProperty("requestedAt", p.requestedAt)
                         if (p.question.isNotEmpty()) addProperty("question", p.question)
                         if (p.symbol.isNotEmpty()) addProperty("symbol", p.symbol)
+                        if (p.flow.isNotEmpty()) addProperty("flow", p.flow)
                     })
                 }
             })
@@ -293,6 +296,49 @@ class CodemapMcpToolset : McpToolset {
             addProperty("path", rel)
             addProperty("functionsTotal", (stamped.getAsJsonArray("functions") ?: JsonArray()).size())
             add("functionAnchors", anchorReport(store, stamped))
+        }
+    }
+
+    @McpTool
+    @McpDescription(
+        "Add sequence diagrams to a note's `flows`, matched by `name` — an existing name is replaced, a " +
+            "new one is appended, and nothing else in the note is touched. This is the ONLY tool to answer " +
+            "a pending request that carries a `flow`.\n" +
+            "Each entry: {name, steps:[{from, to, call, kind, description}]}\n" +
+            "  name        string — short label for the scenario\n" +
+            "  from        string — the participant that acts (a real class/module name, never invented)\n" +
+            "  to          string — the participant acted upon\n" +
+            "  call        string — the function or packet name, as it appears in the code\n" +
+            "  kind        string — omit for a call; \"return\" for a value coming back; \"process\" for\n" +
+            "                       something one object does alone (leave `to` empty or equal to `from`);\n" +
+            "                       \"note\" for a line of explanation attached to no object\n" +
+            "  description string — one sentence on WHY this step happens, shown in the step list beside the\n" +
+            "                       diagram. `call` is what, `description` is why. Omit where it adds nothing.\n" +
+            "Steps go in execution order and are presented one at a time, so each one should stand alone. Diagrams ACCUMULATE: someone asked for each one by name, so " +
+            "sending a fifth must not cost them the other four — send only the scenario you were asked for.",
+    )
+    suspend fun codemap_write_flows(
+        @McpDescription("File path, project-relative or absolute.") path: String,
+        @McpDescription("A JSON array of flow objects.") flows: String,
+    ): String = ioJson { store ->
+        val rel = normalize(store, path) ?: error("프로젝트 안의 경로가 아닙니다: $path")
+        val parsed = runCatching { JsonParser.parseString(flows) as? JsonArray }.getOrNull()
+            ?: error("flows가 JSON 배열이 아닙니다")
+        require(!parsed.isEmpty) { "flows가 비어 있습니다" }
+        val stamped = store.writeFlows(rel, parsed)
+        // Answering the scenario clears its request; a name that was not asked for simply has none.
+        parsed.mapNotNull { (it as? JsonObject)?.get("name")?.asString }
+            .forEach { store.removeFlowPending(rel, it) }
+        json {
+            addProperty("path", rel)
+            add("flows", JsonArray().apply {
+                (stamped.getAsJsonArray("flows") ?: JsonArray()).forEach { el ->
+                    (el as? JsonObject)?.get("name")?.asString?.let { add(it) }
+                }
+            })
+            add("stillRequested", JsonArray().apply {
+                store.flowRequests(rel).forEach { add(it.flow) }
+            })
         }
     }
 

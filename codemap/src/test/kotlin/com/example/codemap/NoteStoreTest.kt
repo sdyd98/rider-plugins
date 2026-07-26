@@ -299,6 +299,111 @@ class NoteStoreTest {
         assertNull(s.readNote("Net/Untouched.h"))
     }
 
+    // ---- sequence diagrams accumulate ----
+
+    private fun flow(name: String) = JsonParser.parseString(
+        """[{"name":"$name","steps":[{"from":"Client","to":"Session","call":"REQ"}]}]""",
+    ).asJsonArray
+
+    @Test
+    fun `each requested sequence is added, not swapped in`() {
+        write("Net/World.h", "#pragma once\n")
+        val s = store()
+        s.writeNote("Net/World.h", note("월드"))
+
+        s.writeFlows("Net/World.h", flow("로그인"))
+        s.writeFlows("Net/World.h", flow("입장"))
+        s.writeFlows("Net/World.h", flow("퇴장"))
+
+        val names = s.readNote("Net/World.h")!!.getAsJsonArray("flows").map { it.asJsonObject.get("name").asString }
+        assertEquals(listOf("로그인", "입장", "퇴장"), names)
+    }
+
+    @Test
+    fun `asking for the same scenario again replaces that one diagram`() {
+        write("Net/World.h", "#pragma once\n")
+        val s = store()
+        s.writeFlows("Net/World.h", flow("로그인"))
+        s.writeFlows("Net/World.h", flow("입장"))
+        s.writeFlows("Net/World.h", JsonParser.parseString(
+            """[{"name":"로그인","steps":[{"from":"Client","to":"Session","call":"CS_LOGIN_REQ"},
+                                        {"from":"Session","to":"Client","call":"SC_LOGIN_ACK","kind":"return"}]}]""",
+        ).asJsonArray)
+
+        val flows = s.readNote("Net/World.h")!!.getAsJsonArray("flows")
+        assertEquals(listOf("로그인", "입장"), flows.map { it.asJsonObject.get("name").asString })
+        assertEquals(2, flows[0].asJsonObject.getAsJsonArray("steps").size())
+    }
+
+    @Test
+    fun `a full re-analysis does not throw away the collected diagrams`() {
+        write("Net/World.h", "#pragma once\n")
+        val s = store()
+        s.writeNote("Net/World.h", note("월드"))
+        s.writeFlows("Net/World.h", flow("로그인"))
+
+        // An analysis that says nothing about flows at all.
+        s.writeNote("Net/World.h", note("월드 — 다시 씀"))
+
+        val names = s.readNote("Net/World.h")!!.getAsJsonArray("flows").map { it.asJsonObject.get("name").asString }
+        assertEquals(listOf("로그인"), names)
+        assertEquals("월드 — 다시 씀", s.readNote("Net/World.h")!!.get("purpose").asString)
+    }
+
+    @Test
+    fun `a diagram can be removed without disturbing provenance`() {
+        write("Net/World.h", "#pragma once\n")
+        val s = store()
+        s.writeNote("Net/World.h", note("월드"))
+        s.writeFlows("Net/World.h", flow("로그인"))
+        s.writeFlows("Net/World.h", flow("입장"))
+        val at = s.readNote("Net/World.h")!!.get("analyzedAt").asString
+
+        s.removeFlow("Net/World.h", "로그인")
+
+        val after = s.readNote("Net/World.h")!!
+        assertEquals(listOf("입장"), after.getAsJsonArray("flows").map { it.asJsonObject.get("name").asString })
+        assertEquals(at, after.get("analyzedAt").asString)
+        assertEquals(NoteStore.Freshness.FRESH, s.freshness(after))
+
+        s.removeFlow("Net/World.h", "입장")
+        assertNull(s.readNote("Net/World.h")!!.get("flows"))
+    }
+
+    @Test
+    fun `a scenario request queues beside the file and function requests, not over them`() {
+        write("Net/World.h", "#pragma once\n")
+        val s = store()
+        s.addPending("Net/World.h", "락 순서", "new")
+        s.addPending("Net/World.h", "", "new", symbol = "Tick")
+        s.addPending("Net/World.h", "", "new", flow = "로그인부터 월드 입장까지")
+        s.addPending("Net/World.h", "", "new", flow = "퇴장 처리")
+
+        assertEquals(4, s.pending().size)
+        assertEquals(
+            listOf("로그인부터 월드 입장까지", "퇴장 처리"),
+            s.flowRequests("Net/World.h").map { it.flow },
+        )
+
+        // Answering one scenario leaves the others alone.
+        s.removeFlowPending("Net/World.h", "퇴장 처리")
+        assertEquals(listOf("로그인부터 월드 입장까지"), s.flowRequests("Net/World.h").map { it.flow })
+        assertEquals(3, s.pending().size)
+    }
+
+    @Test
+    fun `re-asking for the same scenario updates it instead of piling up`() {
+        write("Net/World.h", "#pragma once\n")
+        val s = store()
+        s.addPending("Net/World.h", "동기인지 비동기인지", "new", flow = "로그인")
+        s.addPending("Net/World.h", "", "new", flow = "로그인")
+
+        val reqs = s.flowRequests("Net/World.h")
+        assertEquals(1, reqs.size)
+        // A blank question does not erase the one already typed — same rule as the file-level request.
+        assertEquals("동기인지 비동기인지", reqs[0].question)
+    }
+
     // ---- a re-analysis must not undo a person's work ----
 
     @Test

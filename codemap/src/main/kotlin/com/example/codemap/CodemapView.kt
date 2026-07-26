@@ -141,11 +141,12 @@ private fun NoteSections(note: JsonObject, s: CodemapState.Loaded, vm: CodemapVi
     CaretFocus(note, s, vm, p)
 
     // ---- one click away ----
-    // Only the function index. Every other section the note holds (요약 · 주의 · 클래스 · 상태 ·
-    // 스레드/락 · 패킷 · 의존 · 흐름 · 데이터 연결) is deliberately not on screen:
+    // The function index and the sequence diagrams someone asked for. Every other section the note holds
+    // (요약 · 주의 · 클래스 · 상태 · 스레드/락 · 패킷 · 의존 · 데이터 연결) is deliberately not on screen:
     // the panel is being rebuilt from nothing, adding back only what use actually proves necessary.
     // [Details] still renders all of them and is one call away from returning.
     Functions(note, s, vm, p)
+    Sequences(note, s, vm, p)
 
     note.string("analyzedAt")?.let {
         Text("$it 분석", color = p.mutedText, fontSize = Type.micro, modifier = Modifier.padding(top = Space.md))
@@ -412,6 +413,105 @@ private fun FunctionList(
     }
     if (query.isNotEmpty()) {
         Text("%,d / %,d".format(shown.size, fns.size), color = p.mutedText, fontSize = Type.micro)
+    }
+}
+
+/**
+ * The sequence diagrams for this file, and the way to ask for another.
+ *
+ * These are collected, not generated: each one exists because someone named a scenario and asked for it,
+ * so they accumulate under their own names and a new request never costs you an old diagram. That is also
+ * why each has a × — a collection you cannot prune stops being one.
+ *
+ * With nothing collected yet the whole section is a single button, because an empty "시퀀스 0개" heading
+ * would be a section that only tells you it has nothing to say.
+ */
+@Composable
+private fun Sequences(note: JsonObject, s: CodemapState.Loaded, vm: CodemapViewModel, p: CodemapPalette) {
+    val flows = note.objects("flows")
+    var adding by remember(s.rel) { mutableStateOf(false) }
+    var open by remember { mutableStateOf(false) }
+    val scenario = remember(s.rel) { TextFieldState() }
+
+    if (flows.isEmpty() && s.flowRequests.isEmpty()) {
+        Row(Modifier.padding(top = Space.xs)) {
+            if (adding) SequenceRequest(scenario, vm, p) { adding = false }
+            else ActionButton("＋ 시퀀스 요청", p, primary = false) { adding = true }
+        }
+        return
+    }
+
+    val subtitle = buildList {
+        if (flows.isNotEmpty()) add("%,d개".format(flows.size))
+        if (s.flowRequests.isNotEmpty()) add("요청 %,d건".format(s.flowRequests.size))
+    }.joinToString(" · ")
+
+    CollapsibleSection("시퀀스", subtitle, open, p, { open = !open }) {
+        // Names, not drawings. A sequence diagram wants more width than a tool window has, so clicking one
+        // opens the viewer tab — the panel's job here is to say which ones exist.
+        flows.forEach { f ->
+            val name = f.string("name").orEmpty()
+            LinkRow(name, "%,d단계".format(f.array("steps")?.size() ?: 0), p) { vm.openSequence(name) }
+        }
+
+        // A request that has not been answered yet is shown where its diagram will appear, so the queue is
+        // visible in the place you are waiting for it rather than only in a tool response.
+        s.flowRequests.forEach { req ->
+            Text(
+                "⋯ ${req.flow}  — ${req.requestedAt} 요청됨",
+                color = p.mutedText,
+                fontSize = Type.micro,
+                modifier = Modifier.padding(top = Space.xs),
+            )
+        }
+
+        if (adding) SequenceRequest(scenario, vm, p) { adding = false }
+        else {
+            Row(Modifier.padding(top = Space.sm)) {
+                ActionButton("＋ 시퀀스 요청", p, primary = false) { adding = true }
+            }
+        }
+    }
+}
+
+/** Name the scenario, then run it now or leave it for the batch. */
+@Composable
+private fun SequenceRequest(
+    scenario: TextFieldState,
+    vm: CodemapViewModel,
+    p: CodemapPalette,
+    onClose: () -> Unit,
+) {
+    val focus = remember { FocusRequester() }
+    Column(Modifier.fillMaxWidth()) {
+        TextField(
+            state = scenario,
+            placeholder = { Text("시나리오 — 예: 클라이언트 로그인부터 월드 입장까지") },
+            modifier = Modifier.fillMaxWidth().padding(vertical = Space.xs)
+                .focusRequester(focus)
+                .onPreviewKeyEvent { e ->
+                    if (e.type == KeyEventType.KeyDown && e.key == Key.Escape) {
+                        scenario.edit { replace(0, length, "") }
+                        onClose()
+                        true
+                    } else {
+                        false
+                    }
+                },
+        )
+        LaunchedEffect(Unit) { focus.requestFocus() }
+        Row(horizontalArrangement = Arrangement.spacedBy(Space.sm)) {
+            ActionButton("그리기", p) {
+                vm.addSequence(scenario.text.toString())
+                scenario.edit { replace(0, length, "") }
+                onClose()
+            }
+            ActionButton("큐에 넣기", p, primary = false) {
+                vm.queueSequence(scenario.text.toString())
+                scenario.edit { replace(0, length, "") }
+                onClose()
+            }
+        }
     }
 }
 

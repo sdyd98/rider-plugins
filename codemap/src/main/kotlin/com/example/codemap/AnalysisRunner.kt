@@ -80,6 +80,8 @@ class AnalysisRunner(private val store: NoteStore) {
         relPath: String,
         question: String,
         symbol: String = "",
+        /** A scenario to draw as a sequence diagram; the result is ADDED to the note's `flows`. */
+        flow: String = "",
         engine: Engine = Engine.CLAUDE,
         explicitPath: String? = null,
         timeoutMinutes: Long = 10,
@@ -90,7 +92,7 @@ class AnalysisRunner(private val store: NoteStore) {
 
         // The existing note goes into the prompt: a re-analysis should correct what is there, not replace
         // it with whatever this run happened to notice.
-        val prompt = NoteRequest.prompt(relPath, question, symbol, store.readNote(relPath))
+        val prompt = NoteRequest.prompt(relPath, question, symbol, store.readNote(relPath), flow)
         val answerFile = File.createTempFile("codemap-note", ".json").also { it.deleteOnExit() }
         val cmd = cli.command(bin, prompt, answerFile)
 
@@ -132,6 +134,19 @@ class AnalysisRunner(private val store: NoteStore) {
         val note = cli.noteFrom(raw, answerFile)
             ?: return Result.Failed("응답에서 노트 JSON을 찾지 못했습니다")
         answerFile.delete()
+
+        // A scenario request touches only `flows`, and only by adding: the answer is one diagram among
+        // however many have been collected, never a new version of the whole note.
+        if (flow.isNotBlank()) {
+            val flows = note.get("flows") as? com.google.gson.JsonArray
+                ?: return Result.Failed("응답에 flows 배열이 없습니다")
+            if (flows.isEmpty) return Result.Failed("시퀀스를 만들지 못했습니다")
+            return runCatching {
+                val stamped = store.writeFlows(relPath, flows)
+                store.removeFlowPending(relPath, flow)
+                Result.Ok(stamped)
+            }.getOrElse { Result.Failed("시퀀스 저장 실패: ${it.message}") }
+        }
 
         return runCatching { Result.Ok(store.writeNote(relPath, note)) }
             .getOrElse { Result.Failed("노트 저장 실패: ${it.message}") }

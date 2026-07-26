@@ -40,6 +40,8 @@
              is registered and nothing is written to disk. -->
         <fileEditorProvider implementation="com.example.codemap.CodemapGraphEditorProvider"/>
 
+        <!-- The sequence viewer, opened from the note panel's 시퀀스 list. Same LightVirtualFile approach. -->
+        <fileEditorProvider implementation="com.example.codemap.CodemapSequenceEditorProvider"/>
 
         <!-- The note view: follows the selected editor tab.
              The icon is REQUIRED, not decoration: the new UI's tool window stripe only shows buttons for

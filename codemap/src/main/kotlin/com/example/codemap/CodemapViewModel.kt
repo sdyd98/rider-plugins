@@ -47,6 +47,8 @@ sealed interface CodemapState {
         val commitsSince: Int?,
         /** Someone has corrected this note by hand — those corrections outlive a re-analysis. */
         val edited: Boolean,
+        /** Scenarios queued for a sequence diagram but not drawn yet. */
+        val flowRequests: List<NoteStore.Pending>,
     ) : CodemapState {
         val name: String get() = rel.substringAfterLast('/')
         val dir: String get() = rel.substringBeforeLast('/', "")
@@ -110,9 +112,9 @@ class CodemapViewModel(private val project: Project) {
     private var current: VirtualFile? = null
 
     fun select(file: VirtualFile?) {
-        // Our own graph tab is not a source file; selecting it should leave the note on screen rather
-        // than replacing it with "outside the codemap root".
-        if (file is CodemapGraphFile) return
+        // Our own tabs are not source files; selecting one should leave the note on screen rather than
+        // replacing it with "outside the codemap root".
+        if (file is CodemapGraphFile || file is CodemapSequenceFile) return
         current = file
         focusedFunction = null
         reload()
@@ -191,6 +193,7 @@ class CodemapViewModel(private val project: Project) {
             pendingTotal = s.pending().size,
             commitsSince = since,
             edited = s.edited(note),
+            flowRequests = s.flowRequests(rel),
         )
     }
 
@@ -281,6 +284,53 @@ class CodemapViewModel(private val project: Project) {
     fun chooseEngine(e: Engine) {
         engine = e
         ApplicationManager.getApplication().getService(CodemapSettings::class.java)?.engine = e
+    }
+
+    /**
+     * Ask for one scenario as a sequence diagram, now.
+     *
+     * Separate from [analyzeNow] because the two write different things: this one only ever ADDS to
+     * `flows`, so asking for a fifth diagram cannot cost you the other four, and it leaves the rest of the
+     * note — including anything a person corrected — untouched.
+     */
+    fun addSequence(scenario: String, question: String = "") {
+        val loaded = state as? CodemapState.Loaded ?: return
+        val s = store ?: return
+        if (scenario.isBlank() || analysis is Analysis.Running) return
+
+        analysis = Analysis.Running(loaded.rel)
+        val r = AnalysisRunner(s).also { runner = it }
+        val chosen = engine
+        ApplicationManager.getApplication().executeOnPooledThread {
+            val explicit = ApplicationManager.getApplication()
+                .getService(CodemapSettings::class.java)?.pathFor(chosen)
+            val result = r.analyze(
+                loaded.rel, question, flow = scenario, engine = chosen, explicitPath = explicit,
+            )
+            ApplicationManager.getApplication().invokeLater {
+                analysis = when (result) {
+                    is AnalysisRunner.Result.Ok -> Analysis.Idle
+                    is AnalysisRunner.Result.Failed -> Analysis.Failed(result.reason)
+                }
+            }
+            reload()
+        }
+    }
+
+    /** Queue a scenario for the batch path instead of running it now. */
+    fun queueSequence(scenario: String, question: String = "") {
+        val loaded = state as? CodemapState.Loaded ?: return
+        if (scenario.isBlank()) return
+        ApplicationManager.getApplication().executeOnPooledThread {
+            runCatching { store?.addPending(loaded.rel, question, "new", flow = scenario) }
+            reload()
+        }
+    }
+
+    /** Open the sequence viewer tab on one of this file's diagrams. */
+    fun openSequence(name: String) {
+        val loaded = state as? CodemapState.Loaded ?: return
+        ApplicationManager.getApplication().invokeLater { openSequence(project, loaded.rel, name) }
     }
 
     /**

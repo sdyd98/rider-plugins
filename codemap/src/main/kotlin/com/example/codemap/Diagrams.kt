@@ -19,11 +19,22 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathEffect
+import androidx.compose.ui.graphics.drawscope.DrawScope
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.TextMeasurer
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.drawText
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -47,133 +58,265 @@ import org.jetbrains.jewel.ui.component.Text
  * disagree with the labels placed over it. Wide diagrams scroll horizontally rather than shrinking —
  * an unreadable diagram that fits is worse than a readable one you nudge sideways.
  */
-// Sized so four participants still fit a tool window at its usual width; beyond that the diagram
-// scrolls sideways rather than shrinking its text into unreadability.
-private val COL_W: Dp = 94.dp
-private val HEAD_H: Dp = 26.dp
-private val STEP_H: Dp = 30.dp
-private val BOX_W: Dp = 86.dp
-
 /** A parsed sequence step. [ret] marks a value coming back rather than a call going out. */
 data class SeqStep(val from: String, val to: String, val label: String, val ret: Boolean)
 
+// Base metrics at scale 1, sized for a tool window; the viewer tab scales them up.
+private const val CARD_H = 24f
+private const val CARD_PAD = 9f
+private const val STEP_H = 34f
+private const val GUTTER = 24f
+private const val NAME_SP = 10.5f
+private const val LABEL_SP = 10f
+private const val NUM_SP = 8.5f
+private const val COL_GAP = 26f
+private const val EDGE = 10f
+
+/**
+ * A sequence diagram in the same visual language as [FlowChart]: numbered steps down the left, identifiers
+ * in content-sized rounded cards, thin muted connectors.
+ *
+ * Laid out by MEASURING the text rather than on a fixed column grid. The grid version had to ellipsize
+ * every participant whose name was longer than 86dp — which in C++ is most of them — and a diagram that
+ * hides the names it is about answers nothing. Column spacing also grows to fit the widest label that
+ * crosses it, so an arrow's caption never has to be truncated or overlap its neighbour.
+ *
+ * Everything is one Canvas: the drawing and the labels are placed by the same arithmetic, so they cannot
+ * disagree. Wide diagrams scroll sideways instead of shrinking — an unreadable diagram that fits is worse
+ * than a readable one you nudge across.
+ */
 @Composable
-fun SequenceDiagram(participants: List<String>, steps: List<SeqStep>, palette: CodemapPalette) {
+fun SequenceDiagram(
+    participants: List<String>,
+    steps: List<SeqStep>,
+    palette: CodemapPalette,
+    scale: Float = 1f,
+) {
     if (participants.isEmpty() || steps.isEmpty()) return
+    val measurer = rememberTextMeasurer()
     val index = participants.withIndex().associate { (i, p) -> p to i }
-    val totalW = COL_W * participants.size
-    val totalH = HEAD_H + STEP_H * steps.size + Space.sm
+
+    val nameStyle = TextStyle(
+        color = palette.text,
+        fontSize = (NAME_SP * scale).sp,
+        fontFamily = FontFamily.Monospace,
+        fontWeight = FontWeight.Medium,
+    )
+    val labelStyle = TextStyle(
+        color = palette.text,
+        fontSize = (LABEL_SP * scale).sp,
+        fontFamily = FontFamily.Monospace,
+    )
+    val numStyle = TextStyle(
+        color = palette.accent,
+        fontSize = (NUM_SP * scale).sp,
+        fontWeight = FontWeight.SemiBold,
+    )
+
+    val density = LocalDensity.current
+    val layout = remember(participants, steps, scale, density) {
+        sequenceLayout(participants, steps, scale, measurer, nameStyle, labelStyle)
+    }
 
     Box(
-        Modifier.fillMaxWidth()
-            .horizontalScroll(rememberScrollState())
-            .padding(vertical = Space.xs),
+        Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(vertical = Space.xs),
     ) {
-        Box(Modifier.width(totalW).height(totalH)) {
-            // Lifelines and arrows: one canvas under everything, so the geometry is computed once.
-            Canvas(Modifier.width(totalW).height(totalH)) {
-                val colW = COL_W.toPx()
-                val headH = HEAD_H.toPx()
-                val stepH = STEP_H.toPx()
-                val line = palette.border.copy(alpha = 0.75f)
+        Canvas(
+            Modifier
+                .width(with(density) { layout.width.toDp() })
+                .height(with(density) { layout.height.toDp() }),
+        ) {
+            val cardH = CARD_H * scale
+            val stepH = STEP_H * scale
+            val top = cardH + EDGE * scale
+            val lifeline = palette.border.copy(alpha = 0.55f)
 
-                participants.indices.forEach { i ->
-                    val x = colW * i + colW / 2f
-                    drawLine(
-                        color = line,
-                        start = Offset(x, headH),
-                        end = Offset(x, size.height),
-                        strokeWidth = 1f,
-                        pathEffect = PathEffect.dashPathEffect(floatArrayOf(3f, 4f)),
-                    )
+            // Lifelines first, so everything else sits on top of them.
+            layout.centers.forEach { x ->
+                drawLine(
+                    lifeline,
+                    Offset(x, top),
+                    Offset(x, size.height - 2f),
+                    1f * scale,
+                    pathEffect = PathEffect.dashPathEffect(floatArrayOf(3f * scale, 4f * scale)),
+                )
+            }
+
+            steps.forEachIndexed { k, step ->
+                val fromI = index[step.from] ?: return@forEachIndexed
+                val toI = index[step.to] ?: return@forEachIndexed
+                val y = top + stepH * k + stepH * 0.62f
+                val ink = if (step.ret) palette.mutedText else palette.accent
+                val dash = if (step.ret) PathEffect.dashPathEffect(floatArrayOf(5f * scale, 3f * scale)) else null
+                val x1 = layout.centers[fromI]
+                val x2 = layout.centers[toI]
+
+                // The step number, in the gutter — the same numbered rhythm the flow chart reads with.
+                val numLay = measurer.measure("${k + 1}", numStyle)
+                val r = 8f * scale
+                drawCircle(palette.accent.copy(alpha = 0.12f), r, Offset(GUTTER * scale / 2f, y))
+                drawText(
+                    numLay,
+                    topLeft = Offset(
+                        GUTTER * scale / 2f - numLay.size.width / 2f,
+                        y - numLay.size.height / 2f,
+                    ),
+                )
+
+                val labelLay = measurer.measure(step.label, labelStyle)
+                val labelY: Float
+                val labelCx: Float
+
+                if (fromI == toI) {
+                    // Self-call: a rounded bracket to the right of the lifeline, label beside it.
+                    val w = 16f * scale
+                    val h = stepH * 0.26f
+                    val path = Path().apply {
+                        moveTo(x1, y - h)
+                        lineTo(x1 + w, y - h)
+                        lineTo(x1 + w, y + h)
+                        lineTo(x1 + 4f * scale, y + h)
+                    }
+                    drawPath(path, ink, style = Stroke(width = 1.3f * scale, pathEffect = dash))
+                    arrowHead(Offset(x1 + 2f * scale, y + h), -1f, ink, scale, open = step.ret)
+                    labelCx = x1 + w + 6f * scale + labelLay.size.width / 2f
+                    labelY = y - labelLay.size.height / 2f
+                } else {
+                    drawLine(ink, Offset(x1, y), Offset(x2, y), 1.3f * scale, pathEffect = dash)
+                    arrowHead(Offset(x2, y), if (x2 > x1) 1f else -1f, ink, scale, open = step.ret)
+                    labelCx = (x1 + x2) / 2f
+                    labelY = y - labelLay.size.height - 4f * scale
                 }
 
-                steps.forEachIndexed { k, s ->
-                    val fromI = index[s.from] ?: return@forEachIndexed
-                    val toI = index[s.to] ?: return@forEachIndexed
-                    val y = headH + stepH * k + stepH / 2f
-                    val color = if (s.ret) palette.mutedText else palette.accent
-                    val effect = if (s.ret) PathEffect.dashPathEffect(floatArrayOf(4f, 3f)) else null
-                    val x1 = colW * fromI + colW / 2f
-                    val x2 = colW * toI + colW / 2f
-
-                    if (fromI == toI) {
-                        // Self-call: a small bracket to the right of the lifeline.
-                        val w = colW * 0.22f
-                        val h = stepH * 0.34f
-                        drawLine(color, Offset(x1, y - h), Offset(x1 + w, y - h), 1.4f, pathEffect = effect)
-                        drawLine(color, Offset(x1 + w, y - h), Offset(x1 + w, y + h), 1.4f, pathEffect = effect)
-                        drawLine(color, Offset(x1 + w, y + h), Offset(x1, y + h), 1.4f, pathEffect = effect)
-                        arrowHead(x1, y + h, -1f, color)
-                    } else {
-                        drawLine(color, Offset(x1, y), Offset(x2, y), 1.4f, pathEffect = effect)
-                        arrowHead(x2, y, if (x2 > x1) 1f else -1f, color)
-                    }
+                // A plate behind the caption: it sits above its arrow and would otherwise be crossed by
+                // every lifeline it spans.
+                if (step.label.isNotEmpty()) {
+                    val padX = 4f * scale
+                    val plate = Rect(
+                        left = labelCx - labelLay.size.width / 2f - padX,
+                        top = labelY - 1f * scale,
+                        right = labelCx + labelLay.size.width / 2f + padX,
+                        bottom = labelY + labelLay.size.height + 1f * scale,
+                    )
+                    drawRoundRect(
+                        palette.surface,
+                        plate.topLeft,
+                        plate.size,
+                        CornerRadius(3f * scale),
+                    )
+                    drawText(
+                        labelLay,
+                        color = if (step.ret) palette.mutedText else palette.text,
+                        topLeft = Offset(labelCx - labelLay.size.width / 2f, labelY),
+                    )
                 }
             }
 
-            // Participant headers.
-            Row(Modifier.height(HEAD_H)) {
-                participants.forEach { name ->
-                    Box(Modifier.width(COL_W), contentAlignment = Alignment.Center) {
-                        Box(
-                            Modifier.width(BOX_W)
-                                .background(palette.subtle, RoundedCornerShape(Radii.sm))
-                                .border(BorderStroke(1.dp, palette.border.copy(alpha = 0.6f)), RoundedCornerShape(Radii.sm))
-                                .padding(horizontal = Space.xs, vertical = 3.dp),
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Text(
-                                name,
-                                color = palette.text,
-                                fontSize = 9.5.sp,
-                                fontFamily = FontFamily.Monospace,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                                textAlign = TextAlign.Center,
-                            )
-                        }
-                    }
-                }
-            }
-
-            // Labels ride above their arrow, spanning the columns the arrow crosses.
-            steps.forEachIndexed { k, s ->
-                val fromI = index[s.from] ?: return@forEachIndexed
-                val toI = index[s.to] ?: return@forEachIndexed
-                val left = minOf(fromI, toI)
-                val span = if (fromI == toI) 1 else maxOf(fromI, toI) - left + 1
-                Box(
-                    Modifier
-                        .offset(x = COL_W * left, y = HEAD_H + STEP_H * k)
-                        .width(COL_W * span)
-                        .height(STEP_H / 2),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Text(
-                        s.label,
-                        color = if (s.ret) palette.mutedText else palette.text,
-                        fontSize = 9.5.sp,
-                        fontFamily = FontFamily.Monospace,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                }
+            // Participant cards last: they cap the lifelines they own.
+            participants.forEachIndexed { i, name ->
+                val lay = measurer.measure(name, nameStyle)
+                val w = lay.size.width + CARD_PAD * scale * 2
+                val left = layout.centers[i] - w / 2f
+                val rect = Rect(left, 0f, left + w, cardH)
+                drawRoundRect(palette.subtle, rect.topLeft, rect.size, CornerRadius(5f * scale))
+                drawRoundRect(
+                    palette.border.copy(alpha = 0.55f),
+                    rect.topLeft,
+                    rect.size,
+                    CornerRadius(5f * scale),
+                    style = Stroke(1f * scale),
+                )
+                drawText(
+                    lay,
+                    topLeft = Offset(
+                        layout.centers[i] - lay.size.width / 2f,
+                        cardH / 2f - lay.size.height / 2f,
+                    ),
+                )
             }
         }
     }
 }
 
-/** A short filled triangle at the end of an arrow. [dir] is +1 pointing right, -1 pointing left. */
-private fun androidx.compose.ui.graphics.drawscope.DrawScope.arrowHead(
-    x: Float,
-    y: Float,
-    dir: Float,
-    color: Color,
-) {
-    val len = 5f
-    drawLine(color, Offset(x, y), Offset(x - len * dir, y - 3.5f), 1.4f)
-    drawLine(color, Offset(x, y), Offset(x - len * dir, y + 3.5f), 1.4f)
+/** Pixel geometry for one diagram: where each lifeline sits, and how much room the whole thing needs. */
+private class SequenceGeometry(val centers: FloatArray, val width: Float, val height: Float)
+
+/**
+ * Column centres, spaced so that every label fits between the two lifelines it crosses.
+ *
+ * A one-hop caption is the tight case — `AccountDb -> PlayerSession : Account` has only that gap to live
+ * in — so adjacent columns are pushed apart by the widest single-hop label between them. Longer arrows get
+ * that room for free.
+ */
+private fun sequenceLayout(
+    participants: List<String>,
+    steps: List<SeqStep>,
+    scale: Float,
+    measurer: TextMeasurer,
+    nameStyle: TextStyle,
+    labelStyle: TextStyle,
+): SequenceGeometry {
+    val halves = participants.map { measurer.measure(it, nameStyle).size.width / 2f + CARD_PAD * scale }
+    val selfLabel = steps.filter { it.from == it.to }
+        .groupBy { it.from }
+        .mapValues { (_, group) ->
+            group.maxOf { measurer.measure(it.label, labelStyle).size.width.toFloat() } + 24f * scale
+        }
+
+    // The widest one-hop caption crossing each gap.
+    val gapLabel = FloatArray(maxOf(participants.size - 1, 0))
+    val index = participants.withIndex().associate { (i, p) -> p to i }
+    steps.forEach { st ->
+        val a = index[st.from] ?: return@forEach
+        val b = index[st.to] ?: return@forEach
+        if (a == b || kotlin.math.abs(a - b) != 1) return@forEach
+        val g = minOf(a, b)
+        gapLabel[g] = maxOf(gapLabel[g], measurer.measure(st.label, labelStyle).size.width + 12f * scale)
+    }
+
+    val centers = FloatArray(participants.size)
+    var x = GUTTER * scale + halves.firstOrNull().orZero()
+    centers[0] = x
+    for (i in 1 until participants.size) {
+        val needed = maxOf(
+            halves[i - 1] + halves[i] + COL_GAP * scale,
+            gapLabel.getOrElse(i - 1) { 0f },
+            // A self-call on the previous column draws its bracket and caption into this gap.
+            selfLabel[participants[i - 1]] ?: 0f,
+        )
+        x += needed
+        centers[i] = x
+    }
+
+    val lastSelf = selfLabel[participants.last()] ?: 0f
+    val width = centers.last() + maxOf(halves.last(), lastSelf) + EDGE * scale
+    val height = CARD_H * scale + EDGE * scale + STEP_H * scale * steps.size + EDGE * scale
+    return SequenceGeometry(centers, width, height)
+}
+
+private fun Float?.orZero(): Float = this ?: 0f
+
+/**
+ * The head of an arrow. Filled for a call, open for a return — the convention that lets you tell the two
+ * apart without reading the caption. [dir] is +1 pointing right, -1 pointing left.
+ */
+private fun DrawScope.arrowHead(tip: Offset, dir: Float, color: Color, scale: Float, open: Boolean) {
+    val len = 6f * scale
+    val half = 3.6f * scale
+    if (open) {
+        drawLine(color, tip, Offset(tip.x - len * dir, tip.y - half), 1.3f * scale)
+        drawLine(color, tip, Offset(tip.x - len * dir, tip.y + half), 1.3f * scale)
+        return
+    }
+    drawPath(
+        Path().apply {
+            moveTo(tip.x, tip.y)
+            lineTo(tip.x - len * dir, tip.y - half)
+            lineTo(tip.x - len * dir, tip.y + half)
+            close()
+        },
+        color,
+    )
 }
 
 /**

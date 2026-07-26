@@ -21,7 +21,83 @@ object NoteRequest {
      * 재분석 into a correction rather than a rewrite: an agent that cannot see the current note has no
      * choice but to produce a whole new one, and everything it happens not to mention would be lost.
      */
-    fun prompt(relPath: String, question: String, symbol: String, existing: JsonObject?): String = buildString {
+    fun prompt(
+        relPath: String,
+        question: String,
+        symbol: String,
+        existing: JsonObject?,
+        flow: String = "",
+    ): String {
+        if (flow.isNotBlank()) return sequencePrompt(relPath, flow, question, existing)
+        return notePrompt(relPath, question, symbol, existing)
+    }
+
+    /**
+     * One scenario, drawn as a sequence diagram.
+     *
+     * Deliberately a NARROW request: the answer carries a single `flows` entry and nothing else, because
+     * the store adds it to whatever diagrams are already there. Asking for a whole note here would put an
+     * agent in the position of re-deciding the rest of the note as a side effect of one question.
+     */
+    private fun sequencePrompt(relPath: String, flow: String, question: String, existing: JsonObject?): String =
+        buildString {
+            appendLine("이 저장소의 C++ 코드를 읽고, 요청된 시나리오 하나를 시퀀스 다이어그램으로 만들어라.")
+            appendLine()
+            appendLine("기준 파일: $relPath  (같은 이름의 .h/.cpp 짝이 있으면 둘 다 읽어라)")
+            appendLine("시나리오: $flow")
+            if (question.isNotBlank()) {
+                appendLine()
+                appendLine("개발자가 덧붙인 것 — 이것에 답하는 것이 최우선이다:")
+                appendLine("  $question")
+            }
+            existingFlowNames(existing).takeIf { it.isNotEmpty() }?.let { names ->
+                appendLine()
+                appendLine("이미 있는 시퀀스: ${names.joinToString(", ")}")
+                appendLine("이것들을 다시 만들지 마라. 요청된 시나리오 하나만 내보내라 (같은 이름이면 교체된다).")
+            }
+            appendLine()
+            appendLine("출력 형식 — 오직 이 JSON 객체 하나만. 설명도 코드펜스도 붙이지 마라.")
+            appendLine(FLOW_SCHEMA)
+            appendLine()
+            appendLine("규칙:")
+            appendLine("- name 은 이 흐름을 부를 짧은 이름. 요청된 시나리오를 그대로 써도 된다.")
+            appendLine("- 참가자(from/to)는 실제 클래스·모듈 이름을 써라. 추측한 이름을 만들지 마라.")
+            appendLine("- call 은 실제 함수 이름이나 패킷 이름. 코드에서 확인한 것만.")
+            appendLine("- kind 로 단계 종류를 밝혀라:")
+            appendLine("    (생략)   A가 B를 호출 — 가장 흔한 경우")
+            appendLine("    return   값이 돌아옴 (점선 화살표)")
+            appendLine("    process  한 객체가 혼자 하는 일 (검증, 상태 변경 등). to 는 from 과 같게 두거나 비워라")
+            appendLine("    note     객체와 무관한 설명 한 줄. from/to/call 없이 description 만 채워라")
+            appendLine("- description 은 그 단계가 왜 일어나는지 한 문장. 화면의 단계 목록에 그대로 나온다.")
+            appendLine("  call 이 '무엇을'이라면 description 은 '왜'다. 자명한 단계는 생략해도 된다.")
+            appendLine("- steps 는 실행 순서대로. 코드에서 확인할 수 없는 단계는 넣지 마라.")
+        }
+
+    private fun existingFlowNames(existing: JsonObject?): List<String> =
+        (existing?.get("flows") as? JsonArray)?.mapNotNull { el ->
+            (el as? JsonObject)?.get("name")?.takeIf { it.isJsonPrimitive }?.asString
+        }.orEmpty()
+
+    val FLOW_SCHEMA = """
+        {
+          "flows": [
+            { "name": "로그인 → 월드 입장",
+              "steps": [
+                {"kind":"note",    "description":"클라이언트가 접속을 마치고 인증을 시작하는 지점부터."},
+                {"from":"Client",        "to":"PlayerSession", "call":"CS_LOGIN_REQ",
+                 "description":"패킷 헤더까지 읽은 뒤 디스패처가 이 핸들러를 고른다"},
+                {"from":"PlayerSession", "to":"PlayerSession", "call":"ValidateToken", "kind":"process",
+                 "description":"실패하면 여기서 끊고 아래 단계로 가지 않는다"},
+                {"from":"PlayerSession", "to":"AccountDb",     "call":"LoadAccount"},
+                {"from":"AccountDb",     "to":"PlayerSession", "call":"Account",       "kind":"return"},
+                {"from":"PlayerSession", "to":"World",         "call":"Enter",
+                 "description":"m_sessionLock 을 쥔 채로 들어간다"}
+              ] }
+          ]
+        }
+    """.trimIndent()
+
+    private fun notePrompt(relPath: String, question: String, symbol: String, existing: JsonObject?): String = buildString {
         appendLine("이 저장소의 C++ 파일을 읽고 '코드맵 노트'를 JSON으로 만들어라.")
         appendLine()
         appendLine("대상 파일: $relPath  (같은 이름의 .h/.cpp 짝이 있으면 둘 다 읽어라)")

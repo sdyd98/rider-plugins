@@ -115,6 +115,27 @@ class AgentCliTest {
     }
 
     @Test
+    fun `a scenario request asks for one diagram, not a note`() {
+        val p = NoteRequest.prompt("Net/World.h", "", "", existing = null, flow = "로그인부터 월드 입장까지")
+        assertTrue(p.contains("로그인부터 월드 입장까지"))
+        assertTrue(p.contains("flows"))
+        // The whole-note schema has no business here: this request must not re-decide the rest of the note.
+        assertFalse(p.contains("roleInSystem"))
+        assertFalse(p.contains("anchor 는 시그니처 줄"))
+    }
+
+    @Test
+    fun `a scenario request names the diagrams that already exist so they are not redone`() {
+        val existing = JsonParser.parseString(
+            """{"flows":[{"name":"로그인","steps":[]},{"name":"퇴장","steps":[]}]}""",
+        ).asJsonObject
+        val p = NoteRequest.prompt("Net/World.h", "", "", existing, flow = "아이템 획득")
+        assertTrue(p.contains("이미 있는 시퀀스"))
+        assertTrue(p.contains("로그인, 퇴장"))
+        assertTrue(p.contains("아이템 획득"))
+    }
+
+    @Test
     fun `codex is asked for a read-only sandbox and answers into a file`() {
         val answer = File.createTempFile("codemap-test", ".json")
         val cmd = CodexCli.command(exe("codex"), "hi", answer)
