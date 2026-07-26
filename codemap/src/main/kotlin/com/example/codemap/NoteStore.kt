@@ -58,6 +58,20 @@ class NoteStore(val root: File, private val today: () -> String = { LocalDate.no
     /** The note key [relFile] is filed under — resolves the .h/.cpp pair against the real directory. */
     fun noteKeyFor(relFile: String): String = CodemapPaths.noteKey(relFile, siblingsOf(relFile))
 
+    /**
+     * The root-relative path the NOTE lives under, which for a `.cpp` is its header.
+     *
+     * The identity of a note is its key, not the file you happen to have open: `PlayerSession.cpp` and
+     * `PlayerSession.h` share one note, and anything comparing notes to each other has to compare this
+     * rather than the opened path. (Getting that wrong made a file list its own flows as belonging to
+     * somebody else.)
+     */
+    fun notePath(relFile: String): String {
+        val dir = relFile.substringBeforeLast('/', "")
+        val key = noteKeyFor(relFile)
+        return if (dir.isEmpty()) key else "$dir/$key"
+    }
+
     fun readNote(relFile: String): JsonObject? =
         notesOf(bundleFile(relFile))?.get(noteKeyFor(relFile)) as? JsonObject
 

@@ -457,22 +457,41 @@ private fun Sequences(note: JsonObject, s: CodemapState.Loaded, vm: CodemapViewM
     var open by remember { mutableStateOf(false) }
     val scenario = remember(s.rel) { TextFieldState() }
 
-    if (flows.isEmpty()) {
+    if (flows.isEmpty() && s.appearances.isEmpty()) {
         Row(Modifier.padding(top = Space.xs)) {
             if (adding) SequenceRequest(scenario, vm, p) { adding = false }
-            else ActionButton("＋ 시퀀스 요청", p, primary = false) { adding = true }
+            else ActionButton("＋ 패킷 시퀀스", p, primary = false) { adding = true }
         }
         return
     }
 
-    val subtitle = "%,d개".format(flows.size)
+    val subtitle = buildList {
+        if (flows.isNotEmpty()) add("%,d개".format(flows.size))
+        if (s.appearances.isNotEmpty()) add("등장 %,d개".format(s.appearances.size))
+    }.joinToString(" · ")
 
-    CollapsibleSection("시퀀스", subtitle, open, p, { open = !open }) {
+    CollapsibleSection("패킷 시퀀스", subtitle, open, p, { open = !open }) {
         // Names, not drawings. A sequence diagram wants more width than a tool window has, so clicking one
         // opens the viewer tab — the panel's job here is to say which ones exist.
         flows.forEach { f ->
             val name = f.string("name").orEmpty()
             LinkRow(name, "%,d단계".format(f.array("steps")?.size() ?: 0), p) { vm.openSequence(name) }
+        }
+
+        // Flows another note holds in which this file takes part. Without this, reading World.cpp shows
+        // nothing about the three flows World runs through — they are filed under PlayerSession.h, because
+        // that is where someone happened to ask. The owning file is named on every row: two files can hold
+        // a class of the same name, and the match is a string comparison, so the person decides.
+        if (s.appearances.isNotEmpty()) {
+            Text(
+                "이 파일이 등장하는 흐름",
+                color = p.mutedText,
+                fontSize = Type.micro,
+                modifier = Modifier.padding(top = Space.sm),
+            )
+            s.appearances.forEach { entry ->
+                LinkRow(entry.name, entry.ownerName, p) { vm.openSequence(entry) }
+            }
         }
 
         if (adding) SequenceRequest(scenario, vm, p) { adding = false }
@@ -496,7 +515,7 @@ private fun SequenceRequest(
     Column(Modifier.fillMaxWidth()) {
         TextField(
             state = scenario,
-            placeholder = { Text("시나리오 — 예: 로그인부터 월드 입장까지 (Enter 로 그리기)") },
+            placeholder = { Text("시나리오 — 예: 로그인 패킷부터 월드 입장 통보까지 (Enter)") },
             modifier = Modifier.fillMaxWidth().padding(vertical = Space.xs)
                 .focusRequester(focus)
                 .onPreviewKeyEvent { e ->

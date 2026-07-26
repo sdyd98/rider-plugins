@@ -45,6 +45,8 @@ sealed interface CodemapState {
         val commitsSince: Int?,
         /** Someone has corrected this note by hand — those corrections outlive a re-analysis. */
         val edited: Boolean,
+        /** Flows held by OTHER notes in which this file takes part — see [FlowIndex]. */
+        val appearances: List<FlowIndex.Entry>,
     ) : CodemapState {
         val name: String get() = rel.substringAfterLast('/')
         val dir: String get() = rel.substringBeforeLast('/', "")
@@ -179,6 +181,14 @@ class CodemapViewModel(private val project: Project) {
             commitsSince = since,
             edited = s.edited(note),
             // Cheap after the first read: the cross-note index is cached until `.codemap/` changes.
+            // Compared by NOTE path: with a .cpp open, `rel` is the .cpp while the note — and every owner
+            // in the index — is the .h, so comparing `rel` made this file's own flows look like someone
+            // else's.
+            appearances = FlowIndex.appearances(
+                project.getService(CodemapStore::class.java).allNotes(),
+                s.notePath(rel),
+                note,
+            ),
         )
     }
 
@@ -306,6 +316,11 @@ class CodemapViewModel(private val project: Project) {
     fun openSequence(name: String) {
         val loaded = state as? CodemapState.Loaded ?: return
         ApplicationManager.getApplication().invokeLater { openSequence(project, loaded.rel, name) }
+    }
+
+    /** Open a flow that another note holds — the viewer names its owner, since it is not this file's. */
+    fun openSequence(entry: FlowIndex.Entry) {
+        ApplicationManager.getApplication().invokeLater { openSequence(project, entry.owner, entry.name) }
     }
 
     /**

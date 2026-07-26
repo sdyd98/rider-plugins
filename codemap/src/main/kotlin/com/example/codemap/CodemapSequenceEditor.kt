@@ -10,6 +10,8 @@ import com.intellij.openapi.fileEditor.FileEditorPolicy
 import com.intellij.openapi.fileEditor.FileEditorProvider
 import com.intellij.openapi.fileEditor.FileEditorState
 import com.intellij.openapi.fileEditor.FileEditorManager
+import com.intellij.openapi.fileEditor.OpenFileDescriptor
+import com.intellij.openapi.vfs.LocalFileSystem
 import com.intellij.openapi.project.DumbAware
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.util.UserDataHolderBase
@@ -17,6 +19,7 @@ import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.testFramework.LightVirtualFile
 import org.jetbrains.jewel.bridge.JewelComposePanel
 import java.beans.PropertyChangeListener
+import java.io.File
 import javax.swing.JComponent
 
 /**
@@ -115,6 +118,23 @@ class SequenceViewModel(private val project: Project, rel: String, name: String)
     }
 
     fun flow(name: String): JsonObject? = flows().firstOrNull { nameOf(it) == name }
+
+    /**
+     * Open the file a participant stands for.
+     *
+     * The link is [FlowIndex]'s string rule and nothing more: the note whose base name — or one of the class
+     * names it records — the participant names. Two files can hold a class of the same name, and this takes
+     * the first; that is a judgement a person makes in two clicks, not one the plugin should pretend to.
+     */
+    fun openParticipant(participant: String) {
+        val s = store ?: return
+        val wanted = FlowIndex.leadingIdentifier(participant).takeIf { it.isNotEmpty() } ?: return
+        val notes = project.getService(CodemapStore::class.java).allNotes()
+        val owner = notes.firstOrNull { (rel, note) -> wanted in FlowIndex.namesOf(rel, note) }?.first
+            ?: return
+        val vf = LocalFileSystem.getInstance().findFileByPath(File(s.root, owner).path) ?: return
+        OpenFileDescriptor(project, vf, 0, 0).navigate(true)
+    }
 
     /**
      * Delete the diagram on screen.

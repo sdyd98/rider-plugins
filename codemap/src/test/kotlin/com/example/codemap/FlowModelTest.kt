@@ -18,6 +18,46 @@ class FlowModelTest {
     private fun parse(json: String) = FlowModel.parse(JsonParser.parseString(json).asJsonObject)
 
     @Test
+    fun `a recorded packet name makes the step a packet, and the id rides along`() {
+        val f = parse(
+            """{"name":"로그인","steps":[
+                 {"from":"Client","to":"Session","packet":"ClientPacket::LoginReq","id":"0x01"},
+                 {"from":"Session","to":"Client","packet":"ServerPacket::LoginAck","id":"0x81"}]}""",
+        )
+        assertEquals(listOf(FlowModel.Kind.PACKET, FlowModel.Kind.PACKET), f.steps.map { it.kind })
+        assertEquals(listOf("0x01", "0x81"), f.steps.map { it.packetId })
+        // The label is the packet constant, and both directions are packets — a server→client packet is not
+        // a value coming back.
+        assertEquals(listOf("ClientPacket::LoginReq", "ServerPacket::LoginAck"), f.steps.map { it.label })
+        assertTrue(f.steps.all { it.isEdge })
+    }
+
+    @Test
+    fun `a packet wins over a declared kind, so an older note reads the right way`() {
+        val f = parse("""{"steps":[{"from":"S","to":"C","packet":"SC_ACK","kind":"return"}]}""")
+        assertEquals(FlowModel.Kind.PACKET, f.steps[0].kind)
+    }
+
+    @Test
+    fun `packets are the spine, the steps between them are not`() {
+        val f = parse(
+            """{"steps":[
+                 {"from":"Client","to":"Session","packet":"CS_LOGIN_REQ"},
+                 {"from":"Session","to":"Session","call":"ValidateToken","kind":"process"},
+                 {"from":"Session","to":"Db","call":"LoadAccount"},
+                 {"from":"Session","to":"Client","packet":"SC_LOGIN_ACK"}]}""",
+        )
+        assertEquals(listOf("CS_LOGIN_REQ", "SC_LOGIN_ACK"), FlowModel.packets(f).map { it.label })
+        assertEquals(4, f.steps.size)
+    }
+
+    @Test
+    fun `a missing id is empty, not invented`() {
+        val f = parse("""{"steps":[{"from":"C","to":"S","packet":"CS_PING"}]}""")
+        assertEquals("", f.steps[0].packetId)
+    }
+
+    @Test
     fun `a call between two objects is a message, and the objects become participants in order`() {
         val f = parse(
             """{"name":"로그인","steps":[

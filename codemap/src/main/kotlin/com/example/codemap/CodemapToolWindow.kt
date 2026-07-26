@@ -62,6 +62,10 @@ class CodemapToolWindow : ToolWindowFactory, DumbAware {
                         val touched = events.any { e ->
                             e.path.contains("/${CodemapPaths.DIR}/") || vm.dependsOn(e.path)
                         }
+                        // A note changed somewhere, so the cross-note index the panel reads is stale.
+                        if (events.any { it.path.contains("/${CodemapPaths.DIR}/") }) {
+                            project.getService(CodemapStore::class.java).invalidate()
+                        }
                         if (touched) vm.reload()
                     }
                 },

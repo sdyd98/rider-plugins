@@ -14,6 +14,25 @@ import kotlinx.coroutines.withContext
 import java.io.File
 
 /**
+ * How the one-liners are written, so the batch path and the plugin's own CLI path produce notes in one
+ * voice. The reader is a person mid-analysis with a concrete question, and a sentence that restates the
+ * signature answers none of them.
+ */
+private const val WRITING_RULES =
+    "WRITING THE ONE-LINERS — the reader is seeing this code for the first time with a question in mind " +
+        "(who mutates this, can it block, what happens when it fails):\n" +
+        "  - Do not restate the name or signature. \"HandleLogin — handles login\" is a wasted line.\n" +
+        "  - Name what changes, with the real identifiers: \"m_state Authenticating -> Playing, sends " +
+        "LoginAck\".\n" +
+        "  - State the way out: early returns, failure branches, exceptions. That is what a reader needs " +
+        "first.\n" +
+        "  - Always say what blocks or locks, and how far the lock is held.\n" +
+        "  - One line. If a second sentence is needed, it belongs in `gotchas`.\n" +
+        "  - Start with a verb; drop \"this function ...\" padding.\n" +
+        "  - The test: after reading the line, could someone pick their next question WITHOUT opening the " +
+        "source? Then it is good."
+
+/**
  * MCP tools contributed to the IDE's integrated MCP server (Settings | Tools | MCP Server) so an AI
  * client (Claude Code, etc.) can author the code-understanding notes under `.codemap/`.
  *
@@ -188,7 +207,8 @@ class CodemapMcpToolset : McpToolset {
             "  packets        [{id, dir: \"in\"|\"out\", handler, sentBy}]\n" +
             "  dependsOn      [{target, why}]\n" +
             "  usedBy         [{source, context}]\n" +
-            "  flows          [{name, steps}] — steps take EITHER form, and the panel draws each differently:\n" +
+            "  flows          [{name, steps}] — PACKET sequences; see codemap_write_flows for the shape.\n" +
+            "                 steps take EITHER form, and the panel draws each differently:\n" +
             "                 [string, …]                       → a flow chart (a straight chain of stages)\n" +
             "                 [{from, to, call, kind}, …]       → a SEQUENCE DIAGRAM. `from`/`to` are the\n" +
             "                 participants (a class, a thread, \"Client\", \"DB\" — whatever the flow actually\n" +
@@ -201,7 +221,8 @@ class CodemapMcpToolset : McpToolset {
             "                 codemap_write_functions for the shape. On a file of any size prefer that tool,\n" +
             "                 which upserts by name instead of making you resend everything.\n" +
             "Write only what you actually established from the source; omit a key rather than filling it " +
-            "with a guess. If the developer asked a question, make sure the note answers it.",
+            "with a guess. If the developer asked a question, make sure the note answers it.\n" +
+            WRITING_RULES,
     )
     suspend fun codemap_write_note(
         @McpDescription("File path, project-relative or absolute.") path: String,
@@ -248,7 +269,8 @@ class CodemapMcpToolset : McpToolset {
             "  effects  [string]  — what it mutates or sends\n" +
             "  gotchas  [string]\n" +
             "List functions in DECLARATION ORDER (the order they appear in the file), so the panel reads " +
-            "alongside the code rather than re-ranking it.",
+            "alongside the code rather than re-ranking it.\n" +
+            WRITING_RULES,
     )
     suspend fun codemap_write_functions(
         @McpDescription("File path, project-relative or absolute.") path: String,
@@ -270,11 +292,18 @@ class CodemapMcpToolset : McpToolset {
         "Add sequence diagrams to a note's `flows`, matched by `name` — an existing name is replaced, a " +
             "new one is appended, and nothing else in the note is touched. This is the ONLY tool to answer " +
             "one scenario a developer asked about.\n" +
-            "Each entry: {name, steps:[{from, to, call, kind, description}]}\n" +
+            "These are PACKET sequences: the spine is packet traffic, and the internal processing between two " +
+            "packets earns at most one step each.\n" +
+            "Each entry: {name, steps:[{from, to, packet, id, call, kind, description}]}\n" +
             "  name        string — short label for the scenario\n" +
             "  from        string — the participant that acts (a real class/module name, never invented)\n" +
             "  to          string — the participant acted upon\n" +
-            "  call        string — the function or packet name, as it appears in the code\n" +
+            "  packet      string — the packet constant EXACTLY as the code writes it (CS_LOGIN_REQ,\n" +
+            "                       ClientPacket::LoginReq). Its presence is what makes a step a packet step;\n" +
+            "                       direction is from/to, so a server->client packet is not a \"return\".\n" +
+            "  id          string — the packet id when the code gives one (0x01, 12, an enum value); omit\n" +
+            "                       otherwise. Never invent one.\n" +
+            "  call        string — for a NON-packet step: the function that connects two packets\n" +
             "  kind        string — omit for a call; \"return\" for a value coming back; \"process\" for\n" +
             "                       something one object does alone (leave `to` empty or equal to `from`);\n" +
             "                       \"note\" for a line of explanation attached to no object\n" +

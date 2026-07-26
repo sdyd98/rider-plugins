@@ -31,4 +31,24 @@ class CodemapStore(private val project: Project) {
     }
 
     val root: File? get() = store?.root
+
+    /**
+     * Every note in the store, cached.
+     *
+     * Stitching flows across notes means reading all of them, and that happens on every editor tab switch —
+     * a walk plus a JSON parse per bundle, which at 58M lines is thousands of parses for a number that did
+     * not change. The cache is dropped when `.codemap/` changes, which is exactly when it could be wrong;
+     * the tool window already watches for that.
+     */
+    @Volatile private var cached: List<Pair<String, com.google.gson.JsonObject>>? = null
+
+    fun allNotes(): List<Pair<String, com.google.gson.JsonObject>> {
+        cached?.let { return it }
+        val fresh = store?.allNotes().orEmpty()
+        cached = fresh
+        return fresh
+    }
+
+    /** Called when something under `.codemap/` changed — the one moment the cache can be stale. */
+    fun invalidate() { cached = null }
 }

@@ -115,10 +115,15 @@ class AgentCliTest {
     }
 
     @Test
-    fun `a scenario request asks for one diagram, not a note`() {
+    fun `a scenario request asks for one packet sequence, not a note`() {
         val p = NoteRequest.prompt("Net/World.h", "", "", existing = null, flow = "로그인부터 월드 입장까지")
         assertTrue(p.contains("로그인부터 월드 입장까지"))
         assertTrue(p.contains("flows"))
+        // Packets are the spine, and the schema example must show one with an id or the field goes unused.
+        assertTrue(p.contains("받은 패킷에서 시작"))
+        assertTrue(p.contains("\"packet\""))
+        assertTrue(p.contains("ClientPacket::LoginReq"))
+        assertTrue(p.contains("사이의 내부 처리는 한 줄씩만"))
         // The whole-note schema has no business here: this request must not re-decide the rest of the note.
         assertFalse(p.contains("roleInSystem"))
         assertFalse(p.contains("anchor 는 시그니처 줄"))
@@ -133,6 +138,22 @@ class AgentCliTest {
         assertTrue(p.contains("이미 있는 시퀀스"))
         assertTrue(p.contains("로그인, 퇴장"))
         assertTrue(p.contains("아이템 획득"))
+    }
+
+    @Test
+    fun `both prompts carry the writing rules, with the examples that make them stick`() {
+        val note = NoteRequest.prompt("Net/World.h", "", "", existing = null)
+        val flow = NoteRequest.prompt("Net/World.h", "", "", existing = null, flow = "로그인")
+
+        listOf(note, flow).forEach { p ->
+            // The reader is a person mid-analysis; the rules exist to stop one-liners that restate the name.
+            assertTrue(p.contains("이름을 되풀이하지 마라"), "규칙 없음")
+            // A rule without an example does not change what gets written.
+            assertTrue(p.contains("HandleLogin — 로그인을 처리한다"), "나쁜 예 없음")
+            assertTrue(p.contains("m_state 를 Authenticating → Playing"), "좋은 예 없음")
+            assertTrue(p.contains("빠져나가는 경로"), "조기 반환 규칙 없음")
+            assertTrue(p.contains("락을, 어디까지 쥐는지"), "락 규칙 없음")
+        }
     }
 
     @Test

@@ -375,6 +375,21 @@ class NoteStoreTest {
     }
 
     @Test
+    fun `a cpp resolves to the note path of its header`() {
+        write("Net/PlayerSession.h", "#pragma once\n")
+        write("Net/PlayerSession.cpp", "#include \"PlayerSession.h\"\n")
+        write("main.cpp", "int main(){}\n")
+        val s = store()
+
+        // Both halves of a pair name ONE note. Anything comparing notes to each other — the cross-note flow
+        // index, for one — has to compare this and not the file that happens to be open.
+        assertEquals("Net/PlayerSession.h", s.notePath("Net/PlayerSession.cpp"))
+        assertEquals("Net/PlayerSession.h", s.notePath("Net/PlayerSession.h"))
+        // A file with no header of its own is its own note, at the root or anywhere else.
+        assertEquals("main.cpp", s.notePath("main.cpp"))
+    }
+
+    @Test
     fun `files outside the root have no place in the store`() {
         val s = store()
         assertNull(s.relativize(File("/etc/hosts")))

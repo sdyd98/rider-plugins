@@ -42,14 +42,17 @@ import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.graph.GraphCanvas
+import com.example.graph.readsAsCode
 import com.example.graph.GraphColors
 import com.example.graph.GraphEdge
 import com.example.graph.GraphFlow
 import com.example.graph.GraphLayout
 import com.example.graph.GraphNode
+import com.google.gson.JsonArray
 import com.google.gson.JsonObject
 import org.jetbrains.jewel.ui.component.Text
 
@@ -76,11 +79,11 @@ fun CodemapSequenceView(vm: SequenceViewModel) {
         Header(vm, p)
 
         if (raw.isEmpty()) {
-            Column(Modifier.fillMaxSize().padding(Space.lg)) {
+            Column(Modifier.fillMaxSize().padding(PAD)) {
                 EmptyState(
                     "🧭",
-                    "이 파일에 시퀀스가 없습니다",
-                    "코드맵 패널의 [＋ 시퀀스 요청] 으로 시나리오를 하나 부탁하세요.",
+                    "이 파일에 패킷 시퀀스가 없습니다",
+                    "코드맵 패널의 [＋ 패킷 시퀀스] 로 시나리오를 하나 부탁하세요.",
                     p,
                 )
             }
@@ -90,42 +93,47 @@ fun CodemapSequenceView(vm: SequenceViewModel) {
         val currentJson = raw.firstOrNull { it.name() == vm.selected } ?: raw.first()
         val flow = remember(currentJson) { FlowModel.parse(currentJson) }
 
-        FlowChips(raw, flow.name, p) { vm.select(it) }
-        Flow(flow, vm, p)
+        Flow(flow, raw, vm, p)
     }
 }
 
 @Composable
 private fun Header(vm: SequenceViewModel, p: CodemapPalette) {
-    Column(Modifier.fillMaxWidth().padding(start = Space.lg, end = Space.lg, top = Space.md)) {
+    Column(Modifier.fillMaxWidth().padding(start = PAD, end = PAD, top = Space.md)) {
         Text(vm.fileName, color = p.text, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
-        Text("노트에 기록된 흐름 — 요청해서 모은 것입니다", color = p.mutedText, fontSize = Type.micro)
+        Text("노트에 기록된 패킷 시퀀스 — 요청해서 모은 것입니다", color = p.mutedText, fontSize = Type.micro)
     }
 }
 
-/** The file's flows, so switching between two scenarios costs a click. */
+/**
+ * The file's flows, so switching between two scenarios costs a click.
+ *
+ * A dropdown rather than a row of chips: a scenario's name is a sentence ("로그인부터 월드 입장까지"), and
+ * three of those already overflow into a horizontal scroll that hides the very options it is offering.
+ * The step count rides along as each option's detail, which is the one number that says how big a read it is.
+ */
 @Composable
-private fun FlowChips(
+private fun FlowPicker(
     flows: List<JsonObject>,
     current: String,
     p: CodemapPalette,
     onSelect: (String) -> Unit,
 ) {
-    Row(
-        Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())
-            .padding(start = Space.lg, end = Space.lg, top = Space.sm),
-        horizontalArrangement = Arrangement.spacedBy(Space.xs),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        flows.forEach { f ->
-            val name = f.name()
-            ActionButton(name, p, primary = name == current) { onSelect(name) }
-        }
-    }
+    Picker(
+        label = "흐름",
+        items = flows.map { f -> PickerItem(f.name(), "%,d단계".format(f.steps())) },
+        selected = flows.indexOfFirst { it.name() == current }.coerceAtLeast(0),
+        palette = p,
+    ) { i -> onSelect(flows[i].name()) }
 }
 
 @Composable
-private fun Flow(flow: FlowModel.Flow, vm: SequenceViewModel, p: CodemapPalette) {
+private fun Flow(
+    flow: FlowModel.Flow,
+    all: List<JsonObject>,
+    vm: SequenceViewModel,
+    p: CodemapPalette,
+) {
     // -1 is the introduction: every step visible at once, nothing spotlit — IcePanel's way of setting the
     // scene before walking it.
     var step by remember(flow) { mutableStateOf(-1) }
@@ -152,7 +160,7 @@ private fun Flow(flow: FlowModel.Flow, vm: SequenceViewModel, p: CodemapPalette)
                 }
             },
     ) {
-        Controls(flow, step, chart, p, onGo = ::go, onChart = { chart = it })
+        Controls(flow, all, step, chart, vm, p, onGo = ::go, onChart = { chart = it })
         Rule(p)
 
         Row(Modifier.fillMaxSize()) {
@@ -162,42 +170,64 @@ private fun Flow(flow: FlowModel.Flow, vm: SequenceViewModel, p: CodemapPalette)
                     .background(p.border.copy(alpha = 0.5f)),
             )
             Box(Modifier.fillMaxSize()) {
-                if (chart) LifelineChart(flow, p) else Diagram(flow, active, p)
+                if (chart) LifelineChart(flow, p) else Diagram(flow, active, vm, p)
             }
         }
     }
 }
 
-/** ◀ ▶ and where you are — plus the escape hatch to the chart. */
+/**
+ * Which flow, where in it, and how to read it — one row.
+ *
+ * These were three stacked rows with three different insets, which is three chances to look crooked. The
+ * flow picker belongs beside the step counter anyway: choosing a scenario and walking it are the same act.
+ */
 @Composable
 private fun Controls(
     flow: FlowModel.Flow,
+    all: List<JsonObject>,
     step: Int,
     chart: Boolean,
+    vm: SequenceViewModel,
     p: CodemapPalette,
     onGo: (Int) -> Unit,
     onChart: (Boolean) -> Unit,
 ) {
     Row(
-        Modifier.fillMaxWidth().padding(start = Space.lg, end = Space.lg, top = Space.xs, bottom = Space.xs),
+        Modifier.fillMaxWidth().padding(start = PAD, end = PAD, top = Space.sm, bottom = Space.sm),
         horizontalArrangement = Arrangement.spacedBy(Space.sm),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        ActionButton("◀", p, enabled = step >= 0, primary = false) { onGo(step - 1) }
-        ActionButton("▶", p, enabled = step < flow.steps.lastIndex, primary = false) { onGo(step + 1) }
+        FlowPicker(all, flow.name, p) { vm.select(it) }
+        Box(Modifier.width(Space.sm))
+        HintedButton("◀", "이전 단계 (← ↑)", p, enabled = step >= 0) { onGo(step - 1) }
+        HintedButton("▶", "다음 단계 (→ ↓ Space)", p, enabled = step < flow.steps.lastIndex) { onGo(step + 1) }
         Text(
             if (step < 0) "소개 — 전체 %,d단계".format(flow.steps.size)
             else "%,d / %,d".format(step + 1, flow.steps.size),
             color = p.mutedText,
             fontSize = Type.micro,
         )
-        if (step >= 0) ActionButton("처음으로", p, primary = false) { onGo(-1) }
+        if (step >= 0) HintedButton("처음으로", "소개 단계로 (Home)", p) { onGo(-1) }
         Box(Modifier.weight(1f))
         Text("←→ 이동", color = p.mutedText, fontSize = Type.micro)
         // The chart is a different reading of the same steps, not a different truth — one toggle, no menu.
-        ActionButton(if (chart) "흐름 보기" else "시퀀스 차트", p, primary = false) { onChart(!chart) }
+        HintedButton(
+            if (chart) "흐름 보기" else "시퀀스 차트",
+            if (chart) "다이어그램 위에서 단계별로 재생" else "같은 단계를 라이프라인 차트로 — 남에게 넘길 그림",
+            p,
+        ) { onChart(!chart) }
     }
 }
+
+/**
+ * One inset for the whole tab.
+ *
+ * Every row used to bring its own — the header at 16, the step list at 8 plus the card's own 4, the canvas
+ * toolbar at 12 — so nothing shared a left edge with anything else. A single value is the only way that
+ * stays true as rows get added.
+ */
+private val PAD = Space.lg
 
 private val LIST_W = 260.dp
 
@@ -214,13 +244,29 @@ private fun StepList(
     p: CodemapPalette,
     onSelect: (Int) -> Unit,
 ) {
-    Column(
-        Modifier.width(LIST_W).fillMaxHeight()
-            .verticalScroll(rememberScrollState())
-            .padding(Space.sm),
-        verticalArrangement = Arrangement.spacedBy(Space.xs),
-    ) {
-        steps.forEach { s -> StepCard(s, s.index == current, p) { onSelect(s.index) } }
+    Column(Modifier.width(LIST_W).fillMaxHeight()) {
+        // A heading of its own, so this column starts at the same height as the canvas toolbar beside it
+        // rather than half a row above it.
+        Row(
+            // 6.dp matches the canvas toolbar's own vertical padding, so the two columns' first rows are
+            // the same height and the content below them starts on one line.
+            Modifier.fillMaxWidth().padding(start = PAD, end = PAD, top = 6.dp, bottom = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text("단계", color = p.mutedText, fontSize = Type.micro)
+            Box(Modifier.weight(1f))
+            Text("%,d".format(steps.size), color = p.mutedText, fontSize = Type.micro)
+        }
+        Column(
+            Modifier.fillMaxWidth()
+                .verticalScroll(rememberScrollState())
+                // The card adds Space.xs of its own, so its text lands on the same left edge as every
+                // heading above it.
+                .padding(start = PAD - Space.xs, end = PAD - Space.xs, bottom = Space.sm),
+            verticalArrangement = Arrangement.spacedBy(Space.xs),
+        ) {
+            steps.forEach { s -> StepCard(s, s.index == current, p) { onSelect(s.index) } }
+        }
     }
 }
 
@@ -248,43 +294,104 @@ private fun StepCard(step: FlowModel.Step, active: Boolean, p: CodemapPalette, o
         horizontalArrangement = Arrangement.spacedBy(Space.sm),
     ) {
         // The numbered pill, same as the flow chart's — the rhythm that makes an ordered list scannable.
+        // A packet's number is filled in, the connecting steps' are outlined: the spine reads at a glance
+        // without having to read a single label.
+        val packet = step.kind == FlowModel.Kind.PACKET
         Box(
             Modifier.size(18.dp)
                 .background(
-                    if (active) p.accent.copy(alpha = 0.22f) else p.accent.copy(alpha = 0.10f),
+                    when {
+                        packet && active -> p.inbound
+                        packet -> p.inbound.copy(alpha = 0.35f)
+                        active -> p.accent.copy(alpha = 0.22f)
+                        else -> p.accent.copy(alpha = 0.10f)
+                    },
                     RoundedCornerShape(Radii.pill),
                 ),
             contentAlignment = Alignment.Center,
         ) {
-            Text("${step.index + 1}", color = p.accent, fontSize = 9.sp, fontWeight = FontWeight.SemiBold)
+            Text(
+                "${step.index + 1}",
+                color = if (packet) p.surface else p.accent,
+                fontSize = 9.sp,
+                fontWeight = FontWeight.SemiBold,
+            )
         }
 
         Column(Modifier.fillMaxWidth()) {
             when (step.kind) {
-                FlowModel.Kind.NOTE ->
-                    Text(step.label, color = p.text, fontSize = Type.label, lineHeight = 16.sp)
-
-                FlowModel.Kind.PROCESS -> {
-                    Mono(step.from, p.mutedText, size = Type.micro)
-                    Text(step.label, color = p.text, fontSize = Type.label, lineHeight = 16.sp)
-                }
-
-                else -> {
-                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Mono(step.from, p.mutedText, size = Type.micro)
+                // The spine of the flow. A packet gets the loudest treatment on the card — its constant in
+                // fixed pitch and its id as a badge — because tracing packets is what this view is for.
+                FlowModel.Kind.PACKET -> {
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
                         Text(
-                            if (step.kind == FlowModel.Kind.RETURN) "⟵" else "⟶",
-                            color = if (step.kind == FlowModel.Kind.RETURN) p.mutedText else p.accent,
+                            "${step.from}  →  ${step.to}",
+                            color = p.mutedText,
                             fontSize = Type.micro,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f),
                         )
-                        Mono(step.to, p.mutedText, size = Type.micro)
+                        if (step.packetId.isNotEmpty()) {
+                            Mono(step.packetId, p.inbound, size = Type.micro, weight = FontWeight.Medium)
+                        }
                     }
                     Text(
                         step.label,
                         color = p.text,
                         fontSize = Type.label,
-                        fontFamily = FontFamily.Monospace,
+                        fontFamily = if (readsAsCode(step.label)) FontFamily.Monospace else FontFamily.Default,
+                        fontWeight = FontWeight.Medium,
                         lineHeight = 16.sp,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+
+                FlowModel.Kind.NOTE -> Text(
+                    step.label,
+                    color = p.text,
+                    fontSize = Type.label,
+                    lineHeight = 16.sp,
+                    maxLines = 4,
+                    overflow = TextOverflow.Ellipsis,
+                )
+
+                FlowModel.Kind.PROCESS -> {
+                    Text(
+                        step.from,
+                        color = p.mutedText,
+                        fontSize = Type.micro,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Text(step.label, color = p.text, fontSize = Type.label, lineHeight = 16.sp)
+                }
+
+                else -> {
+                    // One line, not three composables in a Row: a recorded participant can be a long
+                    // phrase, and a Row lets it eat the width until the arrow and the other end are
+                    // squeezed into a one-character column running down the card. Ellipsis degrades; a
+                    // vertical stack of single letters does not.
+                    Text(
+                        "${step.from}  ${if (step.kind == FlowModel.Kind.RETURN) "←" else "→"}  ${step.to}",
+                        color = p.mutedText,
+                        fontSize = Type.micro,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Text(
+                        step.label,
+                        color = p.text,
+                        fontSize = Type.label,
+                        fontFamily = if (readsAsCode(step.label)) FontFamily.Monospace else FontFamily.Default,
+                        lineHeight = 16.sp,
+                        maxLines = 4,
+                        overflow = TextOverflow.Ellipsis,
                     )
                 }
             }
@@ -303,7 +410,12 @@ private fun StepCard(step: FlowModel.Step, active: Boolean, p: CodemapPalette, o
  * card readable on its own once the presentation has moved on.
  */
 @Composable
-private fun Diagram(flow: FlowModel.Flow, active: FlowModel.Step?, p: CodemapPalette) {
+private fun Diagram(
+    flow: FlowModel.Flow,
+    active: FlowModel.Step?,
+    vm: SequenceViewModel,
+    p: CodemapPalette,
+) {
     val connections = remember(flow) { FlowModel.connections(flow) }
     val nodes = remember(flow) {
         flow.participants.mapIndexed { i, name ->
@@ -314,8 +426,10 @@ private fun Diagram(flow: FlowModel.Flow, active: FlowModel.Step?, p: CodemapPal
                 rows = flow.steps.filter { it.from == name && it.isEdge }.map { s ->
                     com.example.graph.GraphRow(
                         text = s.label,
-                        mark = if (s.kind == FlowModel.Kind.RETURN) "⟵ " else "→ ",
-                        badge = "${s.index + 1}",
+                        mark = if (s.kind == FlowModel.Kind.RETURN) "← " else "→ ",
+                        // A packet shows its id; everything else shows its place in the order.
+                        badge = s.packetId.ifEmpty { "${s.index + 1}" },
+                        accented = s.kind == FlowModel.Kind.PACKET,
                         key = "${s.index}",
                         mono = true,
                     )
@@ -353,6 +467,9 @@ private fun Diagram(flow: FlowModel.Flow, active: FlowModel.Step?, p: CodemapPal
         layout = GraphLayout.Layered,
         flow = GraphFlow.LeftToRight,
         modifier = Modifier.fillMaxSize(),
+        // A participant is a class, so "go there" means its file. Resolved by the same string rule the
+        // cross-note index uses — the file whose name (or a class it records) the participant names.
+        onNodeDoubleClick = { name -> vm.openParticipant(name) },
     )
     if (connections.isEmpty()) {
         Column(Modifier.fillMaxSize().padding(Space.lg)) {
@@ -382,3 +499,6 @@ private fun LifelineChart(flow: FlowModel.Flow, p: CodemapPalette) {
 
 private fun JsonObject.name(): String =
     get("name")?.takeIf { it.isJsonPrimitive }?.asString.orEmpty()
+
+/** How many steps a flow holds — the one number that says how big a read it is. */
+private fun JsonObject.steps(): Int = (get("steps") as? JsonArray)?.size() ?: 0

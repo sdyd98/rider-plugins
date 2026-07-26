@@ -17,7 +17,15 @@ import com.google.gson.JsonObject
 object FlowModel {
 
     enum class Kind {
-        /** One object calling another: the common case, drawn as the edge between them lighting up. */
+        /**
+         * A packet crossing between endpoints — the spine of a flow in a game server.
+         *
+         * Drawn differently from everything else because it is the thing being traced: a packet step carries
+         * the constant's real name and, when the code gives one, its id.
+         */
+        PACKET,
+
+        /** One object calling another: the step that connects two packets. */
         MESSAGE,
 
         /** A value coming back. Same edge, drawn as a return. */
@@ -41,6 +49,8 @@ object FlowModel {
         val to: String,
         val label: String,
         val description: String,
+        /** The packet id as the code writes it (`0x01`, `12`, an enum value) — empty when not recorded. */
+        val packetId: String = "",
     ) {
         /** Both ends known and distinct — the only case that lights up an edge. */
         val isEdge: Boolean get() = kind != Kind.NOTE && from.isNotEmpty() && to.isNotEmpty() && from != to
@@ -75,9 +85,14 @@ object FlowModel {
                 el is JsonObject -> {
                     val from = el.str("from").orEmpty()
                     val to = el.str("to").orEmpty()
-                    val label = el.str("call") ?: el.str("label").orEmpty()
+                    val packet = el.str("packet")
+                    val label = packet ?: el.str("call") ?: el.str("label").orEmpty()
                     val declared = el.str("kind")
                     val kind = when {
+                        // A recorded packet name settles it: this step IS the packet. Checked before the
+                        // declared kind so an older note that wrote {packet, kind:"return"} still reads as
+                        // a packet going the other way rather than as a value coming back.
+                        packet != null -> Kind.PACKET
                         declared == "return" -> Kind.RETURN
                         declared == "process" -> Kind.PROCESS
                         declared == "note" -> Kind.NOTE
@@ -93,6 +108,7 @@ object FlowModel {
                         to = to.ifEmpty { from },
                         label = label,
                         description = el.str("description") ?: el.str("note").orEmpty(),
+                        packetId = el.str("id").orEmpty(),
                     )
                 }
 
@@ -110,6 +126,9 @@ object FlowModel {
 
         return Flow(name, steps, participants)
     }
+
+    /** Packets only, in order — the flow's spine, without the processing between. */
+    fun packets(flow: Flow): List<Step> = flow.steps.filter { it.kind == Kind.PACKET }
 
     /**
      * Every distinct connection the flow uses, in order of first use.
