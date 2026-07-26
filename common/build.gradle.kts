@@ -4,6 +4,7 @@
 // bundle these classes via `implementation(project(":common"))`.
 plugins {
     id("org.jetbrains.kotlin.jvm")
+    id("org.jetbrains.kotlin.plugin.compose") // the shared graph canvas is Compose (see graph/GraphCanvas.kt)
     id("org.jetbrains.intellij.platform.module")
 }
 
@@ -30,6 +31,15 @@ dependencies {
         } else {
             local(riderLocalPath)
         }
+
+        // Compose + Jewel for the shared graph canvas. Bundled with the IDE, so compile-only here and
+        // NOT shipped by any consumer — same treatment as in the plugin modules.
+        bundledLibrary("lib/intellij.libraries.compose.foundation.desktop.jar")
+        bundledLibrary("lib/intellij.libraries.compose.runtime.desktop.jar")
+        bundledLibrary("lib/intellij.libraries.skiko.jar")
+        bundledLibrary("lib/intellij.platform.compose.jar")
+        bundledLibrary("lib/intellij.platform.jewel.foundation.jar")
+        bundledLibrary("lib/intellij.platform.jewel.ui.jar")
     }
 
     // The repo disables the auto-added Kotlin stdlib (the IDE provides it for plugin modules), so
