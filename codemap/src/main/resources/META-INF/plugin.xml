@@ -1,0 +1,54 @@
+<idea-plugin>
+    <id>com.example.codemap</id>
+    <name>Codemap</name>
+    <vendor>example</vendor>
+
+    <description><![CDATA[
+        Shows the code-understanding note for the C++ file you have open, in a "코드맵" tool window:
+        what the file is for, its entry points, threading/lock model, packet handlers, dependencies
+        and flows. Notes live in <code>.codemap/</code> and are written by an AI client (Claude Code)
+        through this plugin's MCP tools — the plugin itself only reports facts that are exact
+        (line counts, <code>#include</code> lines, .h/.cpp pairing, git history) and tracks whether a
+        note has gone stale since the code changed. Strictly read-only towards your source.
+    ]]></description>
+
+    <!-- Frontend-only plugin: the platform module is enough. It loads in Rider (and any other
+         IntelliJ-based IDE). Name / version / since-build are injected from build.gradle.kts. -->
+    <depends>com.intellij.modules.platform</depends>
+
+    <!-- Contribute the note-authoring tools to the IDE's integrated MCP server (2025.2+). Optional,
+         so the tool window still loads on IDEs without / with a disabled MCP server. -->
+    <depends optional="true" config-file="mcp-tools.xml">com.intellij.mcpServer</depends>
+
+    <!-- Compose + Jewel are bundled with the IDE; declare the modules so the plugin's class loader
+         can see them at runtime (compile classpath comes from bundledLibrary in build.gradle.kts). -->
+    <dependencies>
+        <module name="intellij.libraries.skiko"/>
+        <module name="intellij.libraries.compose.runtime.desktop"/>
+        <module name="intellij.libraries.compose.foundation.desktop"/>
+        <module name="intellij.platform.compose"/>
+        <module name="intellij.platform.jewel.foundation"/>
+        <module name="intellij.platform.jewel.ui"/>
+        <module name="intellij.platform.jewel.ideLafBridge"/>
+    </dependencies>
+
+    <extensions defaultExtensionNs="com.intellij">
+        <!-- The note store for one project (.codemap/ under the project root). -->
+        <projectService serviceImplementation="com.example.codemap.CodemapStore"/>
+
+        <!-- The call graph, opened from the note panel. A LightVirtualFile-backed tab, so no file type
+             is registered and nothing is written to disk. -->
+        <fileEditorProvider implementation="com.example.codemap.CodemapGraphEditorProvider"/>
+
+        <!-- The note view: follows the selected editor tab.
+             The icon is REQUIRED, not decoration: the new UI's tool window stripe only shows buttons for
+             tool windows that declare one, so without it the window is unreachable once closed — it
+             survives only in View | Tool Windows. -->
+        <toolWindow
+            id="코드맵"
+            anchor="right"
+            icon="AllIcons.Toolwindows.Documentation"
+            factoryClass="com.example.codemap.CodemapToolWindow"/>
+    </extensions>
+
+</idea-plugin>

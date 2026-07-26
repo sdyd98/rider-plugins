@@ -8,6 +8,7 @@ A monorepo of JetBrains/Rider plugins (Kotlin, IntelliJ Platform Gradle Plugin 2
 
 - `:xlsx-editor` — read-only `.xlsx`/`.xls` grid viewer + relationship-graph explorer (`refs.json`) + MCP tools. Detailed behavior docs in `xlsx-editor/README.md`.
 - `:log-viewer` — read-only local + remote (SSH/SFTP) log viewer with live tail. Detailed docs in `log-viewer/README.md` (Korean); releases in `log-viewer/CHANGELOG.md`.
+- `:codemap` — per-file C++ code-understanding notes (`.codemap/`, local-only) shown in a tool window; the notes are authored by an AI over MCP tools. Docs in `codemap/README.md` (Korean).
 - `:common` — shared library: POI helpers (`PoiClassLoaders.kt`, `CellFormatting.kt`; package `com.example.xlsx`) and the vim navigation base class (`com.example.grid.VimTableController`). Applies `org.jetbrains.intellij.platform.module` (no `plugin.xml`, no ZIP of its own). Each plugin bundles these classes via `pluginComposedModule(implementation(project(":common")))` — composed into the plugin's MAIN jar, because plugin classes extend them directly; do not switch this to plain `implementation` (the jar would land in `lib/modules/` as an unloaded v2 content module) .
 
 The module READMEs are the real documentation — they are detailed and kept current. When you change behavior, update the module README (and `log-viewer/CHANGELOG.md` for log-viewer).
@@ -49,6 +50,15 @@ Gradle needs a **JDK 21** toolchain. On this machine that is already configured 
 - Shortcuts that must beat IDE-global bindings (`Ctrl+D/U/E/Y`, `Ctrl+Alt+F`, …) are registered via `DumbAwareAction.registerCustomShortcutSet`, not the InputMap.
 - xlsx open path is streaming/lazy/parallel by design (SAX per sheet, compact display strings, batched row push) — keep memory and first-paint characteristics in mind when touching `XlsxStreamingReader`/`SheetTableModel`.
 
-## refs.json / MCP tools — judgment-free rule (firm user decision)
+## MCP tools — judgment-free rule (firm user decision)
+
+This applies to BOTH toolsets (`RefsMcpToolset`, `CodemapMcpToolset`): the tools stay **mechanical
+only** — enumerate, expose raw data, compute exact numbers, validate. All interpretation is the
+calling AI's, made from reading the source. `:codemap` in particular must NOT grow a C++ parser:
+the project builds from a `.sln` (no compilation database), so inheritance/call graphs/class roles
+are AI judgments, and `#include` lists and text-grep hits are reported as literal text with that
+caveat stated in the tool description.
+
+### refs.json specifics
 
 The `RefsMcpToolset` tools must stay **mechanical only**: enumerate sheets, expose raw cells, compute set-arithmetic numbers, validate. ALL interpretation — header/data layout, id columns, display columns, which column references which table — is the calling AI's job, made primarily from the game source code. Do not add heuristics, guessing, or auto-detection to the tool side. `build_refs` writes `{file, sheet}` skeletons only, additively (re-runs must never clobber filled-in entries). `_`-prefixed keys in `refs.json` are AI metadata the viewer ignores. See `xlsx-editor/README.md` § "Relationship graph & refs.json" and `samples/gamedata/refs.json`.
