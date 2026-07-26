@@ -146,10 +146,15 @@ private fun NoteSections(note: JsonObject, s: CodemapState.Loaded, vm: CodemapVi
     CaretFocus(note, s, vm, p)
 
     // ---- one click away ----
-    // The function index and the sequence diagrams someone asked for. Every other section the note holds
-    // (요약 · 주의 · 클래스 · 상태 · 스레드/락 · 패킷 · 의존 · 데이터 연결) is deliberately not on screen:
-    // the panel is being rebuilt from nothing, adding back only what use actually proves necessary.
-    // [Details] still renders all of them and is one call away from returning.
+    // What earned its way back onto the screen: the traps (always open), the packets this file handles, its
+    // thread and lock model, the function index, and the sequences someone asked for. The rest of the note
+    // (요약 · 진입점 · 클래스 · 핵심 상태 · 의존 · 데이터 연결) is not drawn at all — it was carried for a
+    // while behind a fold nobody opened, and code kept for "maybe" rots. The data is still in the note and
+    // the MCP tools still read it; if one of them turns out to be wanted, it comes back as its own section
+    // like these did.
+    Warnings(note, vm, p)
+    Packets(note, s, vm, p)
+    Threading(note, p)
     Functions(note, s, vm, p)
     Sequences(note, s, vm, p)
 
@@ -177,8 +182,16 @@ private fun CaretFocus(note: JsonObject, s: CodemapState.Loaded, vm: CodemapView
         // a list here could — with grouping, filters and a preview — and the caret is on the function
         // already. The exhaustive answer earns a button only in the graph tab, where the graph itself is
         // notes-only and the contrast between the two is the point.
-        Row(Modifier.padding(top = Space.xs)) {
+        Row(
+            Modifier.padding(top = Space.xs),
+            horizontalArrangement = Arrangement.spacedBy(Space.xs),
+        ) {
             ActionButton("호출 그래프", p, primary = false) { vm.openGraph(name) }
+            // A 6,000-line file costs minutes to re-analyze whole. The prompt has always taken a function
+            // scope; until now nothing in the UI could reach it.
+            if (vm.analysis !is CodemapViewModel.Analysis.Running) {
+                ActionButton("이 함수만 재분석", p, primary = false) { vm.analyzeNow("", symbol = name) }
+            }
         }
 
         EditableList(
@@ -238,205 +251,127 @@ private fun List<String>.toJsonArray(): JsonArray = JsonArray().also { arr -> fo
  * Everything the file records beyond the three essentials. Closed by default — these answer questions
  * you have not asked yet, and eleven open sections read as noise however well each one is written.
  */
-@Suppress("unused") // Not on screen right now — see the note in LoadedView.
+/**
+ * The traps, in amber, always open.
+ *
+ * The one section that does not wait to be asked for. Everything else on this screen answers a question
+ * someone went looking for; this one is the answer to a question they did not know to ask, and a fold would
+ * hide it exactly when it matters.
+ */
 @Composable
-internal fun Details(note: JsonObject, s: CodemapState.Loaded, vm: CodemapViewModel, p: CodemapPalette) {
-    val present = buildList {
-        if (note.string("purpose") != null) add("요약")
-        if (note.strings("gotchas").isNotEmpty()) add("주의")
-        if (note.objects("entryPoints").isNotEmpty()) add("진입점")
-        if (note.objects("classes").isNotEmpty()) add("클래스")
-        if (note.objects("keyState").isNotEmpty()) add("상태")
-        if (note.obj("threading") != null) add("스레드")
-        if (note.objects("packets").isNotEmpty()) add("패킷")
-        if (note.objects("dependsOn").isNotEmpty() || note.objects("usedBy").isNotEmpty()) add("의존")
-        if (note.objects("flows").isNotEmpty()) add("흐름")
-        if (note.objects("dataSources").isNotEmpty()) add("데이터")
-    }
-    if (present.isEmpty()) return
+private fun Warnings(note: JsonObject, vm: CodemapViewModel, p: CodemapPalette) {
+    val gotchas = note.strings("gotchas")
+    if (gotchas.isEmpty()) return
+    SectionHeader("주의", p, color = p.warn)
+    EditableList(
+        gotchas,
+        p,
+        addLabel = "＋ 주의 추가",
+        onChange = { list -> vm.editList("gotchas", list) },
+    ) { text -> WarnCard(text, p) }
+}
+
+/**
+ * Which thread runs this, and what it locks.
+ *
+ * One of the two axes named as important from the start, and the one a reader cannot recover by looking at
+ * the code for a minute — lock order in particular is a property of the whole system, not of this file.
+ */
+@Composable
+private fun Threading(note: JsonObject, p: CodemapPalette) {
+    val threading = note.obj("threading") ?: return
+    val locks = threading.objects("locks")
+    val model = threading.string("model")
+    val affinity = threading.string("affinity")
+    if (model == null && affinity == null && locks.isEmpty()) return
 
     var open by remember { mutableStateOf(false) }
-    CollapsibleSection("파일 전체", present.joinToString(" · "), open, p, { open = !open }) {
-        SectionHeader("요약", p)
-        Editable(note.string("purpose").orEmpty(), p, onSave = { v -> vm.editField("purpose", v) })
-        Editable(
-            note.string("roleInSystem").orEmpty(),
-            p,
-            fontSize = Type.label,
-            color = p.mutedText,
-            placeholder = "(시스템에서의 위치 없음)",
-            onSave = { v -> vm.editField("roleInSystem", v) },
-        )
+    val subtitle = buildList {
+        model?.let(::add)
+        if (locks.isNotEmpty()) add("락 %,d".format(locks.size))
+    }.joinToString(" · ")
 
-        // Then gotchas: of everything in here, these are the lines that stop a bug.
-        SectionHeader("주의", p, color = p.warn)
-        EditableList(
-            note.strings("gotchas"),
-            p,
-            addLabel = "＋ 주의 추가",
-            onChange = { list -> vm.editList("gotchas", list) },
-        ) { text -> WarnCard(text, p) }
-
-        val entries = note.objects("entryPoints")
-        if (entries.isNotEmpty()) {
-            SectionHeader("여기부터 읽기", p)
-            entries.forEachIndexed { i, o ->
-                val symbol = o.string("symbol").orEmpty()
-                NumberedEntry(i + 1, symbol, o.string("note").orEmpty(), p, s.functionLoc[symbol]?.let { { vm.jumpTo(it) } })
+    CollapsibleSection("스레드 / 락", subtitle, open, p, { open = !open }) {
+        model?.let { AttrRow("모델", it, p) }
+        affinity?.let { AttrRow("스레드", it, p) }
+        locks.forEach { lock ->
+            SubtleBlock(p) {
+                Mono("🔒 " + lock.string("name").orEmpty(), p.text, weight = FontWeight.Medium)
+                lock.string("guards")?.let { AttrRow("보호", it, p) }
+                lock.string("order")?.let { AttrRow("순서", it, p) }
             }
-        }
-
-        note.objects("classes").section(p, "클래스") { o ->
-            DefEntry(o.string("name").orEmpty(), o.string("role").orEmpty(), p)
-        }
-        note.objects("keyState").section(p, "핵심 상태") { o ->
-            DefEntry(o.string("member").orEmpty(), o.string("note").orEmpty(), p)
-        }
-        note.obj("threading")?.let { t ->
-            SectionHeader("스레드 / 락", p)
-            t.string("model")?.let { Body(it, p) }
-            t.string("affinity")?.let { NotedLine("스레드 소속", it, p) }
-            t.objects("locks").forEach { l ->
-                SubtleBlock(p) {
-                    Mono("🔒 " + l.string("name").orEmpty(), p.text, weight = FontWeight.Medium)
-                    l.string("guards")?.let { AttrRow("보호", it, p) }
-                    l.string("order")?.let { AttrRow("순서", it, p) }
-                }
-            }
-        }
-        note.objects("packets").section(p, "패킷") { o ->
-            val (label, color) = when (o.string("dir")) {
-                "in" -> "수신" to p.inbound
-                "out" -> "송신" to p.outbound
-                else -> "" to p.mutedText
-            }
-            PacketRow(label, color, o.string("id").orEmpty(), o.string("handler") ?: o.string("sentBy").orEmpty(), p)
-        }
-        note.objects("dependsOn").section(p, "의존") { o ->
-            DefEntry(o.string("target").orEmpty(), o.string("why").orEmpty(), p)
-        }
-        note.objects("usedBy").section(p, "사용하는 쪽") { o ->
-            DefEntry(o.string("source").orEmpty(), o.string("context").orEmpty(), p)
-        }
-        note.objects("flows").section(p, "흐름") { o -> Flow(o, p) }
-        note.objects("dataSources").section(p, "데이터 연결") { o ->
-            DefEntry(
-                listOfNotNull(o.string("kind"), o.string("ref")).joinToString("  "),
-                o.string("note").orEmpty(),
-                p,
-            )
         }
     }
 }
 
 /**
- * The file's function table of contents — the section that makes a 6,000-line file navigable.
+ * The packets this file handles — the axis this server is organised around.
  *
- * Every function the AI recorded is listed in declaration order, so the list reads alongside the code
- * instead of re-ranking it. Names jump to the definition; the filter appears only past the point where
- * scanning stops working, and it is behind a toggle for the same reason the question field is (a
- * Compose text field left in the panel captures the IDE's shortcuts the moment the tool window opens).
+ * Three questions get answered in one place, and each was previously unanswerable from the panel: which ids
+ * this file deals with, which function handles each one (click to go there), and — since a protocol is
+ * shared — where else in the store the same id turns up. A packet that a recorded sequence traces links
+ * straight to it, which is what ties the table to the flows.
  */
 @Composable
-private fun Functions(note: JsonObject, s: CodemapState.Loaded, vm: CodemapViewModel, p: CodemapPalette) {
-    val fns = note.objects("functions")
-    if (fns.isEmpty()) return
+private fun Packets(note: JsonObject, s: CodemapState.Loaded, vm: CodemapViewModel, p: CodemapPalette) {
+    val packets = note.objects("packets")
+    if (packets.isEmpty()) return
 
     var open by remember { mutableStateOf(false) }
-    var filtering by remember(s.rel) { mutableStateOf(false) }
-    val filter = remember(s.rel) { TextFieldState() }
-    val focus = remember(s.rel) { FocusRequester() }
-    val query = filter.text.toString().trim()
+    val inbound = packets.count { it.string("dir") == "in" }
+    val outbound = packets.count { it.string("dir") == "out" }
+    val subtitle = buildList {
+        if (inbound > 0) add("수신 %,d".format(inbound))
+        if (outbound > 0) add("송신 %,d".format(outbound))
+    }.joinToString(" · ").ifEmpty { "%,d개".format(packets.size) }
 
-    CollapsibleSection("함수 목차", "%,d개".format(fns.size), open, p, { open = !open }) {
-        FunctionList(fns, s, vm, p, filtering, filter, focus) { filtering = it }
-    }
-}
-
-@Composable
-private fun FunctionList(
-    fns: List<JsonObject>,
-    s: CodemapState.Loaded,
-    vm: CodemapViewModel,
-    p: CodemapPalette,
-    filtering: Boolean,
-    filter: TextFieldState,
-    focus: FocusRequester,
-    setFiltering: (Boolean) -> Unit,
-) {
-    val query = filter.text.toString().trim()
-    if (fns.size >= FILTER_THRESHOLD) {
-        Row(
-            Modifier.fillMaxWidth().padding(vertical = Space.xs),
-            horizontalArrangement = Arrangement.spacedBy(Space.xs),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            // Jumping and filtering are different jobs: this goes to one function, 거르기 narrows what is
-            // on screen so several can be compared. A dropdown for the jump because it does not take
-            // keyboard focus — a text field here would swallow the IDE's own shortcuts.
-            val located = fns.filter { f -> s.functionLoc[f.string("name")] != null }
-            if (located.isNotEmpty()) {
-                Picker(
-                    label = "이동",
-                    items = located.map { f ->
-                        PickerItem(f.string("name").orEmpty(), f.string("purpose").orEmpty().take(40))
-                    },
-                    selected = located.indexOfFirst { it.string("name") == vm.focusedFunction }.coerceAtLeast(0),
-                    palette = p,
-                    modifier = Modifier.weight(1f, fill = false),
-                ) { i -> s.functionLoc[located[i].string("name")]?.let(vm::jumpTo) }
+    CollapsibleSection("패킷", subtitle, open, p, { open = !open }) {
+        packets.forEach { o ->
+            val id = o.string("id").orEmpty()
+            val symbol = o.string("handler") ?: o.string("sentBy").orEmpty()
+            val loc = s.functionLoc[symbol]
+                ?: s.functionLoc.entries.firstOrNull { it.key.substringAfterLast("::") == symbol }?.value
+            val (label, color) = when (o.string("dir")) {
+                "in" -> "수신" to p.inbound
+                "out" -> "송신" to p.outbound
+                else -> "" to p.mutedText
             }
-            if (!filtering) ActionButton("거르기", p, primary = false) { setFiltering(true) }
+
+            PacketRow(
+                dirLabel = label,
+                dirColor = color,
+                id = id,
+                handler = symbol,
+                palette = p,
+                // The handler is the click target: from an id, the code that deals with it is the next thing
+                // anyone wants. A handler whose anchor no longer resolves is not clickable rather than
+                // jumping somewhere wrong.
+                onJump = loc?.let { { vm.jumpTo(it) } },
+            )
+
+            // A protocol is shared, so the other half of the answer lives in other notes.
+            s.packetElsewhere[id]?.takeIf { it.isNotEmpty() }?.let { others ->
+                Text(
+                    "다른 곳: " + others.joinToString(", ") { e ->
+                        val dir = when {
+                            e.inbound -> "수신"
+                            e.outbound -> "송신"
+                            else -> ""
+                        }
+                        "${e.ownerName}${if (dir.isEmpty()) "" else " $dir"}"
+                    },
+                    color = p.mutedText,
+                    fontSize = Type.micro,
+                    modifier = Modifier.padding(start = 46.dp),
+                )
+            }
+
+            s.packetFlows[id]?.forEach { entry ->
+                Row(Modifier.padding(start = 46.dp)) {
+                    LinkRow("시퀀스: ${entry.name}", entry.ownerName, p) { vm.openSequence(entry) }
+                }
+            }
         }
-    }
-
-    if (filtering) {
-        TextField(
-            state = filter,
-            placeholder = { Text("함수 이름으로 거르기") },
-            modifier = Modifier.fillMaxWidth().padding(bottom = Space.xs)
-                .focusRequester(focus)
-                .onPreviewKeyEvent { e ->
-                    if (e.type == KeyEventType.KeyDown && e.key == Key.Escape) {
-                        filter.edit { replace(0, length, "") }
-                        setFiltering(false)
-                        true
-                    } else {
-                        false
-                    }
-                },
-        )
-        LaunchedEffect(Unit) { focus.requestFocus() }
-    }
-
-    val shown = if (query.isEmpty()) fns else fns.filter {
-        it.string("name").orEmpty().contains(query, ignoreCase = true)
-    }
-    if (shown.isEmpty()) {
-        Text("일치하는 함수 없음", color = p.mutedText, fontSize = Type.label)
-        return
-    }
-
-    shown.forEach { f ->
-        val name = f.string("name").orEmpty()
-        val loc = s.functionLoc[name]
-        FunctionRow(
-            name = name,
-            purpose = f.string("purpose").orEmpty(),
-            badges = buildList {
-                f.string("thread")?.let { add(it to p.mutedText) }
-                if (f.strings("locks").any { it.isNotBlank() && it != "없음" }) add("🔒" to p.warn)
-            },
-            located = loc != null,
-            ambiguous = (loc?.occurrences ?: 1) > 1,
-            current = name == vm.focusedFunction,
-            palette = p,
-            onJump = { loc?.let(vm::jumpTo) },
-        )
-        FunctionDetail(f, p)
-    }
-    if (query.isNotEmpty()) {
-        Text("%,d / %,d".format(shown.size, fns.size), color = p.mutedText, fontSize = Type.micro)
     }
 }
 
@@ -547,6 +482,109 @@ private fun SequenceRequest(
     }
 }
 
+@Composable
+private fun Functions(note: JsonObject, s: CodemapState.Loaded, vm: CodemapViewModel, p: CodemapPalette) {
+    val fns = note.objects("functions")
+    if (fns.isEmpty()) return
+
+    var open by remember { mutableStateOf(false) }
+    var filtering by remember(s.rel) { mutableStateOf(false) }
+    val filter = remember(s.rel) { TextFieldState() }
+    val focus = remember(s.rel) { FocusRequester() }
+    val query = filter.text.toString().trim()
+
+    CollapsibleSection("함수 목차", "%,d개".format(fns.size), open, p, { open = !open }) {
+        FunctionList(fns, s, vm, p, filtering, filter, focus) { filtering = it }
+    }
+}
+
+@Composable
+private fun FunctionList(
+    fns: List<JsonObject>,
+    s: CodemapState.Loaded,
+    vm: CodemapViewModel,
+    p: CodemapPalette,
+    filtering: Boolean,
+    filter: TextFieldState,
+    focus: FocusRequester,
+    setFiltering: (Boolean) -> Unit,
+) {
+    val query = filter.text.toString().trim()
+    if (fns.size >= FILTER_THRESHOLD) {
+        Row(
+            Modifier.fillMaxWidth().padding(vertical = Space.xs),
+            horizontalArrangement = Arrangement.spacedBy(Space.xs),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            // Jumping and filtering are different jobs: this goes to one function, 거르기 narrows what is
+            // on screen so several can be compared. A dropdown for the jump because it does not take
+            // keyboard focus — a text field here would swallow the IDE's own shortcuts.
+            val located = fns.filter { f -> s.functionLoc[f.string("name")] != null }
+            if (located.isNotEmpty()) {
+                Picker(
+                    label = "이동",
+                    items = located.map { f ->
+                        PickerItem(f.string("name").orEmpty(), f.string("purpose").orEmpty().take(40))
+                    },
+                    selected = located.indexOfFirst { it.string("name") == vm.focusedFunction }.coerceAtLeast(0),
+                    palette = p,
+                    modifier = Modifier.weight(1f, fill = false),
+                ) { i -> s.functionLoc[located[i].string("name")]?.let(vm::jumpTo) }
+            }
+            if (!filtering) ActionButton("거르기", p, primary = false) { setFiltering(true) }
+        }
+    }
+
+    if (filtering) {
+        TextField(
+            state = filter,
+            placeholder = { Text("함수 이름으로 거르기") },
+            modifier = Modifier.fillMaxWidth().padding(bottom = Space.xs)
+                .focusRequester(focus)
+                .onPreviewKeyEvent { e ->
+                    if (e.type == KeyEventType.KeyDown && e.key == Key.Escape) {
+                        filter.edit { replace(0, length, "") }
+                        setFiltering(false)
+                        true
+                    } else {
+                        false
+                    }
+                },
+        )
+        LaunchedEffect(Unit) { focus.requestFocus() }
+    }
+
+    val shown = if (query.isEmpty()) fns else fns.filter {
+        it.string("name").orEmpty().contains(query, ignoreCase = true)
+    }
+    if (shown.isEmpty()) {
+        Text("일치하는 함수 없음", color = p.mutedText, fontSize = Type.label)
+        return
+    }
+
+    shown.forEach { f ->
+        val name = f.string("name").orEmpty()
+        val loc = s.functionLoc[name]
+        FunctionRow(
+            name = name,
+            purpose = f.string("purpose").orEmpty(),
+            badges = buildList {
+                f.string("thread")?.let { add(it to p.mutedText) }
+                if (f.strings("locks").any { it.isNotBlank() && it != "없음" }) add("🔒" to p.warn)
+            },
+            located = loc != null,
+            ambiguous = (loc?.occurrences ?: 1) > 1,
+            current = name == vm.focusedFunction,
+            palette = p,
+            onJump = { loc?.let(vm::jumpTo) },
+        )
+        FunctionDetail(f, p)
+    }
+    if (query.isNotEmpty()) {
+        Text("%,d / %,d".format(shown.size, fns.size), color = p.mutedText, fontSize = Type.micro)
+    }
+}
+
 /** The deep fields, shown only for the functions that earned them. */
 @Composable
 private fun FunctionDetail(
@@ -567,45 +605,6 @@ private fun FunctionDetail(
         if (locks.isNotEmpty()) AttrRow("락", locks.joinToString(", "), p)
         effects.forEach { AttrRow("효과", it, p) }
         gotchas.forEach { Text("⚠ $it", color = p.warn, fontSize = Type.micro, lineHeight = 15.sp) }
-    }
-}
-
-/**
- * One flow, drawn rather than written out.
- *
- * Which drawing depends on what the note holds: `steps` of objects carry `from`/`to`, so they become a
- * sequence diagram; `steps` of plain strings are a straight chain and become a flow chart. Participants
- * are taken in order of first appearance, which keeps the columns in the order the flow actually moves.
- */
-@Composable
-internal fun Flow(o: JsonObject, p: CodemapPalette) {
-    Text(
-        o.string("name").orEmpty(),
-        color = p.text,
-        fontSize = Type.label,
-        fontWeight = FontWeight.Medium,
-        modifier = Modifier.padding(top = Space.xs),
-    )
-
-    val raw = o.array("steps") ?: return
-    val structured = raw.mapNotNull { it as? JsonObject }
-    if (structured.size == raw.size() && structured.isNotEmpty()) {
-        val steps = structured.mapNotNull { st ->
-            val from = st.string("from") ?: return@mapNotNull null
-            val to = st.string("to") ?: return@mapNotNull null
-            SeqStep(
-                from = from,
-                to = to,
-                label = st.string("call") ?: st.string("label").orEmpty(),
-                ret = st.string("kind") == "return",
-            )
-        }
-        val participants = LinkedHashSet<String>().apply {
-            steps.forEach { add(it.from); add(it.to) }
-        }.toList()
-        SequenceDiagram(participants, steps, p)
-    } else {
-        FlowChart(o.strings("steps"), p)
     }
 }
 
@@ -703,7 +702,7 @@ private fun EnginePicker(vm: CodemapViewModel, p: CodemapPalette) {
     val items = Engine.entries.map { e ->
         PickerItem(
             label = e.label,
-            detail = if (installed[e] == true) "" else "설치를 찾지 못함",
+            detail = if (installed[e] == true) "" else "설치를 찾지 못함 — Settings | Tools | 코드맵",
             enabled = installed[e] == true,
         )
     }

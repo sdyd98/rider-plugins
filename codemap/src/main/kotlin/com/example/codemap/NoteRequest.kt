@@ -29,6 +29,7 @@ object NoteRequest {
         flow: String = "",
     ): String {
         if (flow.isNotBlank()) return sequencePrompt(relPath, flow, question, existing)
+        if (symbol.isNotBlank()) return functionPrompt(relPath, symbol, question, existing)
         return notePrompt(relPath, question, symbol, existing)
     }
 
@@ -80,6 +81,61 @@ object NoteRequest {
             appendLine()
             appendLine(WRITING)
         }
+
+    /**
+     * One function, and only that function.
+     *
+     * A narrow request needs a narrow answer: the store upserts the `functions` entry and leaves the rest of
+     * the note alone, so asking for the whole schema here would invite an agent to re-decide the file's
+     * summary, packets and threading as a side effect of one question — and to lose whatever it did not
+     * bother to repeat.
+     */
+    private fun functionPrompt(relPath: String, symbol: String, question: String, existing: JsonObject?): String =
+        buildString {
+            appendLine("이 저장소의 C++ 코드에서 함수 하나만 다시 분석해라.")
+            appendLine()
+            appendLine("파일: $relPath  (같은 이름의 .h/.cpp 짝이 있으면 둘 다 읽어라)")
+            appendLine("대상 함수: $symbol")
+            if (question.isNotBlank()) {
+                appendLine()
+                appendLine("개발자가 덧붙인 것 — 이것에 답하는 것이 최우선이다:")
+                appendLine("  $question")
+            }
+            existingFunction(existing, symbol)?.let {
+                appendLine()
+                appendLine("현재 저장된 내용이다. 새로 쓰는 것이 아니라 이것을 고쳐라 —")
+                appendLine("코드와 달라진 부분만 바로잡고, 여전히 맞는 내용은 그대로 다시 내보내라.")
+                appendLine(it)
+            }
+            appendLine()
+            appendLine("출력 형식 — 오직 이 JSON 객체 하나만. 이 함수 하나만 담아라.")
+            appendLine(FUNCTION_SCHEMA)
+            appendLine()
+            appendLine("규칙:")
+            appendLine("- anchor 는 시그니처 줄을 원문 그대로 복사해라. 이걸로 위치를 찾으므로 파일에 있어야 한다.")
+            appendLine("- 다른 함수나 파일 요약을 손대지 마라. 플러그인이 이 함수만 갈아 끼운다.")
+            appendLine("- 확인 못 한 키는 생략해라.")
+            appendLine()
+            appendLine(WRITING)
+        }
+
+    val FUNCTION_SCHEMA = """
+        {
+          "functions": [
+            { "name": "HandleLogin",
+              "anchor": "void PlayerSession::HandleLogin(const uint8_t* body, size_t len) {",
+              "purpose": "한 줄",
+              "thread": "", "locks": [], "calls": [], "effects": [], "gotchas": [] }
+          ]
+        }
+    """.trimIndent()
+
+    /** What the note already says about [symbol], so a re-analysis corrects instead of reinventing. */
+    private fun existingFunction(existing: JsonObject?, symbol: String): String? =
+        (existing?.get("functions") as? JsonArray)
+            ?.mapNotNull { it as? JsonObject }
+            ?.firstOrNull { it.get("name")?.takeIf { n -> n.isJsonPrimitive }?.asString == symbol }
+            ?.toString()
 
     private fun existingFlowNames(existing: JsonObject?): List<String> =
         (existing?.get("flows") as? JsonArray)?.mapNotNull { el ->

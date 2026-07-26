@@ -79,9 +79,21 @@ class AgentCliTest {
     }
 
     @Test
-    fun `a symbol scopes the prompt to one function`() {
-        val p = NoteRequest.prompt("Net/World.h", "", "Tick", existing = null)
-        assertTrue(p.contains("Tick 함수만"))
+    fun `a symbol asks for one function and only that function`() {
+        val existing = JsonParser.parseString(
+            """{"purpose":"월드","packets":[{"id":"2999","dir":"out"}],
+                "functions":[{"name":"Tick","anchor":"void World::Tick() {","purpose":"틱"}]}""",
+        ).asJsonObject
+        val p = NoteRequest.prompt("Net/World.h", "", "Tick", existing)
+
+        assertTrue(p.contains("대상 함수: Tick"))
+        // What the note already says about THAT function is sent, so this corrects rather than reinvents.
+        assertTrue(p.contains("void World::Tick() {"))
+        // The whole-note schema has no business here: the store upserts one function and leaves the rest
+        // alone, so inviting an agent to re-decide the summary and the packets would only lose them.
+        assertFalse(p.contains("roleInSystem"))
+        assertFalse(p.contains("\"packets\""))
+        assertTrue(p.contains("이 함수만 갈아 끼운다"))
     }
 
     @Test

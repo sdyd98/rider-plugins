@@ -394,16 +394,34 @@ fun DirBadge(label: String, color: Color) {
 
 /** One packet: direction badge, the id in monospace, and who handles/sends it. */
 @Composable
-fun PacketRow(dirLabel: String, dirColor: Color, id: String, handler: String, palette: CodemapPalette) {
+fun PacketRow(
+    dirLabel: String,
+    dirColor: Color,
+    id: String,
+    handler: String,
+    palette: CodemapPalette,
+    onJump: (() -> Unit)? = null,
+) {
+    val interaction = remember { MutableInteractionSource() }
+    val hovered by interaction.collectIsHoveredAsState()
+    val bg by animateColorAsState(if (hovered && onJump != null) palette.surfaceHover else Color.Transparent)
     Row(
-        Modifier.fillMaxWidth().padding(vertical = Space.xxs),
+        Modifier.fillMaxWidth()
+            .background(bg, RoundedCornerShape(Radii.sm))
+            .hoverable(interaction)
+            .let { m -> if (onJump != null) m.clickable(onClick = onJump) else m }
+            .padding(vertical = Space.xxs),
         horizontalArrangement = Arrangement.spacedBy(Space.sm),
         verticalAlignment = Alignment.Top,
     ) {
         if (dirLabel.isNotEmpty()) DirBadge(dirLabel, dirColor) else Spacer(Modifier.width(38.dp))
         Column(Modifier.fillMaxWidth()) {
             Mono(id, palette.text)
-            if (handler.isNotEmpty()) Mono(handler, palette.mutedText, size = Type.micro)
+            if (handler.isNotEmpty()) {
+                // The handler reads as the destination when there is one to go to, and as a plain note when
+                // its anchor no longer resolves — a stale jump is worse than no jump.
+                Mono(handler, if (onJump != null) palette.accent else palette.mutedText, size = Type.micro)
+            }
         }
     }
 }

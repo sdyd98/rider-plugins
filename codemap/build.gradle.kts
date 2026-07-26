@@ -77,6 +77,12 @@ kotlin {
 }
 
 intellijPlatform {
+    // Settings-search index for the 코드맵 settings page. Off because building it LAUNCHES a headless IDE,
+    // which fails outright while a sandbox is running ("Only one instance of Rider can be run at a time") —
+    // so `buildPlugin` would depend on nobody having runIde open. The page is still reachable the normal way
+    // (Settings | Tools | 코드맵); only typing its field names into the settings search box goes unindexed.
+    buildSearchableOptions = false
+
     pluginConfiguration {
         ideaVersion {
             sinceBuild = "261"

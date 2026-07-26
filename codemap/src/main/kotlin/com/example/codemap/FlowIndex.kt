@@ -27,6 +27,8 @@ object FlowIndex {
         val name: String,
         val steps: Int,
         val participants: List<String>,
+        /** The packet constants this flow traces, in order — how a packet finds the sequences it appears in. */
+        val packets: List<String> = emptyList(),
     ) {
         val ownerName: String get() = owner.substringAfterLast('/')
     }
@@ -42,6 +44,7 @@ object FlowIndex {
                     name = name,
                     steps = (flow.get("steps") as? JsonArray)?.size() ?: 0,
                     participants = participantsOf(flow),
+                    packets = packetsOf(flow),
                 )
             }
         }
@@ -79,6 +82,28 @@ object FlowIndex {
         return index(notes)
             .filter { it.owner != rel }
             .filter { entry -> entry.participants.any { leadingIdentifier(it) in names } }
+    }
+
+    /**
+     * Flows that trace [packet], anywhere in the store.
+     *
+     * Compared through [PacketIndex.key] so a flow writing `ClientPacket::LoginReq` is found by a note whose
+     * packets table says `1001` — the same protocol written two ways by two analyses.
+     */
+    fun tracing(notes: List<Pair<String, JsonObject>>, packet: String): List<Entry> {
+        val wanted = PacketIndex.key(packet)
+        return index(notes).filter { e -> e.packets.any { PacketIndex.key(it) == wanted || it == packet } }
+    }
+
+    /** Packet constants the flow's steps name, in order of first use. */
+    private fun packetsOf(flow: JsonObject): List<String> {
+        val out = LinkedHashSet<String>()
+        (flow.get("steps") as? JsonArray)?.forEach { el ->
+            val step = el as? JsonObject ?: return@forEach
+            step.str("packet")?.let(out::add)
+            step.str("id")?.let(out::add)
+        }
+        return out.toList()
     }
 
     /** Participants in order of first appearance — the same order the diagram lays its columns out in. */

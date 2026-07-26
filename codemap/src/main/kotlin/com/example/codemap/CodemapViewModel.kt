@@ -47,6 +47,10 @@ sealed interface CodemapState {
         val edited: Boolean,
         /** Flows held by OTHER notes in which this file takes part — see [FlowIndex]. */
         val appearances: List<FlowIndex.Entry>,
+        /** For each packet this note records, where else it turns up — see [PacketIndex]. */
+        val packetElsewhere: Map<String, List<PacketIndex.Entry>>,
+        /** For each packet this note records, the sequences that trace it. */
+        val packetFlows: Map<String, List<FlowIndex.Entry>>,
     ) : CodemapState {
         val name: String get() = rel.substringAfterLast('/')
         val dir: String get() = rel.substringBeforeLast('/', "")
@@ -155,12 +159,19 @@ class CodemapViewModel(private val project: Project) {
         }
     }
 
+    /** The packet ids a note records, in order — the keys of the cross-note lookups. */
+    private fun packetsOf(note: JsonObject?): List<String> =
+        (note?.get("packets") as? JsonArray)?.mapNotNull { el ->
+            (el as? JsonObject)?.get("id")?.takeIf { it.isJsonPrimitive }?.asString?.takeIf { it.isNotBlank() }
+        }.orEmpty()
+
     private fun load(file: VirtualFile): CodemapState {
         val io = File(file.path)
         val s = store ?: return CodemapState.Outside(file.path, "")
         val rel = s.relativize(io) ?: return CodemapState.Outside(file.path, s.root.absolutePath)
         val note = s.readNote(rel)
         val freshness = s.freshness(note)
+        val all = project.getService(CodemapStore::class.java).allNotes()
         watched = buildSet {
             add(io.absolutePath)
             (note?.get("files") as? com.google.gson.JsonArray)
@@ -183,12 +194,11 @@ class CodemapViewModel(private val project: Project) {
             // Cheap after the first read: the cross-note index is cached until `.codemap/` changes.
             // Compared by NOTE path: with a .cpp open, `rel` is the .cpp while the note — and every owner
             // in the index — is the .h, so comparing `rel` made this file's own flows look like someone
-            // else's.
-            appearances = FlowIndex.appearances(
-                project.getService(CodemapStore::class.java).allNotes(),
-                s.notePath(rel),
-                note,
-            ),
+            // else's. One walk of the store answers all three cross-note questions.
+            appearances = FlowIndex.appearances(all, s.notePath(rel), note),
+            packetElsewhere = PacketIndex.elsewhere(all, s.notePath(rel), note),
+            packetFlows = packetsOf(note).associateWith { FlowIndex.tracing(all, it) }
+                .filterValues { it.isNotEmpty() },
         )
     }
 
@@ -330,18 +340,18 @@ class CodemapViewModel(private val project: Project) {
      * store, so the note is still written in exactly one place with the provenance the store stamps. A
      * press costs tokens on your account, which is why the button says 실행.
      */
-    fun analyzeNow(question: String) {
+    fun analyzeNow(question: String, symbol: String = "") {
         val loaded = state as? CodemapState.Loaded ?: return
         val s = store ?: return
         if (analysis is Analysis.Running) return
 
-        analysis = Analysis.Running(loaded.rel)
+        analysis = Analysis.Running(if (symbol.isEmpty()) loaded.rel else "${loaded.name} :: $symbol")
         val r = AnalysisRunner(s).also { runner = it }
         val chosen = engine
         ApplicationManager.getApplication().executeOnPooledThread {
             val explicit = ApplicationManager.getApplication()
                 .getService(CodemapSettings::class.java)?.pathFor(chosen)
-            val result = r.analyze(loaded.rel, question, engine = chosen, explicitPath = explicit)
+            val result = r.analyze(loaded.rel, question, symbol = symbol, engine = chosen, explicitPath = explicit)
             ApplicationManager.getApplication().invokeLater {
                 analysis = when (result) {
                     is AnalysisRunner.Result.Ok -> Analysis.Idle

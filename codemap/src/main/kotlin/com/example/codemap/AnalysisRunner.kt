@@ -145,6 +145,17 @@ class AnalysisRunner(private val store: NoteStore) {
                 .getOrElse { Result.Failed("시퀀스 저장 실패: ${it.message}") }
         }
 
+        // A function-scoped answer touches only that function. Going through writeNote would take the
+        // incoming object as the whole note and drop every key the answer did not repeat — the file's
+        // summary, its packets, its threading. writeFunctions upserts by name and leaves the rest alone.
+        if (symbol.isNotBlank()) {
+            val functions = note.get("functions") as? com.google.gson.JsonArray
+                ?: return Result.Failed("응답에 functions 배열이 없습니다")
+            if (functions.isEmpty) return Result.Failed("$symbol 을 분석하지 못했습니다")
+            return runCatching { Result.Ok(store.writeFunctions(relPath, functions)) }
+                .getOrElse { Result.Failed("함수 저장 실패: ${it.message}") }
+        }
+
         return runCatching { Result.Ok(store.writeNote(relPath, note)) }
             .getOrElse { Result.Failed("노트 저장 실패: ${it.message}") }
     }

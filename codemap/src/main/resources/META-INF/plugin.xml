@@ -33,6 +33,14 @@
     </dependencies>
 
     <extensions defaultExtensionNs="com.intellij">
+        <!-- Where the analysis engines live. A platform settings page rather than a field in the tool
+             window: a Compose text field there takes keyboard focus and swallows the IDE's shortcuts. -->
+        <applicationConfigurable
+            parentId="tools"
+            instance="com.example.codemap.CodemapConfigurable"
+            id="com.example.codemap.settings"
+            displayName="코드맵"/>
+
         <!-- The note store for one project (.codemap/ under the project root). -->
         <projectService serviceImplementation="com.example.codemap.CodemapStore"/>
 
