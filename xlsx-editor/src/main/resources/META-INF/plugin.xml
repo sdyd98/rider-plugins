@@ -56,7 +56,11 @@
         <diff.DiffTool implementation="com.example.xlsx.XlsxGridDiffTool" order="first"/>
 
         <!-- Relationship view: table-level ER map, record-level lineage explorer, and integrity check. -->
-        <toolWindow id="관계도" anchor="right" factoryClass="com.example.xlsx.RefGraphToolWindow"/>
+        <!-- The icon is REQUIRED, not decoration: the new UI's tool window stripe only shows buttons for
+             tool windows that declare one, so without it the window is unreachable once closed — it survives
+             only in View | Tool Windows. -->
+        <toolWindow id="관계도" anchor="right" icon="AllIcons.Graph.Layout"
+                    factoryClass="com.example.xlsx.RefGraphToolWindow"/>
     </extensions>
 
 </idea-plugin>

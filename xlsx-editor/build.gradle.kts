@@ -92,8 +92,12 @@ intellijPlatform {
 
 // Give the sandbox more heap so large (100 MB+) spreadsheets can be load-tested. Dev-only — this
 // does NOT affect the shipped plugin; users adjust their own IDE memory (Help → Change Memory Settings).
+// Dev convenience: open a project straight away in the sandbox IDE, so a manual check doesn't start with
+// a file-chooser every time.
+//   ./gradlew :xlsx-editor:runIde -PrunIdeProject=/path/to/a/folder/with/xlsx
 tasks.runIde {
     maxHeapSize = "4g"
+    providers.gradleProperty("runIdeProject").orNull?.let { args(it) }
 }
 
 dependencies {
