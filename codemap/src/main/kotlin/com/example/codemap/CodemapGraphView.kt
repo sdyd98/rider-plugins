@@ -104,22 +104,24 @@ fun CodemapGraphView(vm: GraphViewModel) {
             layout = GraphLayout.Layered,
             flow = GraphFlow.TopToBottom,
             modifier = Modifier.fillMaxSize(),
-            // A neighbour re-centres the graph on itself; the focus takes you to the code.
+            // One click looks from that node; two clicks leave for its code. Two verbs, two gestures.
             onNodeClick = { name -> vm.refocus(name); usages = null },
             onFocusClick = { name -> graph.layers.flatten().firstOrNull { it.name == name }?.let(vm::jumpTo) },
+            onNodeDoubleClick = { name ->
+                graph.layers.flatten().firstOrNull { it.name == name }?.let(vm::jumpTo)
+            },
         ) {
+            // Segments, not a dropdown: three short options where seeing the range is itself the
+            // information, and the dropdown's extra click would buy nothing.
             Text("깊이", color = p.mutedText, fontSize = Type.micro)
-            Box(Modifier.width(Space.xs))
-            listOf(1, 2, 3).forEach { d ->
-                ActionButton("$d", p, primary = vm.depth == d) { vm.changeDepth(d) }
-            }
+            Segments(listOf("1", "2", "3"), vm.depth - 1, p) { i -> vm.changeDepth(i + 1) }
             Box(Modifier.width(Space.md))
             self?.let { node ->
-                ActionButton("사용처 찾기", p, primary = false) {
+                HintedButton("사용처 찾기", "이 함수가 실제로 호출되는 곳 — 라이더가 찾고 아래에 보여줍니다", p) {
                     searching = true
                     vm.findUsages(node) { r -> searching = false; usages = r }
                 }
-                ActionButton("코드로 이동", p, primary = false) { vm.jumpTo(node) }
+                HintedButton("코드로 이동", "이 함수의 정의로 점프", p) { vm.jumpTo(node) }
             }
             if (searching) Text("찾는 중…", color = p.mutedText, fontSize = Type.micro)
         }
@@ -226,9 +228,9 @@ private fun cards(
             val f = details[node.name]
             val rows = buildList {
                 f?.str("purpose")?.let { add(GraphRow(text = it.short(), mark = "· ")) }
-                f?.str("thread")?.let { add(GraphRow(text = it, mark = "⇄ ", tint = p.accent)) }
+                f?.str("thread")?.let { add(GraphRow(text = it, mark = "스레드 ", tint = p.accent)) }
                 f?.strs("locks")?.filter { it.isNotBlank() && it != "없음" }?.forEach {
-                    add(GraphRow(text = it.short(), mark = "🔒 ", tint = p.warn))
+                    add(GraphRow(text = it.short(), mark = "락 ", tint = p.warn))
                 }
                 graph.edges.filter { it.first == node.name && it.second in visible }.forEach { (_, to) ->
                     add(

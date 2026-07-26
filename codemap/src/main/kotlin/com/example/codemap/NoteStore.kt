@@ -9,8 +9,7 @@ import java.io.File
 import java.time.LocalDate
 
 /**
- * The `.codemap/` store rooted at one directory: per-directory note bundles plus the pending-analysis
- * queue. Plain `java.io` and Gson only — no IDE types — so the whole store is covered by headless
+ * The `.codemap/` store rooted at one directory: per-directory note bundles. Plain `java.io` and Gson only — no IDE types — so the whole store is covered by headless
  * tests against a real temp repository ([NoteStoreTest]). [CodemapStore] is the thin project-scoped
  * wrapper that decides which directory this is rooted at.
  *
@@ -78,7 +77,7 @@ class NoteStore(val root: File, private val today: () -> String = { LocalDate.no
 
     /**
      * Store [note] for [relFile] (its pair shares the entry), stamping provenance. Returns the stamped
-     * note. Any pending request for the same note is cleared — writing the note IS answering it.
+     * note.
      */
     fun writeNote(relFile: String, note: JsonObject): JsonObject {
         val key = noteKeyFor(relFile)
@@ -117,7 +116,6 @@ class NoteStore(val root: File, private val today: () -> String = { LocalDate.no
         stamped.addProperty("analyzedCommit", FileFacts.headCommit(root))
 
         putNote(relFile, stamped)
-        removePending(relFile)
         return stamped
     }
 
@@ -172,8 +170,7 @@ class NoteStore(val root: File, private val today: () -> String = { LocalDate.no
      *
      * Distinct from [writeNote] in one more way that matters: provenance is **preserved, not re-stamped**.
      * Fixing a sentence is not an analysis — the note still describes the same source at the same hashes,
-     * and moving `analyzedAt` to today would claim a re-read that never happened. For the same reason this
-     * does not clear the pending queue: a wording fix does not answer the question someone asked.
+     * and moving `analyzedAt` to today would claim a re-read that never happened.
      *
      * Returns the saved note, or null when there is nothing to edit or the path names nothing.
      */
@@ -307,120 +304,6 @@ class NoteStore(val root: File, private val today: () -> String = { LocalDate.no
             if (FileFacts.sha256(f) != recorded) return Freshness.STALE
         }
         return Freshness.FRESH
-    }
-
-    // ---- pending queue ----
-
-    /**
-     * A queued analysis request: the file, the optional question that motivated it, and an optional
-     * [symbol] narrowing it to one function — on a 6,000-line file "look at Dispatch" is a very
-     * different ask from "analyze this file", and they queue independently.
-     */
-    data class Pending(
-        val path: String,
-        val question: String,
-        val requestedAt: String,
-        val reason: String,
-        val symbol: String = "",
-        /** A scenario to draw as a sequence diagram, in the requester's own words. */
-        val flow: String = "",
-    )
-
-    private val pendingFile: File get() = File(codemapDir, CodemapPaths.PENDING)
-
-    fun pending(): List<Pending> {
-        val arr = readJson(pendingFile)?.get("requests") as? JsonArray ?: return emptyList()
-        return arr.mapNotNull { el ->
-            val o = el as? JsonObject ?: return@mapNotNull null
-            Pending(
-                path = o.get("path")?.asString ?: return@mapNotNull null,
-                question = o.get("question")?.asString.orEmpty(),
-                requestedAt = o.get("requestedAt")?.asString.orEmpty(),
-                reason = o.get("reason")?.asString.orEmpty(),
-                symbol = o.get("symbol")?.asString.orEmpty(),
-                flow = o.get("flow")?.asString.orEmpty(),
-            )
-        }
-    }
-
-    /**
-     * Queue (or re-queue) [relFile] for analysis. Requests are keyed by note — asking twice about the
-     * same file updates the entry instead of piling up duplicates.
-     *
-     * A blank [question] never erases one already queued: the question is the expensive part (someone
-     * typed it), the button press is cheap, so pressing 분석 요청 again without typing must not silently
-     * throw away what you asked for last time. Passing a non-blank question does replace it.
-     */
-    fun addPending(
-        relFile: String,
-        question: String,
-        reason: String,
-        symbol: String = "",
-        flow: String = "",
-    ) {
-        val path = canonicalPendingPath(relFile)
-        // A file request, a "just this function" request and each requested scenario are different asks on
-        // the same file, so they queue independently instead of overwriting one another.
-        val key = Triple(path, symbol.trim(), flow.trim())
-        val all = pending()
-        val existing = all.firstOrNull { keyOf(it) == key }
-        val kept = all.filter { keyOf(it) != key }
-        val q = question.trim().ifEmpty { existing?.question.orEmpty() }
-        writePending(kept + Pending(path, q, today(), reason, key.second, key.third))
-    }
-
-    private fun keyOf(p: Pending) = Triple(canonicalPendingPath(p.path), p.symbol, p.flow)
-
-    /** Clear requests for [relFile]; with [symbol] only that one, otherwise every request on the file. */
-    fun removePending(relFile: String, symbol: String? = null) {
-        val key = canonicalPendingPath(relFile)
-        val all = pending()
-        val kept = all.filter { canonicalPendingPath(it.path) != key || (symbol != null && it.symbol != symbol) }
-        if (kept.size != all.size) writePending(kept)
-    }
-
-    /** Clear one requested scenario — writing that diagram IS answering it. */
-    fun removeFlowPending(relFile: String, flow: String) {
-        val key = canonicalPendingPath(relFile)
-        val all = pending()
-        val kept = all.filter { canonicalPendingPath(it.path) != key || it.flow != flow }
-        if (kept.size != all.size) writePending(kept)
-    }
-
-    /** Scenarios still queued for [relFile] — shown next to the diagrams that already exist. */
-    fun flowRequests(relFile: String): List<Pending> {
-        val key = canonicalPendingPath(relFile)
-        return pending().filter { canonicalPendingPath(it.path) == key && it.flow.isNotEmpty() }
-    }
-
-    /** The pending entry covering [relFile], if any (a .cpp finds the request filed under its .h). */
-    fun pendingFor(relFile: String): Pending? {
-        val key = canonicalPendingPath(relFile)
-        return pending().firstOrNull { canonicalPendingPath(it.path) == key }
-    }
-
-    private fun canonicalPendingPath(relFile: String): String {
-        val dir = relFile.substringBeforeLast('/', "")
-        val key = noteKeyFor(relFile)
-        return if (dir.isEmpty()) key else "$dir/$key"
-    }
-
-    private fun writePending(requests: List<Pending>) {
-        val obj = JsonObject()
-        obj.addProperty("version", 1)
-        obj.add("requests", JsonArray().apply {
-            requests.forEach { p ->
-                add(JsonObject().apply {
-                    addProperty("path", p.path)
-                    if (p.question.isNotEmpty()) addProperty("question", p.question)
-                    if (p.symbol.isNotEmpty()) addProperty("symbol", p.symbol)
-                    if (p.flow.isNotEmpty()) addProperty("flow", p.flow)
-                    addProperty("requestedAt", p.requestedAt)
-                    addProperty("reason", p.reason)
-                })
-            }
-        })
-        writeJson(pendingFile, obj)
     }
 
     /** `.codemap/` is per-machine scratch: keep it out of git without editing the project's .gitignore. */

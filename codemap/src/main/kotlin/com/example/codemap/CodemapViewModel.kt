@@ -41,14 +41,10 @@ sealed interface CodemapState {
         /** Where each function's anchor currently sits, by function name. Absent = anchor not found. */
         val functionLoc: Map<String, FnLoc>,
         val freshness: NoteStore.Freshness,
-        val pending: NoteStore.Pending?,
-        val pendingTotal: Int,
         /** Commits that landed on this file since the note was written; null when unknown. */
         val commitsSince: Int?,
         /** Someone has corrected this note by hand — those corrections outlive a re-analysis. */
         val edited: Boolean,
-        /** Scenarios queued for a sequence diagram but not drawn yet. */
-        val flowRequests: List<NoteStore.Pending>,
     ) : CodemapState {
         val name: String get() = rel.substringAfterLast('/')
         val dir: String get() = rel.substringBeforeLast('/', "")
@@ -157,15 +153,6 @@ class CodemapViewModel(private val project: Project) {
         }
     }
 
-    fun requestAnalysis(question: String) {
-        val loaded = state as? CodemapState.Loaded ?: return
-        val reason = if (loaded.note == null) "new" else "stale"
-        ApplicationManager.getApplication().executeOnPooledThread {
-            runCatching { store?.addPending(loaded.rel, question, reason) }
-            reload()
-        }
-    }
-
     private fun load(file: VirtualFile): CodemapState {
         val io = File(file.path)
         val s = store ?: return CodemapState.Outside(file.path, "")
@@ -189,11 +176,9 @@ class CodemapViewModel(private val project: Project) {
             note = note,
             functionLoc = note?.let { locateFunctions(s, it) }.orEmpty(),
             freshness = freshness,
-            pending = s.pendingFor(rel),
-            pendingTotal = s.pending().size,
             commitsSince = since,
             edited = s.edited(note),
-            flowRequests = s.flowRequests(rel),
+            // Cheap after the first read: the cross-note index is cached until `.codemap/` changes.
         )
     }
 
@@ -275,10 +260,10 @@ class CodemapViewModel(private val project: Project) {
     )
         private set
 
-    /** Whether the chosen engine is actually installed — checked for the panel, not at spawn time. */
-    fun engineMissing(): Boolean {
+    /** Whether an engine is actually installed — checked for the panel, not at spawn time. */
+    fun engineInstalled(e: Engine): Boolean {
         val settings = ApplicationManager.getApplication().getService(CodemapSettings::class.java)
-        return engine.cli.discover(settings?.pathFor(engine)) == null
+        return e.cli.discover(settings?.pathFor(e)) != null
     }
 
     fun chooseEngine(e: Engine) {
@@ -313,16 +298,6 @@ class CodemapViewModel(private val project: Project) {
                     is AnalysisRunner.Result.Failed -> Analysis.Failed(result.reason)
                 }
             }
-            reload()
-        }
-    }
-
-    /** Queue a scenario for the batch path instead of running it now. */
-    fun queueSequence(scenario: String, question: String = "") {
-        val loaded = state as? CodemapState.Loaded ?: return
-        if (scenario.isBlank()) return
-        ApplicationManager.getApplication().executeOnPooledThread {
-            runCatching { store?.addPending(loaded.rel, question, "new", flow = scenario) }
             reload()
         }
     }

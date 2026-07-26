@@ -122,62 +122,6 @@ class NoteStoreTest {
     }
 
     @Test
-    fun `requests are keyed by note - asking twice updates the question`() {
-        write("Net/World.h", "#pragma once\n")
-        write("Net/World.cpp", "#include \"World.h\"\n")
-        val s = store()
-
-        s.addPending("Net/World.h", "틱이 어디서 도는지", "new")
-        s.addPending("Net/World.cpp", "락 순서", "new") // same note, via the other half of the pair
-
-        assertEquals(1, s.pending().size)
-        assertEquals("락 순서", s.pending().first().question)
-        assertEquals("Net/World.h", s.pending().first().path)
-        assertEquals("락 순서", s.pendingFor("Net/World.cpp")?.question)
-    }
-
-    @Test
-    fun `re-requesting without typing keeps the question already queued`() {
-        write("Net/World.h", "#pragma once\n")
-        val s = store()
-        s.addPending("Net/World.h", "틱 스레드가 락을 어떤 순서로 잡는지", "new")
-
-        s.addPending("Net/World.h", "", "stale") // the bare button press
-
-        assertEquals(1, s.pending().size)
-        assertEquals("틱 스레드가 락을 어떤 순서로 잡는지", s.pending().first().question)
-        assertEquals("stale", s.pending().first().reason)
-
-        // Typing a new question does replace it.
-        s.addPending("Net/World.h", "Broadcast의 exceptPlayerId가 맞는지", "stale")
-        assertEquals("Broadcast의 exceptPlayerId가 맞는지", s.pending().first().question)
-    }
-
-    @Test
-    fun `writing a note answers - and clears - its request`() {
-        write("Net/World.h", "#pragma once\n")
-        val s = store()
-        s.addPending("Net/World.h", "틱이 어디서 도는지", "new")
-        assertEquals(1, s.pending().size)
-
-        s.writeNote("Net/World.h", note("월드"))
-
-        assertTrue(s.pending().isEmpty())
-        assertNull(s.pendingFor("Net/World.h"))
-    }
-
-    @Test
-    fun `queueing one file does not disturb another`() {
-        write("A.h", "#pragma once\n")
-        write("B.h", "#pragma once\n")
-        val s = store()
-        s.addPending("A.h", "질문 A", "new")
-        s.addPending("B.h", "질문 B", "new")
-        s.writeNote("A.h", note("에이"))
-        assertEquals(listOf("B.h"), s.pending().map { it.path })
-    }
-
-    @Test
     fun `allNotes enumerates every bundle - including a source directory named with an underscore`() {
         write("main.cpp", "int main(){}\n")
         write("Net/PlayerSession.h", "#pragma once\n")
@@ -186,7 +130,10 @@ class NoteStoreTest {
         s.writeNote("main.cpp", note("루트"))
         s.writeNote("Net/PlayerSession.h", note("세션"))
         s.writeNote("_demo/Sample.h", note("샘플"))
-        s.addPending("Net/PlayerSession.h", "", "stale") // _pending.json must not be read as notes
+        // A queue file left behind by an older version of the plugin. There is no longer an API that
+        // writes one, and it must keep being skipped rather than read as a bundle of notes.
+        File(s.codemapDir, CodemapPaths.PENDING)
+            .writeText("""{"version":1,"requests":[{"path":"Net/PlayerSession.h","reason":"stale"}]}""")
 
         assertEquals(
             listOf("Net/PlayerSession.h", "_demo/Sample.h", "main.cpp"),
@@ -225,27 +172,10 @@ class NoteStoreTest {
     }
 
     @Test
-    fun `a function request is queued separately from a whole-file request`() {
-        write("Net/Big.h", "#pragma once\n")
-        val s = store()
-        s.addPending("Net/Big.h", "전체 봐줘", "new")
-        s.addPending("Net/Big.h", "Dispatch만", "new", symbol = "Dispatch")
-
-        assertEquals(2, s.pending().size)
-        assertEquals("Dispatch", s.pending()[1].symbol)
-
-        // Re-asking about the same function updates that entry only.
-        s.addPending("Net/Big.h", "Dispatch 초기화 순서", "new", symbol = "Dispatch")
-        assertEquals(2, s.pending().size)
-        assertEquals("Dispatch 초기화 순서", s.pending().first { it.symbol == "Dispatch" }.question)
-    }
-
-    @Test
-    fun `a human edit preserves provenance and does not answer the queued question`() {
+    fun `a human edit preserves provenance`() {
         val f = write("Net/World.h", "#pragma once\n")
         val s = store()
         s.writeNote("Net/World.h", note("월드"))
-        s.addPending("Net/World.h", "틱 스레드가 락을 어떤 순서로 잡는지", "new")
         val before = s.readNote("Net/World.h")!!
         val hashesBefore = before.getAsJsonObject("hashes").toString()
 
@@ -257,8 +187,6 @@ class NoteStoreTest {
         assertEquals(before.get("analyzedAt").asString, after.get("analyzedAt").asString)
         assertEquals(before.get("analyzedCommit").asString, after.get("analyzedCommit").asString)
         assertEquals(hashesBefore, after.getAsJsonObject("hashes").toString())
-        // …and it does not answer the question someone asked.
-        assertEquals(1, s.pending().size)
         assertEquals(NoteStore.Freshness.FRESH, s.freshness(after))
         assertEquals("#pragma once\n", f.readText())
     }
@@ -368,40 +296,6 @@ class NoteStoreTest {
 
         s.removeFlow("Net/World.h", "입장")
         assertNull(s.readNote("Net/World.h")!!.get("flows"))
-    }
-
-    @Test
-    fun `a scenario request queues beside the file and function requests, not over them`() {
-        write("Net/World.h", "#pragma once\n")
-        val s = store()
-        s.addPending("Net/World.h", "락 순서", "new")
-        s.addPending("Net/World.h", "", "new", symbol = "Tick")
-        s.addPending("Net/World.h", "", "new", flow = "로그인부터 월드 입장까지")
-        s.addPending("Net/World.h", "", "new", flow = "퇴장 처리")
-
-        assertEquals(4, s.pending().size)
-        assertEquals(
-            listOf("로그인부터 월드 입장까지", "퇴장 처리"),
-            s.flowRequests("Net/World.h").map { it.flow },
-        )
-
-        // Answering one scenario leaves the others alone.
-        s.removeFlowPending("Net/World.h", "퇴장 처리")
-        assertEquals(listOf("로그인부터 월드 입장까지"), s.flowRequests("Net/World.h").map { it.flow })
-        assertEquals(3, s.pending().size)
-    }
-
-    @Test
-    fun `re-asking for the same scenario updates it instead of piling up`() {
-        write("Net/World.h", "#pragma once\n")
-        val s = store()
-        s.addPending("Net/World.h", "동기인지 비동기인지", "new", flow = "로그인")
-        s.addPending("Net/World.h", "", "new", flow = "로그인")
-
-        val reqs = s.flowRequests("Net/World.h")
-        assertEquals(1, reqs.size)
-        // A blank question does not erase the one already typed — same rule as the file-level request.
-        assertEquals("동기인지 비동기인지", reqs[0].question)
     }
 
     // ---- a re-analysis must not undo a person's work ----

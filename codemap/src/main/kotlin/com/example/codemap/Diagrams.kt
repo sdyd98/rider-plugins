@@ -36,6 +36,7 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.drawText
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.font.FontFamily
+import com.example.graph.readsAsCode
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -96,17 +97,23 @@ fun SequenceDiagram(
     val measurer = rememberTextMeasurer()
     val index = participants.withIndex().associate { (i, p) -> p to i }
 
+    // Two variants of each, chosen per string: fixed pitch lines identifiers up, and a note's label is
+    // often a Korean sentence that a monospace typeface would draw as empty boxes.
     val nameStyle = TextStyle(
         color = palette.text,
         fontSize = (NAME_SP * scale).sp,
         fontFamily = FontFamily.Monospace,
         fontWeight = FontWeight.Medium,
     )
+    val nameProse = nameStyle.copy(fontFamily = FontFamily.Default)
     val labelStyle = TextStyle(
         color = palette.text,
         fontSize = (LABEL_SP * scale).sp,
         fontFamily = FontFamily.Monospace,
     )
+    val labelProse = labelStyle.copy(fontFamily = FontFamily.Default)
+    fun nameStyleOf(t: String) = if (readsAsCode(t)) nameStyle else nameProse
+    fun labelStyleOf(t: String) = if (readsAsCode(t)) labelStyle else labelProse
     val numStyle = TextStyle(
         color = palette.accent,
         fontSize = (NUM_SP * scale).sp,
@@ -115,7 +122,7 @@ fun SequenceDiagram(
 
     val density = LocalDensity.current
     val layout = remember(participants, steps, scale, density) {
-        sequenceLayout(participants, steps, scale, measurer, nameStyle, labelStyle)
+        sequenceLayout(participants, steps, scale, measurer, ::nameStyleOf, ::labelStyleOf)
     }
 
     Box(
@@ -163,7 +170,7 @@ fun SequenceDiagram(
                     ),
                 )
 
-                val labelLay = measurer.measure(step.label, labelStyle)
+                val labelLay = measurer.measure(step.label, labelStyleOf(step.label))
                 val labelY: Float
                 val labelCx: Float
 
@@ -214,7 +221,7 @@ fun SequenceDiagram(
 
             // Participant cards last: they cap the lifelines they own.
             participants.forEachIndexed { i, name ->
-                val lay = measurer.measure(name, nameStyle)
+                val lay = measurer.measure(name, nameStyleOf(name))
                 val w = lay.size.width + CARD_PAD * scale * 2
                 val left = layout.centers[i] - w / 2f
                 val rect = Rect(left, 0f, left + w, cardH)
@@ -253,14 +260,14 @@ private fun sequenceLayout(
     steps: List<SeqStep>,
     scale: Float,
     measurer: TextMeasurer,
-    nameStyle: TextStyle,
-    labelStyle: TextStyle,
+    nameStyle: (String) -> TextStyle,
+    labelStyle: (String) -> TextStyle,
 ): SequenceGeometry {
-    val halves = participants.map { measurer.measure(it, nameStyle).size.width / 2f + CARD_PAD * scale }
+    val halves = participants.map { measurer.measure(it, nameStyle(it)).size.width / 2f + CARD_PAD * scale }
     val selfLabel = steps.filter { it.from == it.to }
         .groupBy { it.from }
         .mapValues { (_, group) ->
-            group.maxOf { measurer.measure(it.label, labelStyle).size.width.toFloat() } + 24f * scale
+            group.maxOf { measurer.measure(it.label, labelStyle(it.label)).size.width.toFloat() } + 24f * scale
         }
 
     // The widest one-hop caption crossing each gap.
@@ -271,7 +278,7 @@ private fun sequenceLayout(
         val b = index[st.to] ?: return@forEach
         if (a == b || kotlin.math.abs(a - b) != 1) return@forEach
         val g = minOf(a, b)
-        gapLabel[g] = maxOf(gapLabel[g], measurer.measure(st.label, labelStyle).size.width + 12f * scale)
+        gapLabel[g] = maxOf(gapLabel[g], measurer.measure(st.label, labelStyle(st.label)).size.width + 12f * scale)
     }
 
     val centers = FloatArray(participants.size)
@@ -345,7 +352,12 @@ fun FlowChart(steps: List<String>, palette: CodemapPalette) {
                         .border(BorderStroke(1.dp, palette.border.copy(alpha = 0.5f)), RoundedCornerShape(Radii.sm))
                         .padding(horizontal = Space.sm, vertical = 3.dp),
                 ) {
-                    Text(step, color = palette.text, fontSize = 10.sp, fontFamily = FontFamily.Monospace)
+                    Text(
+                        step,
+                        color = palette.text,
+                        fontSize = 10.sp,
+                        fontFamily = if (readsAsCode(step)) FontFamily.Monospace else FontFamily.Default,
+                    )
                 }
             }
             if (i < steps.lastIndex) {

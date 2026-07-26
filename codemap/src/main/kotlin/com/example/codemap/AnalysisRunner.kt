@@ -141,11 +141,8 @@ class AnalysisRunner(private val store: NoteStore) {
             val flows = note.get("flows") as? com.google.gson.JsonArray
                 ?: return Result.Failed("응답에 flows 배열이 없습니다")
             if (flows.isEmpty) return Result.Failed("시퀀스를 만들지 못했습니다")
-            return runCatching {
-                val stamped = store.writeFlows(relPath, flows)
-                store.removeFlowPending(relPath, flow)
-                Result.Ok(stamped)
-            }.getOrElse { Result.Failed("시퀀스 저장 실패: ${it.message}") }
+            return runCatching { Result.Ok(store.writeFlows(relPath, flows)) }
+                .getOrElse { Result.Failed("시퀀스 저장 실패: ${it.message}") }
         }
 
         return runCatching { Result.Ok(store.writeNote(relPath, note)) }

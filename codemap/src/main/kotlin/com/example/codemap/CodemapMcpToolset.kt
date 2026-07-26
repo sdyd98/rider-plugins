@@ -25,53 +25,19 @@ import java.io.File
  * "parser" over 58M lines of macro-heavy C++ would be confidently wrong often enough to poison the
  * notes. Every interpretation is yours, made by READING THE SOURCE.
  *
- * Typical flow: [codemap_next_pending] (what did the developer ask about?) -> [codemap_stat] (facts +
- * where the pair lives) -> read the actual source -> [codemap_write_note]. [codemap_list_stale] finds
- * notes whose code has since changed; [codemap_find_mentions] is a literal text grep for tracing a
- * symbol by hand.
+ * Typical flow: the developer names a file (or asks a question about one) -> [codemap_stat] (facts + where
+ * the pair lives) -> read the actual source -> [codemap_write_note]. [codemap_list_stale] finds notes whose
+ * code has since changed; [codemap_find_mentions] is a literal text grep for tracing a symbol by hand.
+ *
+ * There is no request queue: what to analyze comes from the person asking you, not from a to-do list the
+ * plugin keeps. A question they typed in the panel is used the moment they press 분석 실행 and is not
+ * stored, so if they mention one here it is the brief — answer it in the note rather than producing a
+ * generic summary.
  *
  * Every tool returns JSON text. Paths are project-relative (absolute paths inside the project are
  * accepted and normalized).
  */
 class CodemapMcpToolset : McpToolset {
-
-    // ---- the queue: what the developer asked for ----
-
-    @McpTool
-    @McpDescription(
-        "The analysis requests the developer queued from the 코드맵 tool window, oldest first. Each has " +
-            "the file, the reason (new = never analyzed, stale = code changed since the last note), and " +
-            "often a QUESTION — a specific thing they want understood about that file. Treat the question " +
-            "as the brief: answer it in the note (in `gotchas`/`purpose`/`threading` as fits) rather than " +
-            "producing a generic summary. A request may also carry a `symbol`, narrowing it to one " +
-            "function — answer that one with codemap_write_functions rather than re-analyzing the file. " +
-            "A request carrying a `flow` asks for ONE SCENARIO as a sequence diagram: answer it with " +
-            "codemap_write_flows and nothing else — do not rewrite the note around it. " +
-            "A request is cleared automatically when you write its note.",
-    )
-    suspend fun codemap_next_pending(
-        @McpDescription("Max requests returned.") limit: Int = 10,
-    ): String = ioJson { store ->
-        val all = store.pending()
-        val page = all.take(limit.coerceAtLeast(1))
-        json {
-            addProperty("root", store.root.absolutePath)
-            addProperty("pendingTotal", all.size)
-            addProperty("returned", page.size)
-            add("requests", JsonArray().apply {
-                page.forEach { p ->
-                    add(json {
-                        addProperty("path", p.path)
-                        addProperty("reason", p.reason)
-                        addProperty("requestedAt", p.requestedAt)
-                        if (p.question.isNotEmpty()) addProperty("question", p.question)
-                        if (p.symbol.isNotEmpty()) addProperty("symbol", p.symbol)
-                        if (p.flow.isNotEmpty()) addProperty("flow", p.flow)
-                    })
-                }
-            })
-        }
-    }
 
     // ---- the facts ----
 
@@ -208,8 +174,8 @@ class CodemapMcpToolset : McpToolset {
 
     @McpTool
     @McpDescription(
-        "Store the understanding note for a file (its `.h`/`.cpp` pair shares one note) and clear any " +
-            "pending request for it. [note] is a JSON object; `files`, `hashes`, `analyzedAt` and " +
+        "Store the understanding note for a file — its `.h`/`.cpp` pair shares one note. " +
+            "[note] is a JSON object; `files`, `hashes`, `analyzedAt` and " +
             "`analyzedCommit` are stamped by the tool — do not write them. Everything else is yours and " +
             "is stored verbatim, so the shape can grow without a plugin change; the 코드맵 tool window " +
             "renders these keys:\n" +
@@ -235,7 +201,7 @@ class CodemapMcpToolset : McpToolset {
             "                 codemap_write_functions for the shape. On a file of any size prefer that tool,\n" +
             "                 which upserts by name instead of making you resend everything.\n" +
             "Write only what you actually established from the source; omit a key rather than filling it " +
-            "with a guess. If the request carried a question, make sure the note answers it.",
+            "with a guess. If the developer asked a question, make sure the note answers it.",
     )
     suspend fun codemap_write_note(
         @McpDescription("File path, project-relative or absolute.") path: String,
@@ -303,7 +269,7 @@ class CodemapMcpToolset : McpToolset {
     @McpDescription(
         "Add sequence diagrams to a note's `flows`, matched by `name` — an existing name is replaced, a " +
             "new one is appended, and nothing else in the note is touched. This is the ONLY tool to answer " +
-            "a pending request that carries a `flow`.\n" +
+            "one scenario a developer asked about.\n" +
             "Each entry: {name, steps:[{from, to, call, kind, description}]}\n" +
             "  name        string — short label for the scenario\n" +
             "  from        string — the participant that acts (a real class/module name, never invented)\n" +
@@ -326,18 +292,13 @@ class CodemapMcpToolset : McpToolset {
             ?: error("flows가 JSON 배열이 아닙니다")
         require(!parsed.isEmpty) { "flows가 비어 있습니다" }
         val stamped = store.writeFlows(rel, parsed)
-        // Answering the scenario clears its request; a name that was not asked for simply has none.
-        parsed.mapNotNull { (it as? JsonObject)?.get("name")?.asString }
-            .forEach { store.removeFlowPending(rel, it) }
         json {
             addProperty("path", rel)
+            // Every flow the note now holds, so the caller can see what it added to rather than replaced.
             add("flows", JsonArray().apply {
                 (stamped.getAsJsonArray("flows") ?: JsonArray()).forEach { el ->
                     (el as? JsonObject)?.get("name")?.asString?.let { add(it) }
                 }
-            })
-            add("stillRequested", JsonArray().apply {
-                store.flowRequests(rel).forEach { add(it.flow) }
             })
         }
     }

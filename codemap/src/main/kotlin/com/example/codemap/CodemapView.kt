@@ -79,7 +79,7 @@ private fun LoadedView(
     question: TextFieldState,
     p: CodemapPalette,
 ) {
-    Header(s, p)
+    Header(s, vm, p)
     Rule(p)
 
     val note = s.note
@@ -96,7 +96,7 @@ private fun LoadedView(
 // ---- header ----
 
 @Composable
-private fun Header(s: CodemapState.Loaded, p: CodemapPalette) {
+private fun Header(s: CodemapState.Loaded, vm: CodemapViewModel, p: CodemapPalette) {
     Text(s.name, color = p.text, fontSize = Type.title, fontWeight = FontWeight.SemiBold)
     if (s.dir.isNotEmpty()) Text(s.dir, color = p.mutedText, fontSize = Type.label)
 
@@ -111,18 +111,23 @@ private fun Header(s: CodemapState.Loaded, p: CodemapPalette) {
             NoteStore.Freshness.NO_NOTE -> Chip("미분석", p.mutedText, p)
             NoteStore.Freshness.UNKNOWN -> Chip("확인 불가", p.mutedText, p)
         }
-        if (s.pending != null) Chip("요청됨", p.accent, p)
         // A note someone has corrected by hand reads differently — and those corrections now survive a
         // re-analysis, so it matters that you can see there are some.
         if (s.edited) Chip("수정됨", p.mutedText, p)
     }
 
-    // The one thing that must be impossible to miss when a note has drifted from the code.
+    // The one thing that must be impossible to miss when a note has drifted from the code — and the fix is
+    // one press away, because a warning you have to act on elsewhere is a warning people learn to ignore.
     if (s.freshness == NoteStore.Freshness.STALE) {
         val at = s.note?.string("analyzedAt").orEmpty()
         val drift = s.commitsSince?.let { ", 이후 커밋 %,d개".format(it) }.orEmpty()
         Column(Modifier.padding(top = Space.sm)) {
             Banner("⚠ 분석 이후 코드가 변경됨 — $at 분석$drift", p.warn, p)
+            if (vm.analysis !is CodemapViewModel.Analysis.Running) {
+                Row(Modifier.padding(top = Space.xs)) {
+                    ActionButton("지금 재분석", p, primary = false) { vm.analyzeNow("") }
+                }
+            }
         }
     }
 }
@@ -360,9 +365,28 @@ private fun FunctionList(
     setFiltering: (Boolean) -> Unit,
 ) {
     val query = filter.text.toString().trim()
-    if (fns.size >= FILTER_THRESHOLD && !filtering) {
-        Row(Modifier.padding(vertical = Space.xs)) {
-            ActionButton("검색", p, primary = false) { setFiltering(true) }
+    if (fns.size >= FILTER_THRESHOLD) {
+        Row(
+            Modifier.fillMaxWidth().padding(vertical = Space.xs),
+            horizontalArrangement = Arrangement.spacedBy(Space.xs),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            // Jumping and filtering are different jobs: this goes to one function, 거르기 narrows what is
+            // on screen so several can be compared. A dropdown for the jump because it does not take
+            // keyboard focus — a text field here would swallow the IDE's own shortcuts.
+            val located = fns.filter { f -> s.functionLoc[f.string("name")] != null }
+            if (located.isNotEmpty()) {
+                Picker(
+                    label = "이동",
+                    items = located.map { f ->
+                        PickerItem(f.string("name").orEmpty(), f.string("purpose").orEmpty().take(40))
+                    },
+                    selected = located.indexOfFirst { it.string("name") == vm.focusedFunction }.coerceAtLeast(0),
+                    palette = p,
+                    modifier = Modifier.weight(1f, fill = false),
+                ) { i -> s.functionLoc[located[i].string("name")]?.let(vm::jumpTo) }
+            }
+            if (!filtering) ActionButton("거르기", p, primary = false) { setFiltering(true) }
         }
     }
 
@@ -433,7 +457,7 @@ private fun Sequences(note: JsonObject, s: CodemapState.Loaded, vm: CodemapViewM
     var open by remember { mutableStateOf(false) }
     val scenario = remember(s.rel) { TextFieldState() }
 
-    if (flows.isEmpty() && s.flowRequests.isEmpty()) {
+    if (flows.isEmpty()) {
         Row(Modifier.padding(top = Space.xs)) {
             if (adding) SequenceRequest(scenario, vm, p) { adding = false }
             else ActionButton("＋ 시퀀스 요청", p, primary = false) { adding = true }
@@ -441,10 +465,7 @@ private fun Sequences(note: JsonObject, s: CodemapState.Loaded, vm: CodemapViewM
         return
     }
 
-    val subtitle = buildList {
-        if (flows.isNotEmpty()) add("%,d개".format(flows.size))
-        if (s.flowRequests.isNotEmpty()) add("요청 %,d건".format(s.flowRequests.size))
-    }.joinToString(" · ")
+    val subtitle = "%,d개".format(flows.size)
 
     CollapsibleSection("시퀀스", subtitle, open, p, { open = !open }) {
         // Names, not drawings. A sequence diagram wants more width than a tool window has, so clicking one
@@ -454,21 +475,10 @@ private fun Sequences(note: JsonObject, s: CodemapState.Loaded, vm: CodemapViewM
             LinkRow(name, "%,d단계".format(f.array("steps")?.size() ?: 0), p) { vm.openSequence(name) }
         }
 
-        // A request that has not been answered yet is shown where its diagram will appear, so the queue is
-        // visible in the place you are waiting for it rather than only in a tool response.
-        s.flowRequests.forEach { req ->
-            Text(
-                "⋯ ${req.flow}  — ${req.requestedAt} 요청됨",
-                color = p.mutedText,
-                fontSize = Type.micro,
-                modifier = Modifier.padding(top = Space.xs),
-            )
-        }
-
         if (adding) SequenceRequest(scenario, vm, p) { adding = false }
         else {
             Row(Modifier.padding(top = Space.sm)) {
-                ActionButton("＋ 시퀀스 요청", p, primary = false) { adding = true }
+                ActionButton("＋ 패킷 시퀀스", p, primary = false) { adding = true }
             }
         }
     }
@@ -486,16 +496,24 @@ private fun SequenceRequest(
     Column(Modifier.fillMaxWidth()) {
         TextField(
             state = scenario,
-            placeholder = { Text("시나리오 — 예: 클라이언트 로그인부터 월드 입장까지") },
+            placeholder = { Text("시나리오 — 예: 로그인부터 월드 입장까지 (Enter 로 그리기)") },
             modifier = Modifier.fillMaxWidth().padding(vertical = Space.xs)
                 .focusRequester(focus)
                 .onPreviewKeyEvent { e ->
-                    if (e.type == KeyEventType.KeyDown && e.key == Key.Escape) {
-                        scenario.edit { replace(0, length, "") }
-                        onClose()
-                        true
-                    } else {
-                        false
+                    if (e.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+                    when (e.key) {
+                        Key.Escape -> {
+                            scenario.edit { replace(0, length, "") }
+                            onClose()
+                            true
+                        }
+                        Key.Enter, Key.NumPadEnter -> {
+                            vm.addSequence(scenario.text.toString())
+                            scenario.edit { replace(0, length, "") }
+                            onClose()
+                            true
+                        }
+                        else -> false
                     }
                 },
         )
@@ -503,11 +521,6 @@ private fun SequenceRequest(
         Row(horizontalArrangement = Arrangement.spacedBy(Space.sm)) {
             ActionButton("그리기", p) {
                 vm.addSequence(scenario.text.toString())
-                scenario.edit { replace(0, length, "") }
-                onClose()
-            }
-            ActionButton("큐에 넣기", p, primary = false) {
-                vm.queueSequence(scenario.text.toString())
                 scenario.edit { replace(0, length, "") }
                 onClose()
             }
@@ -591,15 +604,6 @@ private fun RequestBox(
 ) {
     SectionHeader(if (s.note == null) "분석 요청" else "재분석 요청", p)
 
-    s.pending?.let { req ->
-        Text(
-            "${req.requestedAt} 요청됨 — ${req.question.ifEmpty { "(질문 없음)" }}",
-            color = p.accent,
-            fontSize = Type.label,
-            lineHeight = 17.sp,
-        )
-    }
-
     // The question field is opt-in, and that is a correctness requirement, not a style choice: a
     // Compose text field sitting in the panel takes focus the moment the tool window opens and then
     // swallows the IDE's own shortcuts — Cmd+1, Cmd+Shift+O and the arrow keys all end up as text.
@@ -610,17 +614,27 @@ private fun RequestBox(
     if (asking) {
         TextField(
             state = question,
-            placeholder = { Text("질문 (선택) — 예: 이 세션이 락을 두 개 쓰는 이유") },
+            placeholder = { Text("질문 (선택) — Enter 로 실행, Esc 로 취소") },
             modifier = Modifier.fillMaxWidth().padding(vertical = Space.sm)
                 .focusRequester(focus)
                 .onPreviewKeyEvent { e ->
-                    // Esc gives the keyboard back to the IDE instead of trapping it here.
-                    if (e.type == KeyEventType.KeyDown && e.key == Key.Escape) {
-                        question.edit { replace(0, length, "") }
-                        asking = false
-                        true
-                    } else {
-                        false
+                    if (e.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+                    when (e.key) {
+                        // Esc gives the keyboard back to the IDE instead of trapping it here.
+                        Key.Escape -> {
+                            question.edit { replace(0, length, "") }
+                            asking = false
+                            true
+                        }
+                        // Enter runs it. Typing a question and then hunting for a button is a step nobody
+                        // wants twice.
+                        Key.Enter, Key.NumPadEnter -> {
+                            vm.analyzeNow(question.text.toString())
+                            question.edit { replace(0, length, "") }
+                            asking = false
+                            true
+                        }
+                        else -> false
                     }
                 },
         )
@@ -629,14 +643,7 @@ private fun RequestBox(
 
     when (val a = vm.analysis) {
         is CodemapViewModel.Analysis.Running -> {
-            Row(
-                Modifier.padding(top = Space.sm),
-                horizontalArrangement = Arrangement.spacedBy(Space.sm),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text("분석 중… ${a.path.substringAfterLast('/')}", color = p.accent, fontSize = Type.label)
-                ActionButton("취소", p, primary = false) { vm.cancelAnalysis() }
-            }
+            Working("분석 중 — ${a.path.substringAfterLast('/')}", p) { vm.cancelAnalysis() }
             return
         }
 
@@ -651,19 +658,14 @@ private fun RequestBox(
         horizontalArrangement = Arrangement.spacedBy(Space.sm),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        // 실행 runs the chosen agent here and now; 큐에 넣기 keeps the batch path for a pile of files.
+        // One button, not two: an analysis either runs now or is not asked for. The queue that used to sit
+        // beside it was a to-do list nobody could see, which made it a worse way of forgetting.
         ActionButton(if (s.note == null) "분석 실행" else "재분석 실행", p) {
             vm.analyzeNow(question.text.toString())
             question.edit { replace(0, length, "") }
             asking = false
         }
-        ActionButton("큐에 넣기", p, primary = false) {
-            vm.requestAnalysis(question.text.toString())
-            question.edit { replace(0, length, "") }
-            asking = false
-        }
         if (!asking) ActionButton("질문 달기", p, primary = false) { asking = true }
-        if (s.pendingTotal > 0) Text("대기 %,d건".format(s.pendingTotal), color = p.mutedText, fontSize = Type.label)
     }
 
     EnginePicker(vm, p)
@@ -672,24 +674,27 @@ private fun RequestBox(
 /**
  * Which agent runs 분석 실행.
  *
- * Both are asked for the same note through the same prompt, so this is a choice of engine, not of output
- * format — whichever you pick, the note that lands is read the same way. The choice sticks across
- * sessions, and an engine that is not installed says so here instead of at spawn time.
+ * A dropdown, not a button per engine: only the chosen one matters, the list will grow, and the panel has
+ * no width to spend on options nobody picked. An engine that is not installed says so on its own row and
+ * cannot be chosen — the failure belongs here, not at spawn time.
  */
 @Composable
 private fun EnginePicker(vm: CodemapViewModel, p: CodemapPalette) {
-    Row(
-        Modifier.fillMaxWidth().padding(top = Space.xs),
-        horizontalArrangement = Arrangement.spacedBy(Space.xs),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Text("분석기", color = p.mutedText, fontSize = Type.micro)
-        Engine.entries.forEach { e ->
-            ActionButton(e.label, p, primary = vm.engine == e) { vm.chooseEngine(e) }
-        }
-        val missing = remember(vm.engine) { vm.engineMissing() }
-        if (missing) Text("설치를 찾지 못함", color = p.warn, fontSize = Type.micro)
+    val installed = remember(vm.engine) { Engine.entries.associateWith { vm.engineInstalled(it) } }
+    val items = Engine.entries.map { e ->
+        PickerItem(
+            label = e.label,
+            detail = if (installed[e] == true) "" else "설치를 찾지 못함",
+            enabled = installed[e] == true,
+        )
     }
+    Picker(
+        label = "분석기",
+        items = items,
+        selected = Engine.entries.indexOf(vm.engine),
+        palette = p,
+        modifier = Modifier.padding(top = Space.xs),
+    ) { i -> vm.chooseEngine(Engine.entries[i]) }
 }
 
 // ---- loose-JSON accessors: a missing or wrongly-typed key renders as absent, never as a crash ----

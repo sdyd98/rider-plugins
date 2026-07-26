@@ -24,6 +24,7 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.input.TextFieldState
 import androidx.compose.runtime.Composable
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -40,6 +41,7 @@ import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.text.font.FontFamily
+import com.example.graph.readsAsCode
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
@@ -47,6 +49,15 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.intellij.ui.JBColor
 import com.intellij.util.ui.UIUtil
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.mutableStateOf
+import kotlinx.coroutines.delay
+import org.jetbrains.jewel.foundation.ExperimentalJewelApi
+import org.jetbrains.jewel.ui.component.CircularProgressIndicator
+import org.jetbrains.jewel.ui.component.Dropdown
+import org.jetbrains.jewel.ui.component.SegmentedControl
+import org.jetbrains.jewel.ui.component.SegmentedControlButtonData
+import org.jetbrains.jewel.ui.component.Tooltip
 import org.jetbrains.jewel.ui.component.Text
 import org.jetbrains.jewel.ui.component.TextField
 
@@ -143,7 +154,16 @@ fun Mono(
     weight: FontWeight = FontWeight.Normal,
     modifier: Modifier = Modifier,
 ) {
-    Text(text, color = color, fontSize = size, fontFamily = FontFamily.Monospace, fontWeight = weight, modifier = modifier)
+    // Fixed pitch only for what is actually code. A note's label is often a Korean sentence, and a
+    // monospace typeface without Hangul draws it as a row of empty boxes instead of falling back.
+    Text(
+        text,
+        color = color,
+        fontSize = size,
+        fontFamily = if (readsAsCode(text)) FontFamily.Monospace else FontFamily.Default,
+        fontWeight = weight,
+        modifier = modifier,
+    )
 }
 
 /** Prose inside a section. */
@@ -332,12 +352,14 @@ fun LinkRow(name: String, detail: String, palette: CodemapPalette, mono: Boolean
             name,
             color = palette.text,
             fontSize = Type.label,
-            fontFamily = if (mono) FontFamily.Monospace else FontFamily.Default,
+            fontFamily = if (mono && readsAsCode(name)) FontFamily.Monospace else FontFamily.Default,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f, fill = false),
+            // The name takes ALL the slack, so the detail lands on one right edge for every row. With a
+            // weighted spacer beside a weighted name the two split the space between them, and the right
+            // column then wandered with the length of each name.
+            modifier = Modifier.weight(1f),
         )
-        Box(Modifier.weight(1f))
         if (detail.isNotEmpty()) Text(detail, color = palette.mutedText, fontSize = Type.micro)
     }
 }
@@ -551,7 +573,7 @@ fun Editable(
                         color = if (value.isEmpty()) palette.mutedText else color,
                         fontSize = fontSize,
                         lineHeight = fontSize * 1.45f,
-                        fontFamily = if (mono) FontFamily.Monospace else FontFamily.Default,
+                        fontFamily = if (mono && readsAsCode(value)) FontFamily.Monospace else FontFamily.Default,
                     )
                 }
             }
@@ -644,5 +666,141 @@ fun EmptyState(glyph: String, title: String, subtitle: String, palette: CodemapP
         Text(glyph, color = palette.mutedText, fontSize = 30.sp)
         Text(title, color = palette.text, fontSize = Type.body, fontWeight = FontWeight.Medium)
         Text(subtitle, color = palette.mutedText, fontSize = Type.label)
+    }
+}
+
+// ---- pickers ----------------------------------------------------------------------------------
+//
+// One-of-many choices go through a dropdown rather than a row of buttons. A row is fine at two options
+// and stops being fine at five: it eats the width the panel does not have, and it makes every option
+// equally loud when only the chosen one matters. A dropdown states the current choice and hides the rest
+// until asked — and unlike a text field it does not take keyboard focus, which in this panel is a
+// correctness property, not a preference (a focused Compose field swallows the IDE's own shortcuts).
+
+/** One option of a [Picker]: what it says, and the quiet detail under it. */
+data class PickerItem(
+    val label: String,
+    val detail: String = "",
+    val enabled: Boolean = true,
+)
+
+/**
+ * A labelled dropdown. [label] names the choice ("분석기"), the button shows the current value.
+ *
+ * Items carry an optional [PickerItem.detail] — the second line an option needs when the name alone does
+ * not settle it ("Codex — 설치를 찾지 못함", "로그인 → 월드 입장 — 6단계").
+ */
+@OptIn(ExperimentalJewelApi::class) // Jewel's Dropdown; contained here so one file carries the risk
+@Composable
+fun Picker(
+    label: String,
+    items: List<PickerItem>,
+    selected: Int,
+    palette: CodemapPalette,
+    modifier: Modifier = Modifier,
+    onSelect: (Int) -> Unit,
+) {
+    if (items.isEmpty()) return
+    val current = items.getOrNull(selected) ?: items.first()
+    Row(modifier, horizontalArrangement = Arrangement.spacedBy(Space.xs), verticalAlignment = Alignment.CenterVertically) {
+        if (label.isNotEmpty()) Text(label, color = palette.mutedText, fontSize = Type.micro)
+        Dropdown(
+            menuContent = {
+                items.forEachIndexed { i, item ->
+                    selectableItem(
+                        selected = i == selected,
+                        enabled = item.enabled,
+                        onClick = { onSelect(i) },
+                    ) {
+                        Column {
+                            Text(item.label, fontSize = Type.label)
+                            if (item.detail.isNotEmpty()) {
+                                Text(item.detail, color = palette.mutedText, fontSize = Type.micro)
+                            }
+                        }
+                    }
+                }
+            },
+        ) {
+            Text(
+                current.label,
+                fontSize = Type.label,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+    }
+}
+
+/**
+ * A few mutually exclusive options, all worth showing at once — a depth of 1/2/3, a view mode.
+ *
+ * Where a [Picker] hides the alternatives, this shows them: with three short options the dropdown's extra
+ * click buys nothing, and seeing the range ("there are three depths") is itself the information.
+ */
+@Composable
+fun Segments(
+    options: List<String>,
+    selected: Int,
+    palette: CodemapPalette,
+    onSelect: (Int) -> Unit,
+) {
+    if (options.isEmpty()) return
+    SegmentedControl(
+        buttons = options.mapIndexed { i, text ->
+            SegmentedControlButtonData(
+                selected = i == selected,
+                content = { _ -> Text(text, fontSize = Type.label) },
+                onSelect = { onSelect(i) },
+            )
+        },
+    )
+}
+
+/** A compact button that says what it does on hover — for the glyph-only controls (◀ ▶ ↻ ⊡). */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+fun HintedButton(
+    label: String,
+    hint: String,
+    palette: CodemapPalette,
+    enabled: Boolean = true,
+    primary: Boolean = false,
+    onClick: () -> Unit,
+) {
+    Tooltip(tooltip = { Text(hint) }) {
+        ActionButton(label, palette, enabled = enabled, primary = primary, onClick = onClick)
+    }
+}
+
+/**
+ * Work in progress, with the two things a wait needs: that it is alive, and how long it has been going.
+ *
+ * The elapsed count is not decoration — an analysis on a real file runs for minutes, and without a number
+ * there is no way to tell "thinking" from "wedged" before the ten-minute timeout fires.
+ */
+@Composable
+fun Working(what: String, palette: CodemapPalette, onCancel: () -> Unit) {
+    var seconds by remember(what) { mutableStateOf(0) }
+    LaunchedEffect(what) {
+        while (true) {
+            delay(1_000)
+            seconds++
+        }
+    }
+    Row(
+        Modifier.padding(top = Space.sm),
+        horizontalArrangement = Arrangement.spacedBy(Space.sm),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        CircularProgressIndicator()
+        Text(what, color = palette.accent, fontSize = Type.label)
+        Text(
+            "%d:%02d".format(seconds / 60, seconds % 60),
+            color = palette.mutedText,
+            fontSize = Type.micro,
+            fontFamily = FontFamily.Monospace,
+        )
+        ActionButton("취소", palette, primary = false, onClick = onCancel)
     }
 }

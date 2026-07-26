@@ -17,6 +17,13 @@ package com.example.codemap
 object CodemapPaths {
     const val DIR = ".codemap"
     const val ROOT_BUNDLE = "_root.json"
+    /**
+     * The analysis queue an older version of this plugin wrote.
+     *
+     * The queue is gone — a request is either run now or not made — but the file it left behind is still
+     * sitting in every `.codemap/` created before that, and it must keep being skipped rather than read as
+     * a note bundle.
+     */
     const val PENDING = "_pending.json"
 
     /**
