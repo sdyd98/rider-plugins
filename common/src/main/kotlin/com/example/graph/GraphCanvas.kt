@@ -49,6 +49,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -66,9 +67,19 @@ import kotlin.math.abs
 // hovered; that machinery lives here so a graph in either plugin looks and behaves the same.
 //
 // What a caller supplies: nodes (a card with a title and rows), edges, and colors. What it gets back:
-// measured cards that never clip their text, a layout that does not overlap, curved edges with arrow
+// cards measured to their text (up to a ceiling), a layout that does not overlap, curved edges with arrow
 // heads, pan/zoom/fit, drag, hover highlighting along connected edges, and a dotted infinite canvas.
 // ---------------------------------------------------------------------------------------------------
+
+/**
+ * Whether [text] is the kind of thing a monospace font is for.
+ *
+ * Identifiers are ASCII — `HandleLogin`, `m_sessionLock`, `CS_LOGIN_REQ` — and lining them up in a fixed
+ * pitch is what makes them scannable. A recorded label is often not an identifier though: notes are written
+ * in Korean, and a monospace typeface with no Hangul renders it as a row of empty boxes rather than falling
+ * back. So the font follows the string: code gets the fixed pitch, prose gets a font that can draw it.
+ */
+fun readsAsCode(text: String): Boolean = text.isNotEmpty() && text.all { it.code < 128 }
 
 /** One line inside a node card: a leading mark, the text, and an optional right-aligned badge. */
 data class GraphRow(
@@ -132,6 +143,16 @@ private const val TITLEH = 30f
 private const val SUBH = 14f
 
 /**
+ * How wide one line of card text may get before it is cut short.
+ *
+ * Measuring is what keeps normal labels intact, but a measured card is only as sane as the string it was
+ * given: a recorded label is sometimes a whole phrase, and one of those makes a card wide enough that
+ * fitting the graph zooms everything else down to nothing. A ceiling costs an ellipsis on the rare long
+ * label and keeps every other card readable.
+ */
+private const val MAX_LINE = 300f
+
+/**
  * Draw [nodes] and [edges] as an interactive graph filling the available space.
  *
  * [focusId] is the node the graph is about: it is outlined in the accent color and clicking it calls
@@ -161,6 +182,14 @@ fun GraphCanvas(
     modifier: Modifier = Modifier,
     onNodeClick: (String) -> Unit = {},
     onFocusClick: (String) -> Unit = {},
+    /**
+     * Double-click on a card — "take me to the thing this card stands for".
+     *
+     * Separate from [onNodeClick] because a graph has two natural verbs and they are not the same: looking
+     * from somewhere else (single) and leaving for the code (double). Providing this does delay the single
+     * tap by the double-click interval, which is the price of telling them apart.
+     */
+    onNodeDoubleClick: (String) -> Unit = {},
     toolbar: @Composable (RowScope.() -> Unit)? = null,
 ) {
     // Sized to the working set (a hub can be 100+ cards × ~3 layouts each); the default cache of 8
@@ -185,21 +214,44 @@ fun GraphCanvas(
     val rowMonoBold = rowMonoStyle.copy(fontWeight = FontWeight.Bold)
     val badgeStyle = TextStyle(color = fg.copy(alpha = 0.7f), fontSize = 11.sp)
     fun fade(c: Color, a: Float) = c.copy(alpha = c.alpha * a)
-    fun rowStyleFor(r: GraphRow, bold: Boolean) = when {
-        r.mono && bold -> rowMonoBold
-        r.mono -> rowMonoStyle
-        bold -> rowStyleBold
-        else -> rowStyle
+    // The style set stays constant across frames (four variants), so the measure cache still hits; only
+    // which of the four a given string gets is decided per string.
+    // Measured once with the ceiling applied, so what gets drawn is exactly what was measured — a card can
+    // never be narrower than its own text.
+    fun line(text: String, style: TextStyle) = measurer.measure(
+        text,
+        style,
+        overflow = TextOverflow.Ellipsis,
+        softWrap = false,
+        maxLines = 1,
+        constraints = Constraints(maxWidth = MAX_LINE.toInt()),
+    )
+
+    fun titleStyleFor(n: GraphNode): TextStyle =
+        if (n.titleMono && readsAsCode(n.title)) titleMonoStyle else titleStyle
+
+    fun rowStyleFor(r: GraphRow, bold: Boolean): TextStyle {
+        val mono = r.mono && readsAsCode(r.mark + r.text)
+        return when {
+            mono && bold -> rowMonoBold
+            mono -> rowMonoStyle
+            bold -> rowStyleBold
+            else -> rowStyle
+        }
     }
 
-    /** Cards are measured, never truncated: a graph whose labels end in "…" answers nothing. */
+    /**
+     * Cards are sized to their text, up to [MAX_LINE].
+     *
+     * Measuring is the point — a graph whose every label ends in "…" answers nothing — but the ceiling is
+     * what keeps one pathological label from deciding the scale of the whole picture.
+     */
     fun sizeOf(n: GraphNode): Size {
-        var w = 26f + measurer.measure(n.title, if (n.titleMono) titleMonoStyle else titleStyle, softWrap = false)
-            .size.width.toFloat()
-        n.subtitle?.let { w = maxOf(w, 26f + measurer.measure(it, subStyle, softWrap = false).size.width.toFloat()) }
+        var w = 26f + line(n.title, titleStyleFor(n)).size.width.toFloat()
+        n.subtitle?.let { w = maxOf(w, 26f + line(it, subStyle).size.width.toFloat()) }
         n.rows.forEach { r ->
-            var rowW = measurer.measure(r.mark + r.text, rowStyleFor(r, false), softWrap = false).size.width.toFloat()
-            r.badge?.let { rowW += 22f + measurer.measure(it, badgeStyle, softWrap = false).size.width.toFloat() }
+            var rowW = line(r.mark + r.text, rowStyleFor(r, false)).size.width.toFloat()
+            r.badge?.let { rowW += 22f + line(it, badgeStyle).size.width.toFloat() }
             w = maxOf(w, rowW)
         }
         val head = TITLEH + if (n.subtitle != null) SUBH else 0f
@@ -285,6 +337,9 @@ fun GraphCanvas(
     val onTapAt by rememberUpdatedState({ p: Offset ->
         nodeAt(p)?.let { if (it.id == focusId) onFocusClick(it.id) else if (!it.muted) onNodeClick(it.id) }
     })
+    val onDoubleTapAt by rememberUpdatedState({ p: Offset ->
+        nodeAt(p)?.takeIf { !it.muted }?.let { onNodeDoubleClick(it.id) }
+    })
     // positions is recreated whenever the node set changes; route drags through the LATEST map so
     // dragging keeps working after a re-centre.
     val onDragDelta by rememberUpdatedState({ id: String?, delta: Offset ->
@@ -338,7 +393,12 @@ fun GraphCanvas(
                             onDrag = { change, delta -> change.consume(); onDragDelta(dragId, delta) },
                         )
                     }
-                    .pointerInput(Unit) { detectTapGestures(onTap = { p -> onTapAt(p) }) },
+                    .pointerInput(Unit) {
+                        detectTapGestures(
+                            onTap = { p -> onTapAt(p) },
+                            onDoubleTap = { p -> onDoubleTapAt(p) },
+                        )
+                    },
             ) {
                 drawRect(bg, size = size)
                 val step = 26f * zoom // dotted infinite canvas
@@ -413,15 +473,15 @@ fun GraphCanvas(
                         val head = headOf(n.id)
                         val cy0 = r.top + TITLEH / 2f
                         n.dot?.let { drawCircle(it.copy(alpha = alpha), 4.5f, Offset(r.left + 14f, cy0)) }
-                        val tStyle = if (n.titleMono) titleMonoStyle else titleStyle
-                        val nameLay = measurer.measure(n.title, tStyle, softWrap = false)
+                        val tStyle = titleStyleFor(n)
+                        val nameLay = line(n.title, tStyle)
                         drawText(
                             nameLay,
                             color = fade(if (isFocus) accent else tStyle.color, alpha),
                             topLeft = Offset(r.left + if (n.dot != null) 26f else PADX, cy0 - nameLay.size.height / 2f),
                         )
                         n.subtitle?.let { sub ->
-                            val sl = measurer.measure(sub, subStyle, softWrap = false)
+                            val sl = line(sub, subStyle)
                             drawText(
                                 sl,
                                 color = fade(subStyle.color, alpha),
@@ -449,15 +509,10 @@ fun GraphCanvas(
                             val txt = if (live) androidx.compose.ui.graphics.lerp(base, pathHi, hoverFocus) else base
                             // Weight DOES affect layout, so at most two cache entries per row style.
                             val hotBold = live && hoverFocus > 0.4f
-                            val rowLay = measurer.measure(
-                                row.mark + row.text,
-                                rowStyleFor(row, hotBold),
-                                overflow = TextOverflow.Visible,
-                                softWrap = false,
-                            )
+                            val rowLay = line(row.mark + row.text, rowStyleFor(row, hotBold))
                             drawText(rowLay, color = fade(txt, alpha), topLeft = Offset(r.left + PADX, y + 4f))
                             row.badge?.let { badge ->
-                                val bl = measurer.measure(badge, badgeStyle, softWrap = false)
+                                val bl = line(badge, badgeStyle)
                                 val bx = r.right - 12f - bl.size.width
                                 val bcolor =
                                     if (live) androidx.compose.ui.graphics.lerp(badgeStyle.color, pathHi, hoverFocus)
