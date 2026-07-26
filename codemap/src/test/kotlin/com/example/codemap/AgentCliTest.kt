@@ -1,18 +1,20 @@
 package com.example.codemap
 
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
+import com.google.gson.JsonParser
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.io.File
 
 /**
- * The parts of the CLI integration that must not be discovered at runtime by a user: where the binary
+ * The parts of the agent-CLI integration that must not be discovered at runtime by a user: where the binary
  * is, what the process is asked to do, and what counts as an answer. A wrong answer here would end up
  * written into a note, so the parse is deliberately strict.
  */
-class ClaudeCliTest {
+class AgentCliTest {
 
     @TempDir lateinit var tmp: File
 
@@ -68,7 +70,7 @@ class ClaudeCliTest {
 
     @Test
     fun `the developer's question is carried into the prompt and marked as the priority`() {
-        val p = ClaudeCli.prompt("Net/World.h", "락 순서가 맞는지", "", existing = false)
+        val p = NoteRequest.prompt("Net/World.h", "락 순서가 맞는지", "", existing = null)
         assertTrue(p.contains("Net/World.h"))
         assertTrue(p.contains("락 순서가 맞는지"))
         assertTrue(p.contains("최우선"))
@@ -78,9 +80,62 @@ class ClaudeCliTest {
 
     @Test
     fun `a symbol scopes the prompt to one function`() {
-        val p = ClaudeCli.prompt("Net/World.h", "", "Tick", existing = true)
+        val p = NoteRequest.prompt("Net/World.h", "", "Tick", existing = null)
         assertTrue(p.contains("Tick 함수만"))
-        assertTrue(p.contains("기존 노트가 있으니"))
+    }
+
+    @Test
+    fun `an existing note is sent so a re-analysis corrects instead of replacing`() {
+        val existing = JsonParser.parseString(
+            """{"purpose":"세션","functions":[{"name":"Tick","purpose":"틱"}],
+                "analyzedAt":"2026-01-01","hashes":{"a.h":"deadbeef"},"_manual":{"purpose":"손으로 고침"}}""",
+        ).asJsonObject
+        val p = NoteRequest.prompt("Net/World.h", "", "", existing)
+        assertTrue(p.contains("이것을 고쳐라"))
+        assertTrue(p.contains("\"Tick\""))
+        // Provenance and the record of human edits are the plugin's business, not the agent's — the note
+        // that gets sent carries neither. (The rules still NAME those keys, to forbid writing them.)
+        assertFalse(p.contains("deadbeef"))
+        assertFalse(p.contains("\"_manual\":"))
+        assertFalse(p.contains("손으로 고침"))
+    }
+
+    @Test
+    fun `a huge note keeps every function name rather than being cut off`() {
+        val functions = (1..400).joinToString(",") {
+            """{"name":"Fn$it","anchor":"void Fn$it()","purpose":"${"설명".repeat(20)}",
+                "effects":["${"효과".repeat(20)}"],"calls":["${"호출".repeat(20)}"]}"""
+        }
+        val existing = JsonParser.parseString("""{"functions":[$functions]}""").asJsonObject
+        val p = NoteRequest.prompt("Net/World.h", "", "", existing)
+        assertTrue(p.contains("\"Fn1\""))
+        assertTrue(p.contains("\"Fn400\""))
+        // The deep fields are what got dropped to make room.
+        assertFalse(p.contains("효과효과"))
+    }
+
+    @Test
+    fun `codex is asked for a read-only sandbox and answers into a file`() {
+        val answer = File.createTempFile("codemap-test", ".json")
+        val cmd = CodexCli.command(exe("codex"), "hi", answer)
+        assertEquals("exec", cmd[1])
+        assertTrue(cmd.containsAll(listOf("-s", "read-only")))
+        assertEquals(answer.absolutePath, cmd[cmd.indexOf("-o") + 1])
+        assertEquals("hi", cmd.last())
+    }
+
+    @Test
+    fun `codex reads the note from its answer file, not the progress log`() {
+        val answer = File.createTempFile("codemap-test", ".json")
+        answer.writeText("""{"purpose":"세션"}""")
+        val log = "OpenAI Codex v0.145.0\nworkdir: /x\ntokens used 15,754"
+        assertEquals("세션", CodexCli.noteFrom(log, answer)?.get("purpose")?.asString)
+    }
+
+    @Test
+    fun `an engine that writes nothing to its answer file falls back to stdout`() {
+        val answer = File.createTempFile("codemap-test", ".json")
+        assertEquals("세션", CodexCli.noteFrom("""{"purpose":"세션"}""", answer)?.get("purpose")?.asString)
     }
 
     @Test

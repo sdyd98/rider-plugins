@@ -3,7 +3,9 @@ package com.example.codemap
 import com.google.gson.JsonArray
 import com.google.gson.JsonObject
 import com.google.gson.JsonParser
+import com.google.gson.JsonPrimitive
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
@@ -247,7 +249,7 @@ class NoteStoreTest {
         val before = s.readNote("Net/World.h")!!
         val hashesBefore = before.getAsJsonObject("hashes").toString()
 
-        s.editNote("Net/World.h") { it.addProperty("purpose", "월드 — 표현을 다듬음") }
+        s.editNote("Net/World.h", listOf("purpose"), JsonPrimitive("월드 — 표현을 다듬음"))
 
         val after = s.readNote("Net/World.h")!!
         assertEquals("월드 — 표현을 다듬음", after.get("purpose").asString)
@@ -268,10 +270,8 @@ class NoteStoreTest {
         s.writeNote("main.cpp", note("진입점"))
         val realHashes = s.readNote("main.cpp")!!.getAsJsonObject("hashes").toString()
 
-        s.editNote("main.cpp") {
-            it.addProperty("analyzedAt", "2099-01-01")
-            it.add("hashes", JsonParser.parseString("{\"main.cpp\":\"sha256:0\"}"))
-        }
+        s.editNote("main.cpp", listOf("analyzedAt"), JsonPrimitive("2099-01-01"))
+        s.editNote("main.cpp", listOf("hashes"), JsonParser.parseString("{\"main.cpp\":\"sha256:0\"}"))
 
         val after = s.readNote("main.cpp")!!
         assertEquals("2026-07-26", after.get("analyzedAt").asString)
@@ -283,8 +283,8 @@ class NoteStoreTest {
         write("Net/A.h", "#pragma once\n")
         val s = store()
         s.writeNote("Net/A.h", note("에이"))
-        s.editNote("Net/A.h") { it.add("gotchas", JsonArray().apply { add("첫째"); add("둘째") }) }
-        s.editNote("Net/A.h") { it.add("gotchas", JsonArray().apply { add("첫째만 남김") }) }
+        s.editNote("Net/A.h", listOf("gotchas"), JsonArray().apply { add("첫째"); add("둘째") })
+        s.editNote("Net/A.h", listOf("gotchas"), JsonArray().apply { add("첫째만 남김") })
 
         val g = s.readNote("Net/A.h")!!.getAsJsonArray("gotchas").map { it.asString }
         assertEquals(listOf("첫째만 남김"), g)
@@ -295,8 +295,84 @@ class NoteStoreTest {
     fun `editing a file with no note yet is a no-op, not a crash`() {
         write("Net/Untouched.h", "#pragma once\n")
         val s = store()
-        assertNull(s.editNote("Net/Untouched.h") { it.addProperty("purpose", "x") })
+        assertNull(s.editNote("Net/Untouched.h", listOf("purpose"), JsonPrimitive("x")))
         assertNull(s.readNote("Net/Untouched.h"))
+    }
+
+    // ---- a re-analysis must not undo a person's work ----
+
+    @Test
+    fun `a re-analysis keeps the sentence a person typed`() {
+        write("Net/World.h", "#pragma once\n")
+        val s = store()
+        s.writeNote("Net/World.h", note("월드 — AI가 쓴 요약"))
+        s.editNote("Net/World.h", listOf("purpose"), JsonPrimitive("월드 — 내가 고친 요약"))
+
+        // A fresh analysis that knows nothing about the correction.
+        s.writeNote("Net/World.h", note("월드 — AI가 다시 쓴 요약"))
+
+        val after = s.readNote("Net/World.h")!!
+        assertEquals("월드 — 내가 고친 요약", after.get("purpose").asString)
+        // The record itself survives too, so the NEXT analysis is bound by it as well.
+        assertTrue(s.edited(after))
+    }
+
+    @Test
+    fun `a re-analysis keeps a corrected function field and takes the rest from the analysis`() {
+        write("Net/World.h", "#pragma once\n")
+        val s = store()
+        s.writeNote("Net/World.h", JsonParser.parseString(
+            """{"functions":[{"name":"Tick","anchor":"void Tick()","purpose":"틱","thread":"메인"}]}""",
+        ).asJsonObject)
+        s.editNote("Net/World.h", listOf("functions", "Tick", "purpose"), JsonPrimitive("내가 고친 틱 설명"))
+
+        s.writeNote("Net/World.h", JsonParser.parseString(
+            """{"functions":[{"name":"Tick","anchor":"void Tick()","purpose":"AI가 다시 쓴 틱","thread":"워커"}]}""",
+        ).asJsonObject)
+
+        val tick = s.readNote("Net/World.h")!!.getAsJsonArray("functions")[0].asJsonObject
+        assertEquals("내가 고친 틱 설명", tick.get("purpose").asString)
+        // Only the corrected field is pinned — the analysis is still allowed to teach us the rest.
+        assertEquals("워커", tick.get("thread").asString)
+    }
+
+    @Test
+    fun `a partial analysis does not delete the functions it did not mention`() {
+        write("Net/World.h", "#pragma once\n")
+        val s = store()
+        s.writeNote("Net/World.h", JsonParser.parseString(
+            """{"functions":[{"name":"Tick","purpose":"틱"},{"name":"Join","purpose":"입장"}]}""",
+        ).asJsonObject)
+
+        s.writeNote("Net/World.h", JsonParser.parseString(
+            """{"functions":[{"name":"Tick","purpose":"틱 — 다시 씀"}]}""",
+        ).asJsonObject)
+
+        val names = s.readNote("Net/World.h")!!.getAsJsonArray("functions").map { it.asJsonObject.get("name").asString }
+        assertEquals(listOf("Tick", "Join"), names)
+        assertEquals("틱 — 다시 씀", s.readNote("Net/World.h")!!.getAsJsonArray("functions")[0].asJsonObject.get("purpose").asString)
+    }
+
+    @Test
+    fun `an analysis cannot claim a human edit by writing the manual record itself`() {
+        write("main.cpp", "int main(){}\n")
+        val s = store()
+        s.writeNote("main.cpp", JsonParser.parseString(
+            """{"purpose":"진입점","_manual":{"purpose":"AI가 사람 흉내를 냄"}}""",
+        ).asJsonObject)
+
+        val after = s.readNote("main.cpp")!!
+        assertEquals("진입점", after.get("purpose").asString)
+        assertFalse(s.edited(after))
+    }
+
+    @Test
+    fun `an untouched note is not reported as edited`() {
+        write("main.cpp", "int main(){}\n")
+        val s = store()
+        s.writeNote("main.cpp", note("진입점"))
+        assertFalse(s.edited(s.readNote("main.cpp")))
+        assertFalse(s.edited(null))
     }
 
     @Test

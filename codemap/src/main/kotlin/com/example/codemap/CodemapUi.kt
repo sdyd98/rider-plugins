@@ -308,6 +308,40 @@ fun NotedLine(label: String, value: String, palette: CodemapPalette) {
     }
 }
 
+/**
+ * A row that leads somewhere: a name on the left, a quiet detail on the right, the whole row clickable.
+ *
+ * The hover tint is the affordance — nothing here is underlined or coloured like a link, because in a panel
+ * full of identifiers a blue word reads as part of the code rather than as a control.
+ */
+@Composable
+fun LinkRow(name: String, detail: String, palette: CodemapPalette, mono: Boolean = false, onClick: () -> Unit) {
+    val interaction = remember { MutableInteractionSource() }
+    val hovered by interaction.collectIsHoveredAsState()
+    val bg by animateColorAsState(if (hovered) palette.surfaceHover else Color.Transparent)
+    Row(
+        Modifier.fillMaxWidth()
+            .background(bg, RoundedCornerShape(Radii.sm))
+            .hoverable(interaction)
+            .clickable(onClick = onClick)
+            .padding(horizontal = Space.xs, vertical = 3.dp),
+        horizontalArrangement = Arrangement.spacedBy(Space.sm),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            name,
+            color = palette.text,
+            fontSize = Type.label,
+            fontFamily = if (mono) FontFamily.Monospace else FontFamily.Default,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f, fill = false),
+        )
+        Box(Modifier.weight(1f))
+        if (detail.isNotEmpty()) Text(detail, color = palette.mutedText, fontSize = Type.micro)
+    }
+}
+
 // ---- accents ----
 
 /** A small outlined chip — freshness, request state. */

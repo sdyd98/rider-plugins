@@ -40,6 +40,7 @@
              is registered and nothing is written to disk. -->
         <fileEditorProvider implementation="com.example.codemap.CodemapGraphEditorProvider"/>
 
+
         <!-- The note view: follows the selected editor tab.
              The icon is REQUIRED, not decoration: the new UI's tool window stripe only shows buttons for
              tool windows that declare one, so without it the window is unreachable once closed — it

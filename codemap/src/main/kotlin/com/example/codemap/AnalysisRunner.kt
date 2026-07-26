@@ -7,11 +7,21 @@ import com.intellij.openapi.components.Storage
 import java.io.File
 import java.util.concurrent.TimeUnit
 
-/** Where the Claude Code CLI lives, when it is not somewhere obvious. Empty = discover it. */
+/**
+ * Which agent runs an analysis, and where its CLI lives when that is not somewhere obvious.
+ *
+ * Remembered across sessions because the choice is a habit, not a per-file decision: whoever prefers Codex
+ * prefers it for the next file too, and being asked again every time would be the annoying kind of
+ * flexibility. Empty paths mean "find it yourself".
+ */
 @Service(Service.Level.APP)
 @State(name = "CodemapSettings", storages = [Storage("codemap.xml")])
 class CodemapSettings : PersistentStateComponent<CodemapSettings.State> {
-    data class State(var claudePath: String = "")
+    data class State(
+        var claudePath: String = "",
+        var codexPath: String = "",
+        var engine: String = Engine.CLAUDE.name,
+    )
 
     private var state = State()
     override fun getState(): State = state
@@ -20,6 +30,20 @@ class CodemapSettings : PersistentStateComponent<CodemapSettings.State> {
     var claudePath: String
         get() = state.claudePath
         set(v) { state.claudePath = v }
+
+    var codexPath: String
+        get() = state.codexPath
+        set(v) { state.codexPath = v }
+
+    var engine: Engine
+        get() = Engine.of(state.engine)
+        set(v) { state.engine = v.name }
+
+    /** The path setting that belongs to [engine], so the runner does not have to know which is which. */
+    fun pathFor(engine: Engine): String = when (engine) {
+        Engine.CLAUDE -> claudePath
+        Engine.CODEX -> codexPath
+    }
 }
 
 /**
@@ -56,14 +80,19 @@ class AnalysisRunner(private val store: NoteStore) {
         relPath: String,
         question: String,
         symbol: String = "",
+        engine: Engine = Engine.CLAUDE,
         explicitPath: String? = null,
         timeoutMinutes: Long = 10,
     ): Result {
-        val bin = ClaudeCli.discover(explicitPath)
-            ?: return Result.Failed("claude 실행 파일을 찾지 못했습니다. 설정에서 경로를 지정하세요.")
+        val cli = engine.cli
+        val bin = cli.discover(explicitPath)
+            ?: return Result.Failed("${engine.label} 실행 파일을 찾지 못했습니다. 설정에서 경로를 지정하세요.")
 
-        val existing = store.readNote(relPath) != null
-        val cmd = ClaudeCli.command(bin, ClaudeCli.prompt(relPath, question, symbol, existing))
+        // The existing note goes into the prompt: a re-analysis should correct what is there, not replace
+        // it with whatever this run happened to notice.
+        val prompt = NoteRequest.prompt(relPath, question, symbol, store.readNote(relPath))
+        val answerFile = File.createTempFile("codemap-note", ".json").also { it.deleteOnExit() }
+        val cmd = cli.command(bin, prompt, answerFile)
 
         val out = StringBuilder()
         val err = StringBuilder()
@@ -89,7 +118,8 @@ class AnalysisRunner(private val store: NoteStore) {
             reader.join(5_000); errReader.join(5_000)
 
             if (p.exitValue() != 0) {
-                return Result.Failed(err.toString().trim().ifEmpty { "claude 가 종료 코드 ${p.exitValue()} 로 끝났습니다" })
+                val reason = err.toString().trim().ifEmpty { out.toString().trim().takeLast(400) }
+                return Result.Failed(reason.ifEmpty { "${engine.label} 가 종료 코드 ${p.exitValue()} 로 끝났습니다" })
             }
         } catch (e: Exception) {
             return Result.Failed(e.message ?: e::class.java.simpleName)
@@ -98,14 +128,15 @@ class AnalysisRunner(private val store: NoteStore) {
         }
 
         val raw = out.toString()
-        ClaudeCli.errorOf(raw)?.let { return Result.Failed(it) }
-        val note = ClaudeCli.extractNote(raw)
+        cli.errorFrom(raw)?.let { return Result.Failed(it) }
+        val note = cli.noteFrom(raw, answerFile)
             ?: return Result.Failed("응답에서 노트 JSON을 찾지 못했습니다")
+        answerFile.delete()
 
         return runCatching { Result.Ok(store.writeNote(relPath, note)) }
             .getOrElse { Result.Failed("노트 저장 실패: ${it.message}") }
     }
 
-    /** For the settings UI and the failure message: is a CLI reachable at all? */
-    fun cliPath(explicit: String? = null): File? = ClaudeCli.discover(explicit)
+    /** For the settings UI and the failure message: is this engine's CLI reachable at all? */
+    fun cliPath(engine: Engine, explicit: String? = null): File? = engine.cli.discover(explicit)
 }

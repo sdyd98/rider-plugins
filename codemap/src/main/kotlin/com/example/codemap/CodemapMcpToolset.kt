@@ -63,6 +63,7 @@ class CodemapMcpToolset : McpToolset {
                         addProperty("reason", p.reason)
                         addProperty("requestedAt", p.requestedAt)
                         if (p.question.isNotEmpty()) addProperty("question", p.question)
+                        if (p.symbol.isNotEmpty()) addProperty("symbol", p.symbol)
                     })
                 }
             })

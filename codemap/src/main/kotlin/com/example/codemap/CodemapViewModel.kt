@@ -1,6 +1,9 @@
 package com.example.codemap
 
+import com.google.gson.JsonArray
+import com.google.gson.JsonElement
 import com.google.gson.JsonObject
+import com.google.gson.JsonPrimitive
 import com.intellij.ide.DataManager
 import com.intellij.openapi.actionSystem.ActionManager
 import com.intellij.openapi.actionSystem.ActionPlaces
@@ -42,6 +45,8 @@ sealed interface CodemapState {
         val pendingTotal: Int,
         /** Commits that landed on this file since the note was written; null when unknown. */
         val commitsSince: Int?,
+        /** Someone has corrected this note by hand — those corrections outlive a re-analysis. */
+        val edited: Boolean,
     ) : CodemapState {
         val name: String get() = rel.substringAfterLast('/')
         val dir: String get() = rel.substringBeforeLast('/', "")
@@ -109,10 +114,6 @@ class CodemapViewModel(private val project: Project) {
         // than replacing it with "outside the codemap root".
         if (file is CodemapGraphFile) return
         current = file
-        // Deliberately NOT clearing `usages` here: a search can make the IDE navigate, and wiping the
-        // result on the way out (or on the way back) would delete the very answer we just asked for.
-        // The view only renders a result whose file+symbol match what is on screen, so a leftover is
-        // invisible rather than wrong.
         focusedFunction = null
         reload()
     }
@@ -132,10 +133,7 @@ class CodemapViewModel(private val project: Project) {
             .filter { it.value.rel == rel && it.value.line <= line }
             .maxByOrNull { it.value.line }
             ?.key
-        if (hit != focusedFunction) {
-            focusedFunction = hit
-            usages = Usages.Idle
-        }
+        if (hit != focusedFunction) focusedFunction = hit
     }
 
     /** Re-read from disk — after a request is queued, or when the AI has written a note meanwhile. */
@@ -192,6 +190,7 @@ class CodemapViewModel(private val project: Project) {
             pending = s.pendingFor(rel),
             pendingTotal = s.pending().size,
             commitsSince = since,
+            edited = s.edited(note),
         )
     }
 
@@ -237,27 +236,59 @@ class CodemapViewModel(private val project: Project) {
     }
 
     /**
-     * Apply a human correction to the current file's note and re-read it.
+     * Apply a human correction to a field of the current file's note and re-read it.
      *
-     * Goes through [NoteStore.editNote], which preserves provenance — a wording fix is not a re-analysis,
-     * so the note keeps the hashes and date it was actually written with.
+     * The field is named by [path] rather than mutated by a lambda, because the store has to RECORD what
+     * a person changed — that record is what survives the next re-analysis. Provenance is preserved: a
+     * wording fix is not a re-analysis, so the note keeps the hashes and date it was written with.
      */
-    fun edit(mutate: (JsonObject) -> Unit) {
+    fun edit(path: List<String>, value: JsonElement) {
         val loaded = state as? CodemapState.Loaded ?: return
         ApplicationManager.getApplication().executeOnPooledThread {
-            runCatching { store?.editNote(loaded.rel, mutate) }
+            runCatching { store?.editNote(loaded.rel, path, value) }
             reload()
         }
     }
 
+    /** A note field the person typed over. */
+    fun editField(key: String, value: String) = edit(listOf(key), JsonPrimitive(value))
 
+    /** A field of one function's entry. */
+    fun editFunction(name: String, key: String, value: String) =
+        edit(listOf("functions", name, key), JsonPrimitive(value))
+
+    /** A list of sentences (주의 and friends) the person edited as a whole. */
+    fun editList(key: String, values: List<String>) =
+        edit(listOf(key), JsonArray().apply { values.forEach { add(it) } })
+
+    fun editFunctionList(name: String, key: String, values: List<String>) =
+        edit(listOf("functions", name, key), JsonArray().apply { values.forEach { add(it) } })
+
+
+
+    /** The engine the next analysis will use; remembered in settings, changed from the panel. */
+    var engine: Engine by mutableStateOf(
+        ApplicationManager.getApplication().getService(CodemapSettings::class.java)?.engine ?: Engine.CLAUDE,
+    )
+        private set
+
+    /** Whether the chosen engine is actually installed — checked for the panel, not at spawn time. */
+    fun engineMissing(): Boolean {
+        val settings = ApplicationManager.getApplication().getService(CodemapSettings::class.java)
+        return engine.cli.discover(settings?.pathFor(engine)) == null
+    }
+
+    fun chooseEngine(e: Engine) {
+        engine = e
+        ApplicationManager.getApplication().getService(CodemapSettings::class.java)?.engine = e
+    }
 
     /**
-     * Run the analysis now, instead of queueing it for someone to ask Claude about later.
+     * Run the analysis now, instead of queueing it for someone to run later.
      *
-     * The CLI is given read-only tools and answers with JSON on stdout; [AnalysisRunner] hands that to
-     * the store, so the note is still written in exactly one place with the provenance the store
-     * stamps. A press costs tokens on your Claude account, which is why the button says 실행.
+     * The chosen engine is given read-only tools and answers with JSON; [AnalysisRunner] hands that to the
+     * store, so the note is still written in exactly one place with the provenance the store stamps. A
+     * press costs tokens on your account, which is why the button says 실행.
      */
     fun analyzeNow(question: String) {
         val loaded = state as? CodemapState.Loaded ?: return
@@ -266,10 +297,11 @@ class CodemapViewModel(private val project: Project) {
 
         analysis = Analysis.Running(loaded.rel)
         val r = AnalysisRunner(s).also { runner = it }
+        val chosen = engine
         ApplicationManager.getApplication().executeOnPooledThread {
             val explicit = ApplicationManager.getApplication()
-                .getService(CodemapSettings::class.java)?.claudePath
-            val result = r.analyze(loaded.rel, question, explicitPath = explicit)
+                .getService(CodemapSettings::class.java)?.pathFor(chosen)
+            val result = r.analyze(loaded.rel, question, engine = chosen, explicitPath = explicit)
             ApplicationManager.getApplication().invokeLater {
                 analysis = when (result) {
                     is AnalysisRunner.Result.Ok -> Analysis.Idle
@@ -291,34 +323,6 @@ class CodemapViewModel(private val project: Project) {
     }
 
     /** What the usage search is doing for the function currently in focus. */
-    sealed interface Usages {
-        data object Idle : Usages
-        data object Searching : Usages
-        data class Found(val rel: String, val symbol: String, val hits: List<UsageFinder.Hit>) : Usages
-        data class Failed(val reason: String) : Usages
-    }
-
-    var usages: Usages by mutableStateOf(Usages.Idle)
-        private set
-
-    /**
-     * Find where [name] is actually used — resolved by Rider's backend, listed in our panel.
-     *
-     * The plugin's own call graph only knows what the notes recorded; this is the exhaustive answer, and
-     * it belongs on the same screen rather than in a separate window the user has to go read.
-     */
-    fun findUsages(loc: CodemapState.FnLoc, name: String) {
-        val root = project.getService(CodemapStore::class.java).root ?: return
-        usages = Usages.Searching
-        UsageFinder.find(project, root, loc.rel, loc.line, name) { result ->
-            usages = when (result) {
-                is UsageFinder.Result.Found -> Usages.Found(loc.rel, name, result.hits)
-                is UsageFinder.Result.Failed -> Usages.Failed(result.reason)
-            }
-        }
-    }
-
-    fun clearUsages() { usages = Usages.Idle }
 
     /** Publish only if no newer load started meanwhile. */
     private fun publish(gen: Long, produce: () -> CodemapState) {

@@ -51,6 +51,10 @@ dependencies {
         // The IDE's integrated MCP server (2025.2+). We contribute the note-authoring tools to it via
         // its mcpToolset extension point, so they ship with the plugin (optional dependency).
         bundledPlugin("com.intellij.mcpServer")
+
+        // The shared graph canvas lives in :common. Composed into this plugin's MAIN jar (not
+        // lib/modules/) because plugin classes call it directly — see CLAUDE.md on pluginComposedModule.
+        pluginComposedModule(implementation(project(":common")))
     }
 
     // Headless unit tests for the pure logic (path mapping, .h/.cpp pairing, #include extraction,

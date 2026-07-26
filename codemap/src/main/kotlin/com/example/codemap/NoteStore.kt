@@ -2,6 +2,7 @@ package com.example.codemap
 
 import com.google.gson.GsonBuilder
 import com.google.gson.JsonArray
+import com.google.gson.JsonElement
 import com.google.gson.JsonObject
 import com.google.gson.JsonParser
 import java.io.File
@@ -65,6 +66,17 @@ class NoteStore(val root: File, private val today: () -> String = { LocalDate.no
     val stampedKeys = setOf("files", "hashes", "analyzedAt", "analyzedCommit")
 
     /**
+     * Where human corrections are remembered, so a re-analysis cannot quietly undo them.
+     *
+     * A shadow of the note holding only the fields a person edited — `{"purpose": "…",
+     * "functions": {"HandleLogin": {"purpose": "…"}}}`. It is not a note field: the store strips it from
+     * anything incoming, carries it forward itself, and overlays it after every analysis. Typing a
+     * sentence costs a person real effort; an agent can regenerate its half in seconds, so when the two
+     * disagree the person wins.
+     */
+    val MANUAL = "_manual"
+
+    /**
      * Store [note] for [relFile] (its pair shares the entry), stamping provenance. Returns the stamped
      * note. Any pending request for the same note is cleared — writing the note IS answering it.
      */
@@ -72,8 +84,24 @@ class NoteStore(val root: File, private val today: () -> String = { LocalDate.no
         val key = noteKeyFor(relFile)
         val dirRel = relFile.substringBeforeLast('/', "")
 
+        val previous = readNote(relFile)
+
         val stamped = note.deepCopy()
         stampedKeys.forEach(stamped::remove)
+        stamped.remove(MANUAL)
+
+        // Keep what the incoming note does not mention. An analysis is not a licence to delete: a big
+        // file is written a few functions at a time, and an answer that covers ten of forty functions
+        // must not take the other thirty with it.
+        if (previous != null) {
+            stamped.add("functions", mergeByName(previous.get("functions") as? JsonArray, stamped.get("functions") as? JsonArray))
+            if (stamped.get("functions").let { it is JsonArray && it.isEmpty }) stamped.remove("functions")
+            // Human corrections last: they are restored on top of whatever the analysis produced.
+            (previous.get(MANUAL) as? JsonObject)?.let { manual ->
+                overlayManual(stamped, manual)
+                stamped.add(MANUAL, manual.deepCopy())
+            }
+        }
 
         val files = JsonArray()
         val hashes = JsonObject()
@@ -92,6 +120,37 @@ class NoteStore(val root: File, private val today: () -> String = { LocalDate.no
         return stamped
     }
 
+    /** Name-keyed upsert of [incoming] over [existing]: replaced in place, appended when new, never dropped. */
+    private fun mergeByName(existing: JsonArray?, incoming: JsonArray?): JsonArray {
+        val merged = JsonArray()
+        val fresh = LinkedHashMap<String, JsonObject>()
+        incoming?.forEach { el -> (el as? JsonObject)?.let { f -> nameOf(f)?.let { fresh[it] = f } } }
+        existing?.forEach { el ->
+            val old = el as? JsonObject ?: return@forEach
+            val name = nameOf(old)
+            merged.add(if (name != null && fresh.containsKey(name)) fresh.remove(name) else old)
+        }
+        fresh.values.forEach(merged::add)
+        return merged
+    }
+
+    /** Write every field recorded in [manual] back over [note], creating nothing that is not already there. */
+    private fun overlayManual(note: JsonObject, manual: JsonObject) {
+        manual.entrySet().forEach { (key, value) ->
+            if (key != "functions") {
+                note.add(key, value.deepCopy())
+                return@forEach
+            }
+            val perFunction = value as? JsonObject ?: return@forEach
+            val functions = note.get("functions") as? JsonArray ?: return@forEach
+            perFunction.entrySet().forEach { (name, fields) ->
+                val target = functions.mapNotNull { it as? JsonObject }.firstOrNull { nameOf(it) == name }
+                    ?: return@forEach
+                (fields as? JsonObject)?.entrySet()?.forEach { (f, v) -> target.add(f, v.deepCopy()) }
+            }
+        }
+    }
+
     /** Store [note] under [relFile]'s key without touching provenance or the queue. */
     private fun putNote(relFile: String, note: JsonObject) {
         val bundle = bundleFile(relFile)
@@ -104,20 +163,47 @@ class NoteStore(val root: File, private val today: () -> String = { LocalDate.no
     }
 
     /**
-     * Apply a human correction to an existing note.
+     * Apply a human correction to an existing note, and remember that a human made it.
      *
-     * Distinct from [writeNote] in one way that matters: provenance is **preserved, not re-stamped**.
-     * Fixing a sentence is not an analysis — the note still describes the same source at the same
-     * hashes, and moving `analyzedAt` to today would claim a re-read that never happened. For the same
-     * reason this does not clear the pending queue: a wording fix does not answer the question someone
-     * asked.
+     * [path] is either `["purpose"]`-style (a top-level field) or `["functions", name, field]`. Recording
+     * it under [MANUAL] is what lets [writeNote] restore the correction after a re-analysis; without that
+     * record the next 재분석 실행 would silently overwrite it.
      *
-     * Returns the saved note, or null when there is nothing to edit yet.
+     * Distinct from [writeNote] in one more way that matters: provenance is **preserved, not re-stamped**.
+     * Fixing a sentence is not an analysis — the note still describes the same source at the same hashes,
+     * and moving `analyzedAt` to today would claim a re-read that never happened. For the same reason this
+     * does not clear the pending queue: a wording fix does not answer the question someone asked.
+     *
+     * Returns the saved note, or null when there is nothing to edit or the path names nothing.
      */
-    fun editNote(relFile: String, mutate: (JsonObject) -> Unit): JsonObject? {
+    fun editNote(relFile: String, path: List<String>, value: JsonElement): JsonObject? {
         val existing = readNote(relFile) ?: return null
         val next = existing.deepCopy()
-        mutate(next)
+
+        when {
+            path.size == 1 -> next.add(path[0], value)
+
+            path.size == 3 && path[0] == "functions" -> {
+                val functions = next.get("functions") as? JsonArray ?: return null
+                val target = functions.mapNotNull { it as? JsonObject }.firstOrNull { nameOf(it) == path[1] }
+                    ?: return null
+                target.add(path[2], value)
+            }
+
+            else -> return null
+        }
+
+        val manual = (next.get(MANUAL) as? JsonObject ?: JsonObject()).also { next.add(MANUAL, it) }
+        if (path.size == 1) {
+            manual.add(path[0], value.deepCopy())
+        } else {
+            val perFunction = manual.get("functions") as? JsonObject
+                ?: JsonObject().also { manual.add("functions", it) }
+            val fields = perFunction.get(path[1]) as? JsonObject
+                ?: JsonObject().also { perFunction.add(path[1], it) }
+            fields.add(path[2], value.deepCopy())
+        }
+
         stampedKeys.forEach { k ->
             val original = existing.get(k)
             if (original == null) next.remove(k) else next.add(k, original)
@@ -125,6 +211,10 @@ class NoteStore(val root: File, private val today: () -> String = { LocalDate.no
         putNote(relFile, next)
         return next
     }
+
+    /** Has a person corrected this note? Drives the 수정됨 badge — an edited note reads differently. */
+    fun edited(note: JsonObject?): Boolean =
+        (note?.get(MANUAL) as? JsonObject)?.size()?.let { it > 0 } == true
 
     /**
      * Merge [functions] into the note's `functions` array, matched by `name`: an existing entry is
@@ -140,19 +230,8 @@ class NoteStore(val root: File, private val today: () -> String = { LocalDate.no
      */
     fun writeFunctions(relFile: String, functions: JsonArray): JsonObject {
         val existing = readNote(relFile) ?: JsonObject()
-        val merged = JsonArray()
-        val incoming = LinkedHashMap<String, JsonObject>()
-        functions.forEach { el -> (el as? JsonObject)?.let { f -> nameOf(f)?.let { incoming[it] = f } } }
-
-        (existing.get("functions") as? JsonArray)?.forEach { el ->
-            val old = el as? JsonObject ?: return@forEach
-            val name = nameOf(old)
-            merged.add(if (name != null && incoming.containsKey(name)) incoming.remove(name) else old)
-        }
-        incoming.values.forEach(merged::add)
-
         val next = existing.deepCopy()
-        next.add("functions", merged)
+        next.add("functions", mergeByName(existing.get("functions") as? JsonArray, functions))
         return writeNote(relFile, next)
     }
 

@@ -102,7 +102,8 @@ object UsageFinder {
             val skipped = settings.isSkipResultsWithOneUsage
             settings.isSkipResultsWithOneUsage = false
 
-            // Baseline for detecting the single-usage jump: where the caret sits AFTER we placed it.
+            // Baseline for two things: detecting the single-usage jump, and recognising the declaration
+            // itself among the hits. "Who uses this" does not mean the line it is declared on.
             val placed = Placed(vf.path, idx, col)
 
             val ctx = DataManager.getInstance().getDataContext(editor.contentComponent)
@@ -119,7 +120,9 @@ object UsageFinder {
         }
     }
 
-    private const val MAX_TRIES = 20
+    // 400ms × 75 = 30 seconds. The old 8-second ceiling was fine on a toy project and hopeless on a real
+    // one, where the backend can still be settling long after the caret has moved.
+    private const val MAX_TRIES = 75
 
     /** Where the caret was put before the action ran, so a jump away from it can be recognised. */
     private data class Placed(val path: String, val line: Int, val column: Int)
@@ -154,7 +157,9 @@ object UsageFinder {
                         text = runCatching { u.presentation.plainText.trim() }.getOrDefault(""),
                         target = u as? Navigatable,
                     )
-                }.sortedWith(compareBy({ it.filePath }, { it.line }))
+                }
+                    .filterNot { it.filePath == placed.path && it.line == placed.line + 1 }
+                    .sortedWith(compareBy({ it.filePath }, { it.line }))
                 hideFindWindow(project)
                 onResult(Result.Found(hits))
             }

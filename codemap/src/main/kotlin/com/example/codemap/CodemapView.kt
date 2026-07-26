@@ -7,6 +7,7 @@ import androidx.compose.foundation.hoverable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -111,6 +112,9 @@ private fun Header(s: CodemapState.Loaded, p: CodemapPalette) {
             NoteStore.Freshness.UNKNOWN -> Chip("확인 불가", p.mutedText, p)
         }
         if (s.pending != null) Chip("요청됨", p.accent, p)
+        // A note someone has corrected by hand reads differently — and those corrections now survive a
+        // re-analysis, so it matters that you can see there are some.
+        if (s.edited) Chip("수정됨", p.mutedText, p)
     }
 
     // The one thing that must be impossible to miss when a note has drifted from the code.
@@ -138,9 +142,9 @@ private fun NoteSections(note: JsonObject, s: CodemapState.Loaded, vm: CodemapVi
 
     // ---- one click away ----
     // Only the function index. Every other section the note holds (요약 · 주의 · 클래스 · 상태 ·
-    // 스레드/락 · 패킷 · 의존 · 흐름 · 데이터 연결) is deliberately not on screen: the panel is being
-    // rebuilt from nothing, adding back only what use actually proves necessary. [Details] still
-    // renders all of them and is one call away from returning.
+    // 스레드/락 · 패킷 · 의존 · 흐름 · 데이터 연결) is deliberately not on screen:
+    // the panel is being rebuilt from nothing, adding back only what use actually proves necessary.
+    // [Details] still renders all of them and is one call away from returning.
     Functions(note, s, vm, p)
 
     note.string("analyzedAt")?.let {
@@ -158,129 +162,25 @@ private fun CaretFocus(note: JsonObject, s: CodemapState.Loaded, vm: CodemapView
             f.string("purpose").orEmpty(),
             p,
             fontSize = Type.label,
-            onSave = { v -> vm.edit { note -> note.function(name)?.addProperty("purpose", v) } },
+            onSave = { v -> vm.editFunction(name, "purpose", v) },
         )
         f.string("thread")?.let { AttrRow("스레드", it, p) }
         FunctionDetail(f, p, indent = false, showGotchas = false)
 
-        // What the note says about this function's place in the file…
-        CallGraphFor(note, name, s, vm, p)
-
-        // …and a handoff to the backend for what the note cannot know.
-        Row(
-            Modifier.padding(top = Space.xs),
-            horizontalArrangement = Arrangement.spacedBy(Space.xs),
-        ) {
-            // Two buttons, not one: the graph is what the notes know, 사용처 is what the backend knows.
-            // Collapsing them under a single label would make whichever name we chose a lie.
+        // Only the graph. Rider's own Find Usages (Alt+F7) already answers "who calls this" better than
+        // a list here could — with grouping, filters and a preview — and the caret is on the function
+        // already. The exhaustive answer earns a button only in the graph tab, where the graph itself is
+        // notes-only and the contrast between the two is the point.
+        Row(Modifier.padding(top = Space.xs)) {
             ActionButton("호출 그래프", p, primary = false) { vm.openGraph(name) }
-            s.functionLoc[name]?.let { loc ->
-                ActionButton("사용처 찾기", p, primary = false) { vm.findUsages(loc, name) }
-            }
         }
-
-        UsageList(s.rel, name, vm, p)
 
         EditableList(
             f.strings("gotchas"),
             p,
             addLabel = "＋ 이 함수 주의 추가",
-            onChange = { list -> vm.edit { note -> note.function(name)?.add("gotchas", list.toJsonArray()) } },
+            onChange = { list -> vm.editFunctionList(name, "gotchas", list) },
         ) { text -> Text("⚠ $text", color = p.warn, fontSize = Type.micro, lineHeight = 15.sp) }
-    }
-}
-
-/**
- * Callers above, callees below, this function in the middle — assembled from the note alone.
- *
- * Callers are the functions in this same note whose `calls` mention this one, which is arithmetic over
- * recorded data rather than a claim about the codebase. The graph is therefore FILE-SCOPED and says so;
- * everything outside is what the 사용처 찾기 button is for.
- */
-@Composable
-private fun CallGraphFor(
-    note: JsonObject,
-    name: String,
-    s: CodemapState.Loaded,
-    vm: CodemapViewModel,
-    p: CodemapPalette,
-) {
-    val fns = note.objects("functions")
-    fun node(label: String): CallNode {
-        val loc = s.functionLoc[label] ?: s.functionLoc.entries
-            .firstOrNull { it.key.substringAfterLast("::") == label.substringAfterLast("::") }?.value
-        return CallNode(label, loc?.let { { vm.jumpTo(it) } })
-    }
-
-    val bare = name.substringAfterLast("::")
-    val callers = fns.filter { f ->
-        f.strings("calls").any { it == name || it.substringAfterLast("::") == bare }
-    }.mapNotNull { it.string("name") }.filter { it != name }
-
-    val callees = fns.firstOrNull { it.string("name") == name }?.strings("calls").orEmpty()
-    if (callers.isEmpty() && callees.isEmpty()) return
-
-    Text("이 파일 안에서", color = p.mutedText, fontSize = Type.micro, modifier = Modifier.padding(top = Space.sm))
-    CallGraph(callers.map(::node), name, callees.map(::node), p)
-}
-
-/**
- * What Rider found, listed here rather than in its own window.
- *
- * Grouped by file with the line number kept visible, because a usage list is read to decide where to go
- * next; each row navigates. The count is stated plainly — unlike the call graph above it, this one IS
- * exhaustive, and the difference is worth being obvious about.
- */
-@Composable
-private fun UsageList(rel: String, name: String, vm: CodemapViewModel, p: CodemapPalette) {
-    when (val u = vm.usages) {
-        CodemapViewModel.Usages.Idle -> Unit
-
-        CodemapViewModel.Usages.Searching ->
-            Text("사용처 찾는 중…", color = p.mutedText, fontSize = Type.label, modifier = Modifier.padding(top = Space.xs))
-
-        is CodemapViewModel.Usages.Failed ->
-            Text("사용처 — ${u.reason}", color = p.warn, fontSize = Type.micro, modifier = Modifier.padding(top = Space.xs))
-
-        is CodemapViewModel.Usages.Found -> {
-            // A result belongs to one file's one function; anything else on screen renders nothing.
-            if (u.symbol != name || u.rel != rel) return
-            Row(
-                Modifier.fillMaxWidth().padding(top = Space.sm),
-                horizontalArrangement = Arrangement.spacedBy(Space.xs),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text("사용처", color = p.text, fontSize = Type.label, fontWeight = FontWeight.SemiBold)
-                Text("%,d곳".format(u.hits.size), color = p.mutedText, fontSize = Type.micro)
-                Text("Rider 검색", color = p.mutedText, fontSize = Type.micro)
-            }
-            if (u.hits.isEmpty()) {
-                Text("없음", color = p.mutedText, fontSize = Type.label)
-                return
-            }
-            u.hits.groupBy { it.fileName }.forEach { (file, hits) ->
-                Text(file, color = p.mutedText, fontSize = Type.micro, modifier = Modifier.padding(top = Space.xs))
-                hits.forEach { UsageRow(it, p) }
-            }
-        }
-    }
-}
-
-@Composable
-private fun UsageRow(hit: UsageFinder.Hit, p: CodemapPalette) {
-    val interaction = remember { MutableInteractionSource() }
-    val hovered by interaction.collectIsHoveredAsState()
-    val bg by animateColorAsState(if (hovered && hit.canNavigate) p.surfaceHover else androidx.compose.ui.graphics.Color.Transparent)
-    Row(
-        Modifier.fillMaxWidth()
-            .background(bg, RoundedCornerShape(Radii.sm))
-            .hoverable(interaction)
-            .let { m -> if (hit.canNavigate) m.clickable { hit.navigate() } else m }
-            .padding(horizontal = Space.xs, vertical = 1.dp),
-        horizontalArrangement = Arrangement.spacedBy(Space.sm),
-    ) {
-        Mono("%4d".format(hit.line), p.mutedText, size = Type.micro)
-        Mono(hit.text, if (hit.canNavigate) p.text else p.mutedText, size = Type.micro, modifier = Modifier.weight(1f))
     }
 }
 
@@ -352,14 +252,14 @@ internal fun Details(note: JsonObject, s: CodemapState.Loaded, vm: CodemapViewMo
     var open by remember { mutableStateOf(false) }
     CollapsibleSection("파일 전체", present.joinToString(" · "), open, p, { open = !open }) {
         SectionHeader("요약", p)
-        Editable(note.string("purpose").orEmpty(), p, onSave = { v -> vm.edit { it.addProperty("purpose", v) } })
+        Editable(note.string("purpose").orEmpty(), p, onSave = { v -> vm.editField("purpose", v) })
         Editable(
             note.string("roleInSystem").orEmpty(),
             p,
             fontSize = Type.label,
             color = p.mutedText,
             placeholder = "(시스템에서의 위치 없음)",
-            onSave = { v -> vm.edit { it.addProperty("roleInSystem", v) } },
+            onSave = { v -> vm.editField("roleInSystem", v) },
         )
 
         // Then gotchas: of everything in here, these are the lines that stop a bug.
@@ -368,7 +268,7 @@ internal fun Details(note: JsonObject, s: CodemapState.Loaded, vm: CodemapViewMo
             note.strings("gotchas"),
             p,
             addLabel = "＋ 주의 추가",
-            onChange = { list -> vm.edit { it.add("gotchas", list.toJsonArray()) } },
+            onChange = { list -> vm.editList("gotchas", list) },
         ) { text -> WarnCard(text, p) }
 
         val entries = note.objects("entryPoints")
@@ -651,7 +551,7 @@ private fun RequestBox(
         horizontalArrangement = Arrangement.spacedBy(Space.sm),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        // 실행 runs Claude Code here and now; 큐에 넣기 keeps the batch path for a pile of files.
+        // 실행 runs the chosen agent here and now; 큐에 넣기 keeps the batch path for a pile of files.
         ActionButton(if (s.note == null) "분석 실행" else "재분석 실행", p) {
             vm.analyzeNow(question.text.toString())
             question.edit { replace(0, length, "") }
@@ -664,6 +564,31 @@ private fun RequestBox(
         }
         if (!asking) ActionButton("질문 달기", p, primary = false) { asking = true }
         if (s.pendingTotal > 0) Text("대기 %,d건".format(s.pendingTotal), color = p.mutedText, fontSize = Type.label)
+    }
+
+    EnginePicker(vm, p)
+}
+
+/**
+ * Which agent runs 분석 실행.
+ *
+ * Both are asked for the same note through the same prompt, so this is a choice of engine, not of output
+ * format — whichever you pick, the note that lands is read the same way. The choice sticks across
+ * sessions, and an engine that is not installed says so here instead of at spawn time.
+ */
+@Composable
+private fun EnginePicker(vm: CodemapViewModel, p: CodemapPalette) {
+    Row(
+        Modifier.fillMaxWidth().padding(top = Space.xs),
+        horizontalArrangement = Arrangement.spacedBy(Space.xs),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text("분석기", color = p.mutedText, fontSize = Type.micro)
+        Engine.entries.forEach { e ->
+            ActionButton(e.label, p, primary = vm.engine == e) { vm.chooseEngine(e) }
+        }
+        val missing = remember(vm.engine) { vm.engineMissing() }
+        if (missing) Text("설치를 찾지 못함", color = p.warn, fontSize = Type.micro)
     }
 }
 
