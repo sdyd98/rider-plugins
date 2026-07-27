@@ -2,6 +2,7 @@ package com.example.codemap
 
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNull
+import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.io.File
@@ -31,6 +32,57 @@ class AnchorTest {
 
         // void PlayerSession::Removed(int id) {
     """.trimIndent()
+
+    // ---- what a Visual Studio codebase actually looks like ----
+    //
+    // Every one of these was found by opening a real .sln: the function index came up empty because the
+    // matcher only ever looked inside a single line of UTF-8.
+
+    private fun bytes(name: String, b: ByteArray): File = File(tmp, name).apply { writeBytes(b) }
+
+    @Test
+    fun `the brace on the next line still resolves — Visual Studio's own style`() {
+        val f = bytes("A.cpp", "void PlayerSession::HandleLogin(int a)\r\n{\r\n\treturn;\r\n}\r\n".toByteArray())
+        val hits = FileFacts.findAnchors(f, listOf("void PlayerSession::HandleLogin(int a) {"))
+        assertEquals(1, hits.values.single().line)
+    }
+
+    @Test
+    fun `a signature wrapped over several lines resolves to its first line`() {
+        val f = bytes(
+            "B.cpp",
+            "int x;\r\nvoid PlayerSession::HandleLogin(\r\n\tconst uint8_t* body,\r\n\tsize_t len)\r\n{\r\n".toByteArray(),
+        )
+        val hits = FileFacts.findAnchors(
+            f,
+            listOf("void PlayerSession::HandleLogin(const uint8_t* body, size_t len)"),
+        )
+        assertEquals(2, hits.values.single().line)
+    }
+
+    @Test
+    fun `UTF-16 resolves, with or without a BOM`() {
+        val line = "void Ping() {\r\n"
+        val withBom = byteArrayOf(0xFF.toByte(), 0xFE.toByte()) + line.toByteArray(Charsets.UTF_16LE)
+        assertEquals(1, FileFacts.findAnchors(bytes("C.cpp", withBom), listOf("void Ping() {")).values.single().line)
+        // Visual Studio does not always write the BOM; the zero bytes beside ASCII are the tell.
+        val bare = line.toByteArray(Charsets.UTF_16LE)
+        assertEquals(1, FileFacts.findAnchors(bytes("D.cpp", bare), listOf("void Ping() {")).values.single().line)
+    }
+
+    @Test
+    fun `tolerance does not reach across a whole file`() {
+        // Four lines is the window. A signature cannot be assembled out of scraps further apart than that,
+        // or an anchor would eventually match something it has nothing to do with.
+        val far = "void Foo(\n" + "// filler\n".repeat(6) + "int a)\n{\n"
+        assertTrue(FileFacts.findAnchors(bytes("E.cpp", far.toByteArray()), listOf("void Foo(int a)")).isEmpty())
+    }
+
+    @Test
+    fun `a blank line above a signature does not claim its hit`() {
+        val f = bytes("F.cpp", "#include \"x.h\"\n\nvoid Bar() {\n".toByteArray())
+        assertEquals(3, FileFacts.findAnchors(f, listOf("void Bar() {")).values.single().line)
+    }
 
     @Test
     fun `an anchor resolves to its exact line`() {

@@ -72,23 +72,92 @@ object FileFacts {
      * a weak anchor, and the caller should say so instead of silently picking one.
      */
     fun findAnchors(file: File, anchors: Collection<String>): Map<String, Anchor> {
-        val wanted = anchors.mapNotNull { a -> a.trim().takeIf { it.isNotEmpty() }?.let { a to it } }
+        val wanted = anchors.mapNotNull { a ->
+            squeeze(a).removeSuffix("{").takeIf { it.isNotEmpty() }?.let { a to it }
+        }
         if (wanted.isEmpty()) return emptyMap()
+
+        val lines = runCatching { readLines(file) }.getOrNull() ?: return emptyMap()
+        val norm = lines.map { squeeze(it) }
+
         val firstLine = HashMap<String, Int>()
         val counts = HashMap<String, Int>()
-        runCatching {
-            file.bufferedReader(Charsets.UTF_8).useLines { lines ->
-                lines.forEachIndexed { idx, line ->
-                    wanted.forEach { (original, needle) ->
-                        if (line.contains(needle)) {
-                            firstLine.putIfAbsent(original, idx + 1)
-                            counts[original] = (counts[original] ?: 0) + 1
-                        }
-                    }
+        norm.indices.forEach { i ->
+            // A signature is not always one line. Visual Studio's own brace style puts `{` on the next line,
+            // and a long parameter list wraps across several — so the anchor is looked for in a WINDOW that
+            // starts here, with whitespace flattened so tabs and wrapping stop mattering.
+            val window = buildString {
+                for (j in i until minOf(i + WINDOW, norm.size)) append(norm[j])
+            }
+            val firstLen = norm[i].length
+            wanted.forEach { (original, needle) ->
+                val at = window.indexOf(needle)
+                // The match has to BEGIN on this line — strictly inside it. At exactly firstLen the match
+                // starts where this line ends, which means it belongs to the next one; allowing it let a
+                // blank line above a signature claim the signature's hit.
+                if (at in 0 until firstLen) {
+                    firstLine.putIfAbsent(original, i + 1)
+                    counts[original] = (counts[original] ?: 0) + 1
                 }
             }
         }
         return firstLine.mapValues { (k, v) -> Anchor(v, counts[k] ?: 1) }
+    }
+
+    /** How many lines a signature may span before we stop looking. Four covers a wrapped parameter list. */
+    private const val WINDOW = 4
+
+    /**
+     * Whitespace removed entirely, so the shape of the file stops mattering.
+     *
+     * Tabs versus spaces, a parameter list wrapped over four lines, two spaces after a comma — none of those
+     * change which function a signature names, and every one of them used to mean the anchor was never
+     * found. Dropping whitespace on both sides rather than collapsing it is what lets a wrapped signature
+     * match one written on a single line: joining `HandleLogin(` to `const uint8_t* body` cannot help
+     * inventing a space that the recorded anchor does not have.
+     */
+    private fun squeeze(text: String): String = text.filterNot { it.isWhitespace() }
+
+    /**
+     * The file's lines, decoded by what the bytes say they are.
+     *
+     * A codebase opened from a `.sln` is a Windows codebase, and Windows editors save UTF-16 often enough
+     * that hard-coding UTF-8 turns a whole file into replacement characters — after which no anchor matches
+     * anything. Only the BOM is trusted; guessing a legacy code page from content is the kind of judgement
+     * this plugin does not make.
+     */
+    /**
+     * UTF-16 recognised by its NUL bytes when there is no BOM to say so.
+     *
+     * Not a guess about the text: C++ source is overwhelmingly ASCII, and ASCII in UTF-16 puts a zero byte
+     * beside every character — a pattern no single-byte encoding produces. Which half holds the zeros gives
+     * the endianness. Legacy code pages are NOT guessed at; there is no comparable tell for those, and
+     * inventing one would be the kind of judgement this plugin refuses to make.
+     */
+    private fun utf16WithoutBom(bytes: ByteArray): java.nio.charset.Charset {
+        val sample = minOf(bytes.size, 1024)
+        if (sample < 4) return Charsets.UTF_8
+        var evenNul = 0
+        var oddNul = 0
+        for (i in 0 until sample) if (bytes[i] == 0.toByte()) if (i % 2 == 0) evenNul++ else oddNul++
+        val threshold = sample / 4
+        return when {
+            oddNul > threshold && evenNul <= oddNul / 4 -> Charsets.UTF_16LE
+            evenNul > threshold && oddNul <= evenNul / 4 -> Charsets.UTF_16BE
+            else -> Charsets.UTF_8
+        }
+    }
+
+    private fun readLines(file: File): List<String> {
+        val bytes = file.readBytes()
+        val (charset, offset) = when {
+            bytes.size >= 2 && bytes[0] == 0xFF.toByte() && bytes[1] == 0xFE.toByte() -> Charsets.UTF_16LE to 2
+            bytes.size >= 2 && bytes[0] == 0xFE.toByte() && bytes[1] == 0xFF.toByte() -> Charsets.UTF_16BE to 2
+            bytes.size >= 3 && bytes[0] == 0xEF.toByte() && bytes[1] == 0xBB.toByte() &&
+                bytes[2] == 0xBF.toByte() -> Charsets.UTF_8 to 3
+            else -> utf16WithoutBom(bytes) to 0
+        }
+        return String(bytes, offset, bytes.size - offset, charset).split('\n').map { it.removeSuffix("\r") }
     }
 
     /** `#include` targets literally present in the file (see [CodemapPaths.includes] for the caveat). */
