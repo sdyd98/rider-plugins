@@ -94,7 +94,7 @@ class AnalysisRunner(private val store: NoteStore) {
         // it with whatever this run happened to notice.
         val prompt = NoteRequest.prompt(relPath, question, symbol, store.readNote(relPath), flow)
         val answerFile = File.createTempFile("codemap-note", ".json").also { it.deleteOnExit() }
-        val cmd = cli.command(bin, prompt, answerFile)
+        val cmd = cli.command(bin, answerFile)
 
         val out = StringBuilder()
         val err = StringBuilder()
@@ -105,9 +105,10 @@ class AnalysisRunner(private val store: NoteStore) {
                 .start()
                 .also { process = it }
 
-            // The CLI waits three seconds for piped stdin before giving up and warning about it.
-            // Closing the stream signals EOF immediately, which is both faster and quieter.
-            runCatching { p.outputStream.close() }
+            // The prompt goes here, not on the command line: an argument starting with `-` is an option,
+            // and note text can start with anything. Closing the stream is what tells the CLI the prompt is
+            // complete — without the close it waits for more.
+            runCatching { p.outputStream.bufferedWriter(Charsets.UTF_8).use { it.write(prompt) } }
 
             val reader = Thread { p.inputStream.bufferedReader().forEachLine { out.appendLine(it) } }
             val errReader = Thread { p.errorStream.bufferedReader().forEachLine { err.appendLine(it) } }

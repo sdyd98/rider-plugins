@@ -61,7 +61,7 @@ class AgentCliTest {
 
     @Test
     fun `the command gives Claude no way to modify the repository`() {
-        val cmd = ClaudeCli.command(exe("claude"), "hi")
+        val cmd = ClaudeCli.command(exe("claude"))
         val tools = cmd.dropWhile { it != "--allowedTools" }.drop(1).takeWhile { !it.startsWith("--") }
         assertEquals(listOf("Read", "Grep", "Glob"), tools)
         assertTrue(cmd.none { it == "Write" || it == "Edit" || it == "Bash" })
@@ -204,11 +204,27 @@ class AgentCliTest {
     @Test
     fun `codex is asked for a read-only sandbox and answers into a file`() {
         val answer = File.createTempFile("codemap-test", ".json")
-        val cmd = CodexCli.command(exe("codex"), "hi", answer)
+        val cmd = CodexCli.command(exe("codex"), answer)
         assertEquals("exec", cmd[1])
         assertTrue(cmd.containsAll(listOf("-s", "read-only")))
         assertEquals(answer.absolutePath, cmd[cmd.indexOf("-o") + 1])
-        assertEquals("hi", cmd.last())
+        // "-" is codex's own way of saying the instructions are on stdin.
+        assertEquals("-", cmd.last())
+    }
+
+    @Test
+    fun `neither engine takes the prompt as an argument`() {
+        val answer = File.createTempFile("codemap-test", ".json")
+        // A note's text can start with anything. One that began "-1의 값을 반환한다" was parsed as an option
+        // and the analysis died with `error: unknown option '-1의 …'` before it ever ran. Nothing that could
+        // hold note text may appear in argv.
+        val prompt = NoteRequest.prompt("Net/World.h", "-1의 값을 반환한다", "", existing = null)
+        listOf(ClaudeCli.command(exe("claude"), answer), CodexCli.command(exe("codex"), answer)).forEach { cmd ->
+            assertTrue(cmd.none { it.contains("-1의") }, "프롬프트가 argv 에 실림: $cmd")
+            assertTrue(cmd.none { it.length > 200 }, "argv 에 긴 텍스트가 있음: $cmd")
+        }
+        // The prompt itself still carries the developer's words — it just travels on stdin.
+        assertTrue(prompt.contains("-1의 값을 반환한다"))
     }
 
     @Test

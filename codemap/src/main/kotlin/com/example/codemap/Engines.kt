@@ -19,10 +19,17 @@ interface AgentCli {
     fun discover(explicit: String? = null, pathEnv: String? = System.getenv("PATH")): File?
 
     /**
-     * The command line. [answerFile] is where the engine should leave its final message when it supports
-     * that; engines that only write to stdout ignore it.
+     * The command line. The PROMPT IS NOT IN IT — it goes on stdin.
+     *
+     * An argument that starts with `-` is an option, and a note's text can start with anything: a recorded
+     * gotcha beginning "-1의 값을 반환한다" made the whole prompt vanish into the parser as
+     * `error: unknown option '-1의 …'`. Both CLIs take the prompt on stdin for exactly this reason, and it
+     * removes the argument-length ceiling at the same time.
+     *
+     * [answerFile] is where the engine should leave its final message when it supports that; engines that
+     * only write to stdout ignore it.
      */
-    fun command(bin: File, prompt: String, answerFile: File): List<String>
+    fun command(bin: File, answerFile: File): List<String>
 
     /** The note, read from whichever of [stdout] / [answerFile] this engine actually used. */
     fun noteFrom(stdout: String, answerFile: File): JsonObject?
@@ -62,7 +69,7 @@ object CodexCli : AgentCli {
     override fun discover(explicit: String?, pathEnv: String?): File? =
         NoteRequest.discover("codex", explicit, pathEnv, WELL_KNOWN)
 
-    override fun command(bin: File, prompt: String, answerFile: File): List<String> = listOf(
+    override fun command(bin: File, answerFile: File): List<String> = listOf(
         bin.absolutePath,
         "exec",
         // Read-only sandbox: the engine cannot write to the repository even if it decides to try.
@@ -72,7 +79,8 @@ object CodexCli : AgentCli {
         "--skip-git-repo-check",
         "--color", "never",
         "-o", answerFile.absolutePath,
-        prompt,
+        // `-` is codex's own way of saying "the instructions are on stdin".
+        "-",
     )
 
     /** The `-o` file holds exactly the final message; stdout is the human-readable progress log. */

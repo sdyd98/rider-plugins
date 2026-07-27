@@ -54,16 +54,17 @@ object ClaudeCli : AgentCli {
      * `Read`/`Grep`/`Glob` only: enough to read the file, follow a symbol through the codebase and
      * answer, and not enough to change anything.
      */
-    /** Claude answers on stdout, so the answer file is unused. */
-    override fun command(bin: File, prompt: String, answerFile: File): List<String> = command(bin, prompt)
+    /** Claude answers on stdout, so the answer file is unused. The prompt goes on stdin. */
+    override fun command(bin: File, answerFile: File): List<String> = command(bin)
 
     override fun noteFrom(stdout: String, answerFile: File): JsonObject? = extractNote(stdout)
 
     override fun errorFrom(stdout: String): String? = errorOf(stdout)
 
-    fun command(bin: File, prompt: String): List<String> = listOf(
+    fun command(bin: File): List<String> = listOf(
         bin.absolutePath,
-        "-p", prompt,
+        // -p with no value: the prompt arrives on stdin.
+        "-p",
         "--allowedTools", "Read", "Grep", "Glob",
         "--output-format", "json",
     )

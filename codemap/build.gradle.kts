@@ -10,7 +10,7 @@ plugins {
 }
 
 group = "com.example.codemap"
-version = "0.4.1"
+version = "0.4.2"
 
 repositories {
     mavenCentral()

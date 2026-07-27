@@ -343,9 +343,14 @@ MCP는 "AI가 IDE를 호출하는" 방향입니다. 반대 방향도 됩니다: 
 유지됩니다. 설치를 못 찾으면 프로세스를 띄우기 전에 그 자리에서 `설치를 찾지 못함`이라고 말합니다.
 
 ```
-claude -p <프롬프트> --allowedTools Read Grep Glob --output-format json
-codex exec -s read-only --skip-git-repo-check --color never -o <임시파일> <프롬프트>
+claude -p --allowedTools Read Grep Glob --output-format json     # 프롬프트는 stdin
+codex exec -s read-only --skip-git-repo-check --color never -o <임시파일> -   # 프롬프트는 stdin
 ```
+
+**프롬프트는 명령줄이 아니라 stdin 으로 갑니다.** `-` 로 시작하는 인자는 옵션이고, 노트 텍스트는 무엇으로든
+시작할 수 있습니다 — `-1의 값을 반환한다` 로 시작하는 gotcha 하나가 프롬프트 전체를 파서로 삼켜버려
+`error: unknown option '-1의 …'` 로 죽었습니다. 두 CLI 모두 이 이유로 stdin 을 공식 지원하고, 덤으로 인자
+길이 상한도 사라집니다.
 
 - **프롬프트는 두 엔진이 완전히 같습니다** (`NoteRequest`). 어느 쪽이 썼는지가 노트에 드러나면 안 됩니다.
   엔진별로 다른 것은 실행 파일 찾기 · 인자 · 답이 나오는 위치 세 가지뿐입니다(`AgentCli` 인터페이스).
@@ -356,7 +361,6 @@ codex exec -s read-only --skip-git-repo-check --color never -o <임시파일> <�
   벗겨내고, 그것이 또 envelope처럼 보이면 거부합니다(세션 id로 가득한 "노트"가 디스크에 앉는 걸 막습니다).
   Codex는 `-o` 파일에 **마지막 메시지만** 나오므로 진행 로그와 섞이지 않습니다.
 - **MCP는 안 씁니다.** 그 CLI의 MCP 설정이 어느 IDE를 가리킬지 모르고, 파일 읽고 답하는 데는 필요 없습니다.
-- Claude 경로는 `p.outputStream`을 즉시 닫습니다 — 안 닫으면 CLI가 stdin을 3초 기다리고 경고를 냅니다.
 - 실행 파일은 **통상 설치 위치 → `PATH`** 순으로 찾고, 설정의 `claudePath`/`codexPath`로 직접 지정할 수도
   있습니다. (GUI로 띄운 IDE는 로그인 셸의 `PATH`를 물려받지 않으므로 위치 탐색이 먼저입니다.)
 - 타임아웃 10분, 실행 중에는 **[취소]** 가 뜹니다. 실제 프로젝트에서는 커피 한 잔짜리 작업입니다.
@@ -475,7 +479,7 @@ Claude Code는 cwd를 보내므로 보통 생략됩니다.
 | `CodemapView.kt` / `CodemapUi.kt` | Compose/Jewel 툴윈도우 (그리드가 없으므로 전부 Compose) |
 | `CodemapToolWindow.kt` | 툴윈도우 팩토리 + 에디터 선택 구독 |
 
-## 현재 범위 (0.4.1)
+## 현재 범위 (0.4.2)
 
 동작하는 것: 노트 표시(캐럿 추종), 함수 목차 + 코드 점프, 패널 내 노트 편집 — **재분석이 그 편집을 지우지
 않음**, 공용 캔버스로 그리는 호출 그래프 + 그래프 탭 내 사용처 목록(라이더 Find Usages 기반), **요청 단위로 누적되고
