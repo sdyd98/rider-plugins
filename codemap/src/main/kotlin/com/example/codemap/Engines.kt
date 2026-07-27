@@ -34,6 +34,14 @@ interface AgentCli {
     /** The note, read from whichever of [stdout] / [answerFile] this engine actually used. */
     fun noteFrom(stdout: String, answerFile: File): JsonObject?
 
+    /**
+     * The engine's answer as plain text — what a conversation needs, where an analysis wants JSON.
+     *
+     * Same wrapping, different unwrapping: the analysis path parses an object out of it and refuses anything
+     * else, while a chat answer is prose and must arrive intact.
+     */
+    fun textFrom(stdout: String, answerFile: File): String?
+
     /** A failure the engine reported in its own output, rather than through the exit code. */
     fun errorFrom(stdout: String): String? = null
 }
@@ -84,6 +92,9 @@ object CodexCli : AgentCli {
     )
 
     /** The `-o` file holds exactly the final message; stdout is the human-readable progress log. */
+    override fun textFrom(stdout: String, answerFile: File): String? =
+        runCatching { answerFile.readText(Charsets.UTF_8) }.getOrNull()?.takeIf { it.isNotBlank() }?.trim()
+
     override fun noteFrom(stdout: String, answerFile: File): JsonObject? {
         val text = runCatching { answerFile.readText(Charsets.UTF_8) }.getOrNull()?.takeIf { it.isNotBlank() }
             ?: return NoteRequest.objectIn(stdout)

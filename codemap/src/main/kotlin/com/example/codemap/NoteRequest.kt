@@ -27,10 +27,11 @@ object NoteRequest {
         symbol: String,
         existing: JsonObject?,
         flow: String = "",
+        conversation: List<Chat.Turn> = emptyList(),
     ): String {
         if (flow.isNotBlank()) return sequencePrompt(relPath, flow, question, existing)
         if (symbol.isNotBlank()) return functionPrompt(relPath, symbol, question, existing)
-        return notePrompt(relPath, question, symbol, existing)
+        return notePrompt(relPath, question, symbol, existing, conversation)
     }
 
     /**
@@ -162,7 +163,13 @@ object NoteRequest {
         }
     """.trimIndent()
 
-    private fun notePrompt(relPath: String, question: String, symbol: String, existing: JsonObject?): String = buildString {
+    private fun notePrompt(
+        relPath: String,
+        question: String,
+        symbol: String,
+        existing: JsonObject?,
+        conversation: List<Chat.Turn> = emptyList(),
+    ): String = buildString {
         appendLine("이 저장소의 C++ 파일을 읽고 '코드맵 노트'를 JSON으로 만들어라.")
         appendLine()
         appendLine("대상 파일: $relPath  (같은 이름의 .h/.cpp 짝이 있으면 둘 다 읽어라)")
@@ -185,6 +192,19 @@ object NoteRequest {
             appendLine("있는 것은 이번에 채워라. 특히:")
             appendLine(missingHint(existing))
             appendLine(condense(existing))
+        }
+        if (conversation.isNotEmpty()) {
+            appendLine()
+            // What was worked out in conversation is the most expensive knowledge in the room — someone read
+            // the answers and decided they were right. Re-deriving it from scratch would waste that and risk
+            // contradicting it.
+            appendLine("아래는 이 파일에 대해 개발자와 나눈 대화다. **여기서 확인된 것을 노트에 반영해라** —")
+            appendLine("특히 대화에서 드러난 함정·락 순서·패킷 흐름은 노트의 해당 키에 남겨라.")
+            appendLine("대화에서 틀렸다고 밝혀진 것이 노트에 있으면 고쳐라.")
+            Chat.trimmed(conversation).forEach { t ->
+                appendLine()
+                appendLine(if (t.role == Chat.Role.USER) "개발자: ${t.text}" else "AI: ${t.text}")
+            }
         }
         appendLine()
         appendLine("출력 형식 — 오직 JSON 객체 하나만. 설명도 코드펜스도 붙이지 마라.")

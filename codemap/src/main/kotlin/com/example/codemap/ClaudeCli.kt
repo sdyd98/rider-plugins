@@ -59,6 +59,11 @@ object ClaudeCli : AgentCli {
 
     override fun noteFrom(stdout: String, answerFile: File): JsonObject? = extractNote(stdout)
 
+    /** The model's text lives in the envelope's `result`. */
+    override fun textFrom(stdout: String, answerFile: File): String? =
+        NoteRequest.objectIn(stdout)?.get("result")?.takeIf { it.isJsonPrimitive }?.asString
+            ?.takeIf { it.isNotBlank() }?.trim()
+
     override fun errorFrom(stdout: String): String? = errorOf(stdout)
 
     fun command(bin: File): List<String> = listOf(

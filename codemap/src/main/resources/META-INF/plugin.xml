@@ -48,6 +48,10 @@
              is registered and nothing is written to disk. -->
         <fileEditorProvider implementation="com.example.codemap.CodemapGraphEditorProvider"/>
 
+        <!-- A conversation about one file's note. A tab, not the tool window: a chat needs an input field
+             that is always focused, and in that panel a focused field swallows the IDE's shortcuts. -->
+        <fileEditorProvider implementation="com.example.codemap.CodemapChatEditorProvider"/>
+
         <!-- The sequence viewer, opened from the note panel's 시퀀스 list. Same LightVirtualFile approach. -->
         <fileEditorProvider implementation="com.example.codemap.CodemapSequenceEditorProvider"/>
 

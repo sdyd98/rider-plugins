@@ -116,7 +116,7 @@ class CodemapViewModel(private val project: Project) {
     fun select(file: VirtualFile?) {
         // Our own tabs are not source files; selecting one should leave the note on screen rather than
         // replacing it with "outside the codemap root".
-        if (file is CodemapGraphFile || file is CodemapSequenceFile) return
+        if (file is CodemapGraphFile || file is CodemapSequenceFile || file is CodemapChatFile) return
         current = file
         focusedFunction = null
         reload()
@@ -316,10 +316,18 @@ class CodemapViewModel(private val project: Project) {
                 analysis = when (result) {
                     is AnalysisRunner.Result.Ok -> Analysis.Idle
                     is AnalysisRunner.Result.Failed -> Analysis.Failed(result.reason)
+                    // ask() is the chat path; analyze() never returns one.
+                    is AnalysisRunner.Result.Answer -> Analysis.Idle
                 }
             }
             reload()
         }
+    }
+
+    /** Open the conversation about this file. */
+    fun openChat() {
+        val loaded = state as? CodemapState.Loaded ?: return
+        ApplicationManager.getApplication().invokeLater { openChat(project, loaded.rel) }
     }
 
     /** Open the sequence viewer tab on one of this file's diagrams. */
@@ -356,6 +364,8 @@ class CodemapViewModel(private val project: Project) {
                 analysis = when (result) {
                     is AnalysisRunner.Result.Ok -> Analysis.Idle
                     is AnalysisRunner.Result.Failed -> Analysis.Failed(result.reason)
+                    // ask() is the chat path; analyze() never returns one.
+                    is AnalysisRunner.Result.Answer -> Analysis.Idle
                 }
             }
             reload()

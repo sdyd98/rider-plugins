@@ -678,12 +678,15 @@ private fun RequestBox(
     ) {
         // One button, not two: an analysis either runs now or is not asked for. The queue that used to sit
         // beside it was a to-do list nobody could see, which made it a worse way of forgetting.
-        ActionButton(if (s.note == null) "분석 실행" else "재분석 실행", p) {
+        ActionButton(if (s.note == null) "노트 만들기" else "노트 다시 만들기", p) {
             vm.analyzeNow(question.text.toString())
             question.edit { replace(0, length, "") }
             asking = false
         }
         if (!asking) ActionButton("질문 달기", p, primary = false) { asking = true }
+        // Two verbs, and the names have to carry the difference: one WRITES the note (the structure the
+        // whole panel is drawn from), the other ASKS (prose, which the conversation can later fold back in).
+        ActionButton("물어보기", p, primary = false) { vm.openChat() }
     }
 
     EnginePicker(vm, p)
