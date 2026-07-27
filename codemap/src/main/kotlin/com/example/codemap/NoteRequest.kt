@@ -177,7 +177,13 @@ object NoteRequest {
             appendLine()
             appendLine("현재 저장된 노트다. 새로 쓰는 것이 아니라 이것을 고쳐라 —")
             appendLine("코드와 달라진 부분만 바로잡고, 여전히 맞는 내용은 그대로 유지해서 다시 내보내라.")
-            appendLine("빠뜨린 함수를 추가하는 것은 좋지만, 확인해서 틀린 게 아니라면 지우지 마라.")
+            appendLine("확인해서 틀린 게 아니라면 지우지 마라.")
+            appendLine()
+            // "고쳐라"만 말하면 불완전한 노트는 영원히 불완전한 채로 돌아온다 — 있는 내용이 맞으니까.
+            // 비어 있는 것을 채우는 것도 고치는 일이라고 명시해야 한다.
+            appendLine("**빠진 것을 채우는 것도 고치는 일이다.** 아래 노트에 없는 키 중 소스에서 확인할 수")
+            appendLine("있는 것은 이번에 채워라. 특히:")
+            appendLine(missingHint(existing))
             appendLine(condense(existing))
         }
         appendLine()
@@ -185,8 +191,10 @@ object NoteRequest {
         appendLine(SCHEMA)
         appendLine()
         appendLine("규칙:")
-        appendLine("- 소스에서 확인한 것만 써라. 확인 못 한 키는 아예 생략해라. 추측으로 채우지 마라.")
-        appendLine("- functions 는 선언 순서로, 모든 함수에 purpose 한 줄. 게터·생성자도 빠뜨리지 마라.")
+        appendLine("- **functions 는 필수다.** 파일의 모든 함수를 선언 순서로, 각각 anchor 와 purpose 한 줄.")
+        appendLine("  게터·생성자·소멸자도 빠뜨리지 마라. 목차에 구멍이 있으면 읽는 사람은 매번 \"분석이 안")
+        appendLine("  된 건가, 별거 아닌 건가\"를 의심하게 된다.")
+        appendLine("- 그 외에는 소스에서 확인한 것만 써라. 확인 못 한 키는 생략해라. 추측으로 채우지 마라.")
         appendLine("- anchor 는 시그니처 줄을 원문 그대로 복사해라. 이걸로 위치를 찾으므로 파일에 실제로 있어야 한다.")
         appendLine("- files/hashes/analyzedAt/analyzedCommit/_manual 은 쓰지 마라. 플러그인이 기록한다.")
         appendLine()
@@ -228,6 +236,29 @@ object NoteRequest {
 
         7 최후의 기준: 그 줄을 읽고 소스를 열지 않아도 다음 질문을 고를 수 있으면 잘 쓴 것이다.
     """.trimIndent()
+
+    /**
+     * What the stored note is missing, named out loud.
+     *
+     * A correction prompt tells an agent to keep what is still right, and an incomplete note IS still right
+     * — so without this it comes back just as incomplete, forever. Naming the empty keys turns "고쳐라" into
+     * something that can close the gap. Only keys the source can actually answer are listed; the plugin does
+     * not know whether a file has packets, so it says "if there are any".
+     */
+    private fun missingHint(existing: JsonObject): String {
+        val functions = (existing.get("functions") as? JsonArray)?.size() ?: 0
+        return buildList {
+            if (functions == 0) {
+                add("  - functions 가 비어 있다. 이 파일의 모든 함수를 이번에 채워라. 가장 중요하다.")
+            } else {
+                add("  - functions 가 $functions 개 기록돼 있다. 파일에 그보다 많으면 빠진 것을 추가해라.")
+            }
+            if (existing.get("threading") == null) add("  - threading 이 없다. 스레드/락이 있으면 채워라.")
+            if ((existing.get("packets") as? JsonArray)?.size() ?: 0 == 0) {
+                add("  - packets 가 없다. 이 파일이 패킷을 다루면 id·방향·핸들러를 채워라.")
+            }
+        }.joinToString("\n")
+    }
 
     /** How much of an existing note is worth sending before it costs more than it saves. */
     private const val BUDGET = 12_000

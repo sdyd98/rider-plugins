@@ -113,6 +113,39 @@ class AgentCliTest {
     }
 
     @Test
+    fun `an incomplete note is told what to fill in, not just what to correct`() {
+        // "고쳐라" alone leaves an incomplete note incomplete forever: what is there is still right, so a
+        // faithful agent hands the same shape back. This was real — AccountDb.h kept coming back with no
+        // functions at all, and the panel had nothing but 주의 to show for it.
+        val thin = JsonParser.parseString(
+            """{"purpose":"계정 조회 래퍼","gotchas":["동기 호출이다"]}""",
+        ).asJsonObject
+        val p = NoteRequest.prompt("Db/AccountDb.h", "", "", thin)
+
+        assertTrue(p.contains("빠진 것을 채우는 것도 고치는 일이다"))
+        assertTrue(p.contains("functions 가 비어 있다"))
+        assertTrue(p.contains("threading 이 없다"))
+        assertTrue(p.contains("packets 가 없다"))
+        // And the rule itself has to be a requirement, not a suggestion.
+        assertTrue(p.contains("functions 는 필수다"))
+    }
+
+    @Test
+    fun `a note that already has functions is asked to top it up, not told it is empty`() {
+        val full = JsonParser.parseString(
+            """{"functions":[{"name":"A"},{"name":"B"}],
+                "threading":{"model":"IOCP"},"packets":[{"id":"1001"}]}""",
+        ).asJsonObject
+        val p = NoteRequest.prompt("Net/S.h", "", "", full)
+
+        assertTrue(p.contains("functions 가 2 개 기록돼 있다"))
+        assertFalse(p.contains("functions 가 비어 있다"))
+        // Nothing to nag about for the keys that are already answered.
+        assertFalse(p.contains("threading 이 없다"))
+        assertFalse(p.contains("packets 가 없다"))
+    }
+
+    @Test
     fun `a huge note keeps every function name rather than being cut off`() {
         val functions = (1..400).joinToString(",") {
             """{"name":"Fn$it","anchor":"void Fn$it()","purpose":"${"설명".repeat(20)}",
