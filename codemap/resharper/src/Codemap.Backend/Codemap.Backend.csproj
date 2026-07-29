@@ -33,6 +33,28 @@
       <HintPath>$(RiderHost)/JetBrains.ReSharper.Feature.Services.dll</HintPath>
       <Private>false</Private>
     </Reference>
+    <!-- The protocol: rd itself, the Rider model our generated code extends, and the annotations the
+         generator emits. -->
+    <Reference Include="JetBrains.Lifetimes">
+      <HintPath>$(RiderHost)/JetBrains.Lifetimes.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="JetBrains.RdFramework">
+      <HintPath>$(RiderHost)/JetBrains.RdFramework.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="JetBrains.Platform.RdProtocol">
+      <HintPath>$(RiderHost)/JetBrains.Platform.RdProtocol.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="JetBrains.Annotations">
+      <HintPath>$(RiderHost)/JetBrains.Annotations.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="JetBrains.Platform.Util">
+      <HintPath>$(RiderHost)/JetBrains.Platform.Util.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
     <!-- Document ranges — how a PSI node reports where it is in the file. -->
     <Reference Include="JetBrains.Platform.DocumentModel">
       <HintPath>$(RiderHost)/JetBrains.Platform.DocumentModel.dll</HintPath>

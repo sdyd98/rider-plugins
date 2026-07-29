@@ -231,6 +231,26 @@ class CodemapViewModel(private val project: Project) {
                 hits[anchor]?.let { out[name] = CodemapState.FnLoc(relFile, it.line, it.occurrences) }
             }
         }
+
+        // Whatever the anchors could not find, ask ReSharper. An anchor only fails when the recorded
+        // signature no longer matches the text, which says nothing about whether the function is still
+        // there — and the backend answers that from the parse tree instead of from a string.
+        val missing = anchorByName.keys.filter { it !in out }
+        if (missing.isNotEmpty()) {
+            covered.forEach { relFile ->
+                val stillMissing = missing.filter { it !in out }
+                if (stillMissing.isEmpty()) return@forEach
+                val functions = CppSymbols.functionsIn(project, relFile)
+                if (functions.isEmpty()) return@forEach
+                stillMissing.forEach { name ->
+                    // occurrences = 1: the backend resolved one declaration, so there is nothing
+                    // ambiguous to warn about the way a repeated text match would be.
+                    CppSymbols.lineOf(functions, name)?.let {
+                        out[name] = CodemapState.FnLoc(relFile, it, 1)
+                    }
+                }
+            }
+        }
         return out
     }
 

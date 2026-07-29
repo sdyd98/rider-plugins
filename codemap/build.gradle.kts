@@ -2,6 +2,20 @@
 // A read-only tool window that shows the AI-authored understanding note for the C++ file you have
 // open (`.codemap/`), plus MCP tools an AI client uses to queue, fetch facts for, and write those
 // notes. The plugin itself never interprets code — it only reports facts that are 100% exact.
+// rdgen is not on the Gradle plugin portal for this version — only the library is on Maven Central, and
+// the version has to track Rider's own rd because both ends of a protocol must agree on the wire format.
+buildscript {
+    repositories { mavenCentral() }
+    dependencies {
+        classpath("com.jetbrains.rd:rd-gen:2026.1.3")
+        // The generator forks a java process whose classpath comes from here, and the repo's
+        // implicit-stdlib-off setting means nothing would otherwise put a Kotlin stdlib on it.
+        classpath("org.jetbrains.kotlin:kotlin-stdlib:2.3.20")
+    }
+}
+
+apply(plugin = "com.jetbrains.rdgen")
+
 plugins {
     java
     id("org.jetbrains.kotlin.jvm")
@@ -92,6 +106,67 @@ intellijPlatform {
         }
     }
 }
+
+// ── 프로토콜 (rdgen) ─────────────────────────────────────────────────────────────────────────────
+// One model definition, two generated halves: Kotlin for the plugin and C# for the backend. They have
+// to be generated together or the two ends disagree about the wire, which is exactly the class of bug
+// hand-written RPC produces.
+//
+// rider-model.jar is not in an installed Rider — only in the SDK archive — so it is fetched once by
+// resharper/tools/fetch-rider-model.sh. Without it this task fails with a message saying so.
+val riderModelJar = layout.projectDirectory.file("resharper/lib/rider-model.jar")
+val generatedKotlin = layout.buildDirectory.dir("generated/rdgen/kotlin")
+val generatedCSharp = layout.projectDirectory.dir("resharper/src/Codemap.Backend/Model")
+
+// The model is Kotlin that has to be *compiled* before rdgen can read it — the generator scans classes,
+// not sources. :codemap:protocol produces those classes.
+val protocolClasses = project(":codemap:protocol").layout.buildDirectory.dir("classes/kotlin/main")
+
+val rdGenTool: Configuration by configurations.creating
+dependencies {
+    // rdgen runs as a plain java process outside the IDE, so it needs a real Kotlin stdlib on its
+    // classpath — the repo's implicit-stdlib-off setting is about what the plugin ships, not this.
+    rdGenTool("com.jetbrains.rd:rd-gen:2026.1.3")
+    rdGenTool("org.jetbrains.kotlin:kotlin-stdlib:2.3.21")
+}
+
+configure<com.jetbrains.rd.generator.gradle.RdGenExtension> {
+    verbose = false
+    packages = "model"
+
+    generator {
+        language = "kotlin"
+        transform = "asis"
+        root = "com.jetbrains.rider.model.nova.ide.IdeRoot"
+        namespace = "com.example.codemap.protocol"
+        directory = generatedKotlin.get().asFile.absolutePath
+    }
+    generator {
+        language = "csharp"
+        transform = "reversed"
+        root = "com.jetbrains.rider.model.nova.ide.IdeRoot"
+        namespace = "Codemap.Backend.Protocol"
+        directory = generatedCSharp.asFile.absolutePath
+    }
+}
+
+tasks.named<JavaExec>("rdgen") {
+    dependsOn(":codemap:protocol:classes")
+    // Everything goes on the JVM classpath, including what the generator scans: this rd-gen's CLI has
+    // no classpath option, and the extension's `classpath` would pass one it rejects.
+    classpath = files(rdGenTool, protocolClasses, riderModelJar)
+    doFirst {
+        if (!riderModelJar.asFile.exists()) {
+            throw GradleException(
+                "rider-model.jar 이 없습니다. 한 번만 받으면 됩니다:\n" +
+                    "  ./codemap/resharper/tools/fetch-rider-model.sh",
+            )
+        }
+    }
+}
+
+sourceSets.main { kotlin.srcDir(generatedKotlin) }
+tasks.named("compileKotlin") { dependsOn("rdgen") }
 
 // ── ReSharper backend ────────────────────────────────────────────────────────────────────────────
 // C++ semantics live in Rider's .NET backend and nowhere the JVM side can reach. `resharper/` is the
