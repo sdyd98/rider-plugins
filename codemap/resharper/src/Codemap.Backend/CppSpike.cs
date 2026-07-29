@@ -72,17 +72,39 @@ namespace Codemap.Backend
             text.AppendLine($"spike: {sourceFiles.Count} source files");
 
             var found = 0;
+            var anyPsi = false;
             foreach (var sourceFile in sourceFiles)
             {
-                foreach (var psiFile in sourceFile.GetPsiFiles(CppLanguage.Instance))
+                var psiFiles = sourceFile.GetPsiFiles(CppLanguage.Instance).ToList();
+                // Reported per file, because "no functions in this header" and "no PSI for this header at
+                // all" are different problems and only one of them is about node types.
+                text.AppendLine($"  [{sourceFile.Name}] psi files: {psiFiles.Count}");
+
+                foreach (var psiFile in psiFiles)
                 {
+                    var kinds = psiFile.Descendants<ITreeNode>().ToEnumerable()
+                        .Where(n => n.GetType().Name.Contains("Declar") || n.GetType().Name.Contains("Member"))
+                        .GroupBy(n => n.GetType().Name)
+                        .OrderByDescending(g => g.Count())
+                        .Select(g => $"{g.Key}×{g.Count()}");
+                    text.AppendLine($"    노드: {string.Join(", ", kinds)}");
+
                     // A function is not its own node type here: every declaration is a SimpleDeclaration,
                     // and asking CppFunctionDeclaration to build itself from one is what tells you whether
                     // that particular declaration is a function.
                     foreach (var declaration in psiFile.Descendants<SimpleDeclaration>().ToEnumerable())
                     {
+                        // Two kinds, and they need two tests. TryCreate… only accepts a definition — every
+                        // declaration in a header returns null from it — so a bodiless declaration is
+                        // recognised by having a parameter list at all, which is what makes a declarator
+                        // a function declarator.
                         var function = CppFunctionDeclaration.TryCreateFromFunctionDeclaration(declaration);
-                        if (function == null) continue;
+                        // Its own parameter list, not one belonging to a member: a class declaration
+                        // contains every method's parameters, and a plain descendant test calls the class
+                        // itself a function.
+                        var parameters = declaration.Descendants<FunctionParameters>().ToEnumerable()
+                            .Any(p => p.GetContainingNode<SimpleDeclaration>(true) == declaration);
+                        if (function == null && !parameters) continue;
 
                         found++;
                         // The declarator text, first line only: enough for a spike to show that what came
@@ -91,13 +113,17 @@ namespace Codemap.Backend
                             .Split('\n')[0].Trim();
                         if (name.Length > 90) name = name.Substring(0, 90) + "…";
                         var range = declaration.GetDocumentRange();
-                        var body = function.GetFunctionResolveEntity()?.HasBody == true ? "정의" : "선언";
-                        text.AppendLine($"  {sourceFile.Name}: {name} @ {range.TextRange.StartOffset} ({body})");
+                        var body = function?.GetFunctionResolveEntity()?.HasBody == true ? "정의" : "선언";
+                        text.AppendLine($"    → {name} @ {range.TextRange.StartOffset} ({body})");
                     }
                 }
+
+                if (psiFiles.Count > 0) anyPsi = true;
             }
 
-            return found == 0 ? null : text.ToString();
+            // Waiting on PSI, not on functions: a header that legitimately has none would otherwise keep
+            // the spike polling until it gave up, and report nothing about why.
+            return anyPsi ? text.ToString() : null;
         }
     }
 }

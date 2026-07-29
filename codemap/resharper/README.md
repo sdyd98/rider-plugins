@@ -16,23 +16,35 @@ JVM 쪽(코드맵 플러그인 본체)에는 **C++ 심볼이 없습니다.** CID
 |---|---|
 | 서드파티 어셈블리를 호스트가 로드 | ✅ |
 | 솔루션 컴포넌트로 `ISolution` 확보 | ✅ |
-| **C++ 심볼 조회** | ✅ 실제 선언·오프셋 획득 |
+| **C++ 심볼 조회** | ✅ `.cpp` 정의 + `.h` 선언, 실제 오프셋 |
 
-스파이크가 실제로 뱉은 것:
+스파이크가 실제로 뱉은 것 — `.cpp` 의 정의와 `.h` 의 선언이 모두, 정의/선언 구분까지:
 
 ```
-spike: 3 source files
-  Main.cpp: bool Session::HandleLogin(const LoginReq& req, int retries) @ 39
-  Main.cpp: bool Session::Authenticate(const char* account) @ 178
-  Main.cpp: void Session::Close() @ 282
+[Main.cpp]
+  → bool Session::HandleLogin(const LoginReq& req, int retries) @ 39 (정의)
+  → bool Session::Authenticate(const char* account) @ 178 (정의)
+  → void Session::Close() @ 282 (정의)
+[Session.h]
+  → bool HandleLogin(const LoginReq& req, int retries) @ 123 (선언)
+  → void Close() @ 179 (선언)
+  → bool Authenticate(const char* account) @ 207 (선언)
 ```
 
-경로는 `IPsiSourceFile → GetPsiFiles(CppLanguage.Instance) → Descendants<SimpleDeclaration> → CppFunctionDeclaration.TryCreateFromFunctionDeclaration`. C++ 함수는 자기 노드 타입이 없습니다 — 모든 선언이 `SimpleDeclaration` 이고, 거기서 함수 선언이 만들어지느냐가 판별 기준입니다.
+오프셋은 원문과 대조해 확인했습니다 — 셋 다 선언 첫 글자를 정확히 가리킵니다.
+
+경로는 `IPsiSourceFile → GetPsiFiles(CppLanguage.Instance) → Descendants<SimpleDeclaration>`. C++
+함수는 자기 노드 타입이 없습니다 — 모든 선언이 `SimpleDeclaration` 이고, 함수냐 아니냐는 **두 번**
+물어야 합니다:
+
+- `CppFunctionDeclaration.TryCreateFromFunctionDeclaration` 은 **본문이 있는 정의만** 인정합니다.
+  헤더의 선언은 전부 null 을 돌려줍니다
+- 본문 없는 선언은 **자기 선언자에 매개변수 목록(`FunctionParameters`)이 달렸는지**로 봅니다.
+  `Descendants` 를 그냥 쓰면 클래스 선언이 멤버들의 매개변수를 품고 있어서 `class Session` 자신이
+  함수로 잡힙니다 — 그래서 각 매개변수 목록이 **이 선언에 직접 속하는지**까지 확인합니다
 
 ## 아직 안 되는 것
 
-- **헤더의 선언이 안 잡힙니다.** 위 결과에 `Session.h` 가 없습니다. 노트는 `.h` 기준이라 이건 실용화의 전제 조건입니다
-- 정의/선언 구분이 전부 "선언"으로 나옵니다 — `HasBody` 를 잘못 읽고 있습니다
 - 캐시 준비를 2초 간격 폴링으로 기다립니다. 스파이크용 임시방편이고, 준비 신호를 제대로 받아야 합니다
 - 프론트엔드와 말할 통로(rdgen 프로토콜)가 없습니다. 지금은 결과를 `/tmp` 파일에 씁니다
 
