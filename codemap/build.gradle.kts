@@ -93,11 +93,43 @@ intellijPlatform {
     }
 }
 
+// ── ReSharper backend ────────────────────────────────────────────────────────────────────────────
+// C++ semantics live in Rider's .NET backend and nowhere the JVM side can reach. `resharper/` is the
+// half that runs there; it ships as a plain DLL under the plugin's `dotnet/` directory, which is where
+// the backend looks for a plugin's own assemblies.
+//
+// Built with the SDK Rider itself bundles rather than a system dotnet: the C++ API is not in the
+// published ReSharper SDK, so this compiles against the installed Rider's assemblies anyway — and
+// depending on the same installation for the compiler removes a second thing to get right.
+val riderDotnet = riderLocalPath?.let { "$it/Contents/lib/ReSharperHost/macos-arm64/dotnet/dotnet" }
+val backendProject = layout.projectDirectory.dir("resharper/src/Codemap.Backend")
+val backendDll = backendProject.file("bin/Release/net10.0/Codemap.Backend.dll")
+
+val buildBackend by tasks.registering(Exec::class) {
+    description = "Compiles the ReSharper-side assembly with Rider's bundled .NET SDK."
+    onlyIf { riderDotnet != null && file(riderDotnet).exists() }
+    workingDir = backendProject.asFile
+    commandLine(riderDotnet ?: "dotnet", "build", "-c", "Release", "--nologo", "-v", "q")
+    environment("DOTNET_CLI_TELEMETRY_OPTOUT", "1")
+    inputs.files(fileTree(backendProject) { include("**/*.cs", "**/*.csproj") })
+    outputs.file(backendDll)
+}
+
+tasks.prepareSandbox {
+    dependsOn(buildBackend)
+    from(backendDll) { into("${project.name}/dotnet") }
+}
+
 // Dev convenience: open a project straight away in the sandbox IDE, so a manual check of the tool
 // window doesn't start with a file-chooser every time.
 //   ./gradlew :codemap:runIde -PrunIdeProject=/path/to/a/cpp/project
 tasks.runIde {
     providers.gradleProperty("runIdeProject").orNull?.let { args(it) }
+
+    // The first-run wizard blocks project opening until someone clicks through it, which makes an
+    // automated check of the sandbox impossible — nothing loads, and the silence looks like a failure
+    // of whatever was being tested.
+    systemProperty("idea.show.customize.ide.wizard", "false")
 
     // A GUI-launched IDE does not inherit a login shell's PATH, and neither does this fork reliably.
     // Handing it the usual tool locations is what lets a CMake project actually configure in the

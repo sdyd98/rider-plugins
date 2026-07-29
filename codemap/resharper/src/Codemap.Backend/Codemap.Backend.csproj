@@ -1,0 +1,71 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    The ReSharper-side half of codemap.
+
+    C++ semantics live in this process and nowhere else: the Kotlin frontend has no C++ PSI, and Rider
+    contributes no symbol contributor it could call. Everything the panel knows about where a function is
+    has so far been text matching over a signature the AI copied. This assembly is how that becomes a
+    question answered by the engine that actually parsed the code.
+
+    Referenced straight out of the installed Rider rather than from the ReSharper SDK NuGet: the C++ API
+    (JetBrains.ReSharper.Cpp) is not part of the published SDK. That ties the build to a local Rider and is
+    the main cost of this approach — see resharper/README.md.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <AssemblyName>Codemap.Backend</AssemblyName>
+    <RootNamespace>Codemap.Backend</RootNamespace>
+    <Nullable>disable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <!-- The host loads this next to its own assemblies; shipping copies of them would only conflict. -->
+    <CopyLocalLockFileAssemblies>false</CopyLocalLockFileAssemblies>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <RiderHost Condition="'$(RiderHost)' == ''">/Applications/Rider.app/Contents/lib/ReSharperHost</RiderHost>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Reference Include="JetBrains.Platform.Shell">
+      <HintPath>$(RiderHost)/JetBrains.Platform.Shell.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="JetBrains.ReSharper.Feature.Services">
+      <HintPath>$(RiderHost)/JetBrains.ReSharper.Feature.Services.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <!-- Document ranges — how a PSI node reports where it is in the file. -->
+    <Reference Include="JetBrains.Platform.DocumentModel">
+      <HintPath>$(RiderHost)/JetBrains.Platform.DocumentModel.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <!-- The base types everything else here is built on (IUserDataHolder and friends). -->
+    <Reference Include="JetBrains.Platform.Core">
+      <HintPath>$(RiderHost)/JetBrains.Platform.Core.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <!-- Where the component attributes themselves are defined. -->
+    <Reference Include="JetBrains.Platform.ComponentModel">
+      <HintPath>$(RiderHost)/JetBrains.Platform.ComponentModel.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <!-- ISolution and the component attribute — the project model, not the feature layer. -->
+    <Reference Include="JetBrains.Platform.ProjectModel">
+      <HintPath>$(RiderHost)/JetBrains.Platform.ProjectModel.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <!-- The Rider backend itself: its C++ feature zone is what gates this assembly. -->
+    <Reference Include="JetBrains.RdBackend.Common">
+      <HintPath>$(RiderHost)/JetBrains.RdBackend.Common.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="JetBrains.ReSharper.Psi">
+      <HintPath>$(RiderHost)/JetBrains.ReSharper.Psi.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="JetBrains.ReSharper.Cpp">
+      <HintPath>$(RiderHost)/JetBrains.ReSharper.Cpp.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+
+</Project>
