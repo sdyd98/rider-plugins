@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  No Microsoft.Cpp.* imports: they live in the MSVC toolset, which does not exist on macOS, and importing
+  them fails the project load outright. Nothing here is meant to build — ReSharper C++ only needs a
+  project that owns the files so its caches have something to index.
+-->
+<Project DefaultTargets="Build" ToolsVersion="15.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|x64">
+      <Configuration>Debug</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+  <PropertyGroup Label="Globals">
+    <ProjectGuid>{2B1C0A2D-2C1E-4E2B-9B9A-1A2B3C4D5E6F}</ProjectGuid>
+    <RootNamespace>App</RootNamespace>
+    <ConfigurationType>Application</ConfigurationType>
+  </PropertyGroup>
+  <ItemGroup>
+    <ClCompile Include="Net.cpp" />
+    <ClCompile Include="World.cpp" />
+    <ClInclude Include="Net.h" />
+    <ClInclude Include="World.h" />
+  </ItemGroup>
+</Project>

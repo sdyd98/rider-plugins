@@ -64,6 +64,8 @@
             anchor="right"
             icon="AllIcons.Toolwindows.Documentation"
             factoryClass="com.example.codemap.CodemapToolWindow"/>
+        <!-- Test seam: dumps backend symbol answers when testdata/check-symbols.sh asks for them. -->
+        <backgroundPostStartupActivity implementation="com.example.codemap.SymbolDump"/>
     </extensions>
 
 </idea-plugin>

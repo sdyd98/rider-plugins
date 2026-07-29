@@ -206,6 +206,12 @@ tasks.runIde {
     // of whatever was being tested.
     systemProperty("idea.show.customize.ide.wizard", "false")
 
+    // Forwarded explicitly — a -D on the Gradle command line reaches the Gradle JVM, not the sandbox.
+    // testdata/check-symbols.sh sets these to have the plugin dump what the backend reports.
+    listOf("codemap.symbolDump", "codemap.symbolDumpFiles").forEach { key ->
+        providers.systemProperty(key).orNull?.let { systemProperty(key, it) }
+    }
+
     // A GUI-launched IDE does not inherit a login shell's PATH, and neither does this fork reliably.
     // Handing it the usual tool locations is what lets a CMake project actually configure in the
     // sandbox — without it Rider reports "Cannot run program cmake" and never indexes the C++ code.

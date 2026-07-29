@@ -111,7 +111,10 @@ namespace Codemap.Backend
         private static bool IsFunction(SimpleDeclaration declaration) =>
             CppFunctionDeclaration.TryCreateFromFunctionDeclaration(declaration) != null ||
             declaration.Descendants<FunctionParameters>().ToEnumerable()
-                .Any(p => p.GetContainingNode<SimpleDeclaration>(true) == declaration);
+                .Any(p => p.GetContainingNode<SimpleDeclaration>(true) == declaration &&
+                          // A lambda's parameter list belongs to the variable's own declaration, so
+                          // `auto f = [](int x) { … };` would otherwise be reported as a function called f.
+                          p.GetContainingNode<LambdaExpression>() == null);
 
         /// <summary>
         /// Whether this declaration is a definition — whether it carries a body.
@@ -124,7 +127,10 @@ namespace Codemap.Backend
         private static bool HasBody(SimpleDeclaration declaration) =>
             declaration.CompoundStatementNode != null ||
             declaration.FunctionTryBlockNode != null ||
-            declaration.ConstructorBlock != null;
+            declaration.ConstructorBlock != null ||
+            // `= default` is where the compiler writes the body; someone looking for the definition of a
+            // constructor has found it. `= delete` is not — that one says the function does not exist.
+            declaration.DefaultSpecifierNode != null;
 
         /// <summary>Matches by path suffix — the plugin knows solution-relative paths, the model knows absolute ones.</summary>
         private IPsiSourceFile Find(string path)
