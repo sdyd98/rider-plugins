@@ -324,6 +324,27 @@ class CodemapViewModel(private val project: Project) {
         }
     }
 
+    /** The shared conversation for the file on screen — the panel's inline box and the tab are one talk. */
+    fun chat(): ChatSessions.Session? {
+        val loaded = state as? CodemapState.Loaded ?: return null
+        return project.getService(ChatSessions::class.java).of(loaded.rel)
+    }
+
+    fun askInline(question: String) {
+        val loaded = state as? CodemapState.Loaded ?: return
+        project.getService(ChatSessions::class.java).ask(loaded.rel, question)
+    }
+
+    fun cancelChat() {
+        val loaded = state as? CodemapState.Loaded ?: return
+        project.getService(ChatSessions::class.java).cancel(loaded.rel)
+    }
+
+    fun pinGotcha(text: String) {
+        val loaded = state as? CodemapState.Loaded ?: return
+        project.getService(ChatSessions::class.java).pinAsGotcha(loaded.rel, text)
+    }
+
     /** Open the conversation about this file. */
     fun openChat() {
         val loaded = state as? CodemapState.Loaded ?: return

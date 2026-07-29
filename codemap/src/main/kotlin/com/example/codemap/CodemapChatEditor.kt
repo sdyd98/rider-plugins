@@ -59,7 +59,9 @@ class CodemapChatEditor(project: Project, private val file: CodemapChatFile) :
     override fun isValid(): Boolean = true
     override fun addPropertyChangeListener(listener: PropertyChangeListener) = Unit
     override fun removePropertyChangeListener(listener: PropertyChangeListener) = Unit
-    override fun dispose() { vm.cancel() }
+    // Deliberately does NOT cancel: the conversation belongs to the file, not to this tab. Closing the tab
+    // and reopening it — or asking the next question from the panel — continues the same talk.
+    override fun dispose() = Unit
 }
 
 /** Opens the conversation for [rel], or brings the one already open for that file forward. */
@@ -70,145 +72,33 @@ fun openChat(project: Project, rel: String) {
 }
 
 /**
- * The conversation's state and the one call that advances it.
+ * The tab's view of a conversation.
  *
- * One conversation per file, held in memory for the life of the tab. Not written to `.codemap/`: the store
- * is notes about the code, and a transcript is neither a fact nor a judgement about it — what is worth
- * keeping gets kept explicitly, through [pin].
+ * Thin on purpose: the turns live in [ChatSessions], a project service, so the panel's inline box and this
+ * tab are two windows onto one talk. A view model would have died with the tab and taken the conversation
+ * with it.
  */
 class ChatViewModel(private val project: Project, val rel: String) {
 
-    val turns = mutableStateListOf<Chat.Turn>()
+    private val sessions get() = project.getService(ChatSessions::class.java)
+    private val session get() = sessions.of(rel)
 
-    var running: Boolean by mutableStateOf(false)
-        private set
+    val turns get() = session.turns
+    val running get() = session.running
+    val error get() = session.error
+    val writing get() = session.writing
+    val wrote get() = session.wrote
+    val revision get() = session.revision
 
-    var error: String? by mutableStateOf(null)
-        private set
-
-    /** Non-null while the conversation is being folded into the note; the text names what is happening. */
-    var writing: String? by mutableStateOf(null)
-        private set
-
-    /** What the last note update did, so the tab can say it worked without stealing the screen. */
-    var wrote: String? by mutableStateOf(null)
-        private set
-
-    /** Bumped whenever the note changes underneath, so pinned text shows up in the panel too. */
-    var revision: Int by mutableStateOf(0)
-        private set
-
-    private val settings get() = ApplicationManager.getApplication().getService(CodemapSettings::class.java)
-    private val store: NoteStore? get() = project.getService(CodemapStore::class.java).store
-    private var runner: AnalysisRunner? = null
-
-    val engine: Engine get() = settings?.engine ?: Engine.CLAUDE
+    val engine: Engine get() = sessions.engine
     val fileName: String get() = rel.substringAfterLast('/')
 
-    fun note(): JsonObject? = store?.readNote(rel)
+    fun functionNames(): List<String> = sessions.functionNames(rel)
 
-    /** The functions this note records — the targets a pinned answer can become a one-liner for. */
-    fun functionNames(): List<String> =
-        (note()?.get("functions") as? JsonArray)
-            ?.mapNotNull { (it as? JsonObject)?.get("name")?.takeIf { n -> n.isJsonPrimitive }?.asString }
-            .orEmpty()
-
-    fun ask(question: String) {
-        val s = store ?: return
-        if (running || question.isBlank()) return
-
-        turns += Chat.Turn(Chat.Role.USER, question.trim())
-        running = true
-        error = null
-
-        val prompt = Chat.prompt(rel, note(), turns.dropLast(1), question.trim())
-        val chosen = engine
-        val r = AnalysisRunner(s).also { runner = it }
-        ApplicationManager.getApplication().executeOnPooledThread {
-            val result = r.ask(prompt, engine = chosen, explicitPath = settings?.pathFor(chosen))
-            ApplicationManager.getApplication().invokeLater {
-                running = false
-                when (result) {
-                    is AnalysisRunner.Result.Answer -> turns += Chat.Turn(Chat.Role.ASSISTANT, result.text)
-                    is AnalysisRunner.Result.Failed -> error = result.reason
-                    is AnalysisRunner.Result.Ok -> error = "예상하지 못한 응답 형태입니다"
-                }
-            }
-        }
-    }
-
-    /**
-     * Fold the conversation into the note.
-     *
-     * The structured analysis is what builds everything the panel draws — functions and their anchors, the
-     * packet table, threading, flows — and a conversation cannot produce any of it. So this runs that same
-     * analysis with the conversation attached as context: what was worked out here is the most expensive
-     * knowledge available, and re-deriving it from scratch would waste it and risk contradicting it.
-     */
-    fun updateNote() {
-        val s = store ?: return
-        if (running || writing != null || turns.isEmpty()) return
-
-        writing = "대화를 노트에 반영하는 중"
-        wrote = null
-        error = null
-        val chosen = engine
-        val conversation = turns.toList()
-        val r = AnalysisRunner(s).also { runner = it }
-        ApplicationManager.getApplication().executeOnPooledThread {
-            val result = r.analyze(
-                rel,
-                question = "",
-                engine = chosen,
-                explicitPath = settings?.pathFor(chosen),
-                conversation = conversation,
-            )
-            ApplicationManager.getApplication().invokeLater {
-                writing = null
-                when (result) {
-                    is AnalysisRunner.Result.Ok -> {
-                        revision++
-                        wrote = "노트를 갱신했습니다"
-                    }
-                    is AnalysisRunner.Result.Failed -> error = result.reason
-                    is AnalysisRunner.Result.Answer -> error = "예상하지 못한 응답 형태입니다"
-                }
-            }
-        }
-    }
-
-    fun cancel() {
-        runner?.cancel()
-        running = false
-        writing = null
-    }
-
-    fun clear() {
-        turns.clear()
-        error = null
-    }
-
-    /**
-     * Keep an answer: append it to the note's 주의.
-     *
-     * Written through [NoteStore.editNote], which records it as a human edit — so the next re-analysis
-     * restores it rather than deciding it was never there. Pinning is the developer's judgement, not the
-     * agent's, and the store treats it that way.
-     */
-    fun pinAsGotcha(text: String) = write {
-        val existing = (note()?.get("gotchas") as? JsonArray)?.mapNotNull { it.asString }.orEmpty()
-        store?.editNote(rel, listOf("gotchas"), JsonArray().apply { (existing + text.trim()).forEach(::add) })
-    }
-
-    /** Keep an answer as one function's one-liner. */
-    fun pinAsPurpose(function: String, text: String) = write {
-        store?.editNote(rel, listOf("functions", function, "purpose"), JsonPrimitive(text.trim()))
-    }
-
-    private fun write(block: () -> Unit) {
-        ApplicationManager.getApplication().executeOnPooledThread {
-            runCatching(block)
-            ApplicationManager.getApplication().invokeLater { revision++ }
-        }
-    }
+    fun ask(question: String) = sessions.ask(rel, question)
+    fun updateNote() = sessions.updateNote(rel)
+    fun cancel() = sessions.cancel(rel)
+    fun clear() = sessions.clear(rel)
+    fun pinAsGotcha(text: String) = sessions.pinAsGotcha(rel, text)
+    fun pinAsPurpose(function: String, text: String) = sessions.pinAsPurpose(rel, function, text)
 }

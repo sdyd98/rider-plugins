@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.input.TextFieldState
+import androidx.compose.foundation.text.input.clearText
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -33,6 +34,7 @@ import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.google.gson.JsonArray
@@ -152,6 +154,7 @@ private fun NoteSections(note: JsonObject, s: CodemapState.Loaded, vm: CodemapVi
     // while behind a fold nobody opened, and code kept for "maybe" rots. The data is still in the note and
     // the MCP tools still read it; if one of them turns out to be wanted, it comes back as its own section
     // like these did.
+    Ask(vm, p)
     Warnings(note, vm, p)
     Packets(note, s, vm, p)
     Threading(note, p)
@@ -251,6 +254,80 @@ private fun List<String>.toJsonArray(): JsonArray = JsonArray().also { arr -> fo
  * Everything the file records beyond the three essentials. Closed by default — these answer questions
  * you have not asked yet, and eleven open sections read as noise however well each one is written.
  */
+/**
+ * A question, answered in place.
+ *
+ * The same conversation the tab shows — ask here while reading, open the tab when the answer needs room.
+ * Only the last exchange is kept on screen: the panel is a glance surface, and a transcript in a 300px
+ * column fights everything else for height.
+ *
+ * The field **never takes focus on its own**, and that is the whole reason inline chat is possible here at
+ * all: a Compose text field that grabs focus when the tool window opens swallows the IDE's own shortcuts —
+ * Cmd+1, Cmd+Shift+O, the arrow keys all turn into typing. Focus arrives only when someone clicks it, and
+ * Esc hands it straight back.
+ */
+@Composable
+private fun Ask(vm: CodemapViewModel, p: CodemapPalette) {
+    val session = vm.chat() ?: return
+    val input = remember(vm.state) { TextFieldState() }
+
+    fun send() {
+        val q = input.text.toString()
+        if (q.isBlank() || session.running) return
+        vm.askInline(q)
+        input.clearText()
+    }
+
+    val last = session.turns.lastOrNull { it.role == Chat.Role.ASSISTANT }
+    val asked = session.turns.lastOrNull { it.role == Chat.Role.USER }
+
+    Column(Modifier.fillMaxWidth().padding(bottom = Space.xs)) {
+        TextField(
+            state = input,
+            placeholder = { Text("이 파일에 대해 물어보기 — Enter") },
+            modifier = Modifier.fillMaxWidth()
+                .onPreviewKeyEvent { e ->
+                    if (e.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+                    when (e.key) {
+                        Key.Enter, Key.NumPadEnter -> { send(); true }
+                        // Esc gives the keyboard back to the IDE rather than trapping it here.
+                        Key.Escape -> { input.clearText(); true }
+                        else -> false
+                    }
+                },
+        )
+
+        if (session.running) {
+            Row(Modifier.padding(top = Space.xs)) {
+                Working("${vm.engine.label} 생각 중", p) { vm.cancelChat() }
+            }
+        }
+        session.error?.let { Banner("실패 — $it", p.warn, p) }
+
+        if (last != null && !session.running) {
+            asked?.let { Text("나: ${it.text}", color = p.mutedText, fontSize = Type.micro, maxLines = 2, overflow = TextOverflow.Ellipsis) }
+            Text(
+                last.text,
+                color = p.text,
+                fontSize = Type.label,
+                lineHeight = 17.sp,
+                maxLines = 12,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.padding(top = Space.xxs),
+            )
+            Row(
+                Modifier.padding(top = Space.xs),
+                horizontalArrangement = Arrangement.spacedBy(Space.xs),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                ActionButton("주의로 추가", p, primary = false) { vm.pinGotcha(last.text) }
+                ActionButton("전체 대화 (%,d)".format(session.turns.size), p, primary = false) { vm.openChat() }
+            }
+        }
+    }
+    Rule(p)
+}
+
 /**
  * The traps, in amber, always open.
  *
