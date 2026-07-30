@@ -44,6 +44,18 @@ interface AgentCli {
 
     /** A failure the engine reported in its own output, rather than through the exit code. */
     fun errorFrom(stdout: String): String? = null
+
+    /**
+     * One line of the engine's output as something worth showing a person, or null to say nothing.
+     *
+     * An analysis of a 4,000-line file takes minutes, and a spinner that says only 분석 중 for that long
+     * is indistinguishable from a hang — which is what the old ten-minute timeout was really there to
+     * paper over. Showing what the agent is reading right now answers "is it stuck?" without a limit
+     * that kills honest work.
+     *
+     * Pure, so the translation is covered by headless tests rather than by watching a spinner.
+     */
+    fun progressOf(line: String): String? = null
 }
 
 enum class Engine(val label: String, val cli: AgentCli) {
@@ -100,4 +112,22 @@ object CodexCli : AgentCli {
             ?: return NoteRequest.objectIn(stdout)
         return NoteRequest.objectIn(text)
     }
+
+    /**
+     * Codex already prints a readable log; this only decides what is worth a line in the panel.
+     *
+     * Its timestamps and banners say nothing a person watching a spinner wants to know, and the final
+     * answer is in the `-o` file rather than here — so what is left is exactly the activity log.
+     */
+    override fun progressOf(line: String): String? {
+        val t = line.trim()
+        if (t.isEmpty()) return null
+        // "[2026-07-30T01:00:00] " and the startup banner: noise for this purpose.
+        val body = TIMESTAMP.replace(t, "").trim()
+        if (body.isEmpty() || BANNER.containsMatchIn(body)) return null
+        return body.take(120)
+    }
+
+    private val TIMESTAMP = Regex("^\\[[0-9T:.+-]+Z?\\]\\s*")
+    private val BANNER = Regex("^(OpenAI Codex|--------|workdir:|model:|provider:|approval:|sandbox:|reasoning)", RegexOption.IGNORE_CASE)
 }

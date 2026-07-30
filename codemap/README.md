@@ -428,7 +428,14 @@ codex exec -s read-only --skip-git-repo-check --color never -o <임시파일> - 
 - **MCP는 안 씁니다.** 그 CLI의 MCP 설정이 어느 IDE를 가리킬지 모르고, 파일 읽고 답하는 데는 필요 없습니다.
 - 실행 파일은 **통상 설치 위치 → `PATH`** 순으로 찾고, 설정의 `claudePath`/`codexPath`로 직접 지정할 수도
   있습니다. (GUI로 띄운 IDE는 로그인 셸의 `PATH`를 물려받지 않으므로 위치 탐색이 먼저입니다.)
-- 타임아웃 10분, 실행 중에는 **[취소]** 가 뜹니다. 실제 프로젝트에서는 커피 한 잔짜리 작업입니다.
+- **시간 제한이 없습니다** (0.6.1). 10분이었는데, 그건 "실제 파일이 얼마나 걸리는가"에 대한 추측이었고
+  6천 줄 파일에 질문까지 붙이면 10분이 넉넉하다고 할 수 없습니다. 그 제한이 실제로 막으려던 건
+  "패널이 영원히 분석 중이고 살아 있는지 알 수 없다"는 상황인데, 그건 아래로 답합니다.
+- **진행 상황이 보입니다** — 에이전트가 지금 읽는 파일, 찾는 패턴이 경과 시간 아래에 뜹니다.
+  2분간 조용한 것이 6천 줄을 읽는 중인지 멈춘 것인지는 시간만으로는 구분되지 않습니다.
+  Claude는 `--output-format stream-json` 으로 사건을 흘려보내고, Codex는 이미 로그를 찍습니다 —
+  둘 다 사람이 읽을 한 줄로 번역해 보여줍니다(`AgentCli.progressOf`, 헤드리스 테스트 대상).
+- 실행 중에는 **[취소]** 가 뜹니다. 제한 대신 결정으로 끝냅니다.
 
 ### 함수 하나만 — `[이 함수만 재분석]`
 
@@ -539,7 +546,7 @@ Claude Code는 cwd를 보내므로 보통 생략됩니다.
 | `CodemapConfigurable.kt` | Settings │ Tools │ 코드맵 — 엔진 실행 파일 경로 |
 | `Engines.kt` | `AgentCli` 인터페이스 + `Engine` 열거 + Codex 구현 |
 | `ClaudeCli.kt` | Claude 구현 — 인자와 envelope 벗기기 |
-| `AnalysisRunner.kt` | 프로세스 실행·타임아웃·취소, 결과를 `NoteStore`로. 엔진/경로 설정(`CodemapSettings`) |
+| `AnalysisRunner.kt` | 프로세스 실행·진행 상황 중계·취소, 결과를 `NoteStore`로. 엔진/경로 설정(`CodemapSettings`) |
 | `CallIndex.kt` | 노트들을 이어 만드는 호출 그래프 (IDE 타입 없음 → 헤드리스 테스트 대상) |
 | `CodemapGraphView.kt` / `CodemapGraphEditor.kt` | 그래프 탭 — 노트를 카드로 번역, 사용처 목록. 그림은 `:common` |
 | `FlowModel.kt` | 기록된 흐름 → 재생 가능한 단계 (IDE 타입 없음 → 헤드리스 테스트 대상) |

@@ -65,7 +65,9 @@ class AgentCliTest {
         val tools = cmd.dropWhile { it != "--allowedTools" }.drop(1).takeWhile { !it.startsWith("--") }
         assertEquals(listOf("Read", "Grep", "Glob"), tools)
         assertTrue(cmd.none { it == "Write" || it == "Edit" || it == "Bash" })
-        assertTrue(cmd.containsAll(listOf("-p", "--output-format", "json")))
+        // Streaming, not a single blob at the end: the panel shows what the agent is reading, which is
+        // what replaced the old ten-minute timeout as the way to tell working from wedged.
+        assertTrue(cmd.containsAll(listOf("-p", "--output-format", "stream-json", "--verbose")))
     }
 
     @Test
@@ -260,6 +262,57 @@ class AgentCliTest {
     fun `an answer with no JSON object is rejected instead of half-parsed`() {
         assertNull(ClaudeCli.extractNote("""{"result":"파일을 못 찾겠습니다"}"""))
         assertNull(ClaudeCli.extractNote("완전히 깨진 출력"))
+    }
+
+    @Test
+    fun `a streamed transcript yields the note from its result event`() {
+        // What --output-format stream-json actually produces: one object per line, the answer last.
+        val stream = listOf(
+            """{"type":"system","subtype":"init","session_id":"abc"}""",
+            """{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read","input":{"file_path":"/repo/src/Session.cpp"}}]}}""",
+            """{"type":"result","is_error":false,"result":"{\"purpose\":\"세션\"}"}""",
+        ).joinToString("\n")
+
+        assertEquals("세션", ClaudeCli.extractNote(stream)?.get("purpose")?.asString)
+        assertNull(ClaudeCli.errorOf(stream))
+    }
+
+    @Test
+    fun `a streamed failure is reported rather than parsed as a note`() {
+        val stream = listOf(
+            """{"type":"system","subtype":"init"}""",
+            """{"type":"result","is_error":true,"result":"rate limited"}""",
+        ).joinToString("\n")
+
+        assertEquals("rate limited", ClaudeCli.errorOf(stream))
+        assertNull(ClaudeCli.extractNote(stream))
+    }
+
+    @Test
+    fun `streamed tool calls become something a person can read`() {
+        // The point of these lines: with no time limit on an analysis, this is what distinguishes
+        // "reading a 6,000-line file" from "wedged".
+        assertEquals(
+            "읽는 중 — Session.cpp",
+            ClaudeCli.progressOf("""{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read","input":{"file_path":"/repo/src/Session.cpp"}}]}}"""),
+        )
+        assertEquals(
+            "찾는 중 — HandleLogin",
+            ClaudeCli.progressOf("""{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Grep","input":{"pattern":"HandleLogin"}}]}}"""),
+        )
+        // The model's own prose is the note being drafted; half a note scrolling past is noise.
+        assertNull(ClaudeCli.progressOf("""{"type":"assistant","message":{"content":[{"type":"text","text":"이 파일은 세션을"}]}}"""))
+        assertNull(ClaudeCli.progressOf("""{"type":"result","is_error":false,"result":"{}"}"""))
+        assertNull(ClaudeCli.progressOf("not json at all"))
+    }
+
+    @Test
+    fun `codex progress keeps the activity and drops the banner`() {
+        assertEquals("Reading Session.cpp", CodexCli.progressOf("[2026-07-30T01:00:00] Reading Session.cpp"))
+        assertNull(CodexCli.progressOf("   "))
+        assertNull(CodexCli.progressOf("--------"))
+        assertNull(CodexCli.progressOf("workdir: /repo"))
+        assertNull(CodexCli.progressOf("model: gpt-5"))
     }
 
     @Test

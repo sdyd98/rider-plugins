@@ -86,6 +86,7 @@ class ChatViewModel(private val project: Project, val rel: String) {
     val turns get() = session.turns
     val running get() = session.running
     val error get() = session.error
+    val step get() = session.step
     val writing get() = session.writing
     val wrote get() = session.wrote
     val revision get() = session.revision

@@ -61,7 +61,8 @@ object ClaudeCli : AgentCli {
 
     /** The model's text lives in the envelope's `result`. */
     override fun textFrom(stdout: String, answerFile: File): String? =
-        NoteRequest.objectIn(stdout)?.get("result")?.takeIf { it.isJsonPrimitive }?.asString
+        (resultEvent(stdout) ?: NoteRequest.objectIn(stdout))
+            ?.get("result")?.takeIf { it.isJsonPrimitive }?.asString
             ?.takeIf { it.isNotBlank() }?.trim()
 
     override fun errorFrom(stdout: String): String? = errorOf(stdout)
@@ -71,7 +72,11 @@ object ClaudeCli : AgentCli {
         // -p with no value: the prompt arrives on stdin.
         "-p",
         "--allowedTools", "Read", "Grep", "Glob",
-        "--output-format", "json",
+        // stream-json rather than json: the same envelope arrives, but as it happens rather than only at
+        // the end, which is what lets the panel say what the agent is reading right now. `--verbose` is
+        // required by the CLI for streaming with -p.
+        "--output-format", "stream-json",
+        "--verbose",
     )
 
     /**
@@ -83,7 +88,7 @@ object ClaudeCli : AgentCli {
      * half-parsed note on disk.
      */
     fun extractNote(stdout: String): JsonObject? {
-        val outer = NoteRequest.objectIn(stdout) ?: return null
+        val outer = resultEvent(stdout) ?: NoteRequest.objectIn(stdout) ?: return null
         // An envelope must never be written as if it were the note: it parses perfectly well and would
         // land on disk as a "note" full of session ids and token counts.
         val inner = if (isEnvelope(outer)) {
@@ -106,9 +111,55 @@ object ClaudeCli : AgentCli {
             o.has("session_id") || o.has("is_error") || o.has("subtype") || o.has("total_cost_usd")
 
 
-    /** The failure text a `--output-format json` envelope carries, if it says it failed. */
+    /** The failure text the final envelope carries, if it says it failed. */
     fun errorOf(stdout: String): String? = runCatching {
-        val o = JsonParser.parseString(stdout).asJsonObject
+        val o = resultEvent(stdout) ?: JsonParser.parseString(stdout).asJsonObject
         if (o.get("is_error")?.asBoolean == true) o.get("result")?.asString ?: "알 수 없는 오류" else null
     }.getOrNull()
+
+    /**
+     * The `result` event out of a stream, or null when this output is not a stream.
+     *
+     * Streaming turns stdout into one JSON object per line, so the whole-text parse that a single
+     * envelope allowed no longer works — the answer is the last line that says it is the result. Read
+     * from the end: a `result` is final, and looking backwards finds it without walking the transcript.
+     */
+    private fun resultEvent(stdout: String): JsonObject? =
+        stdout.lineSequence()
+            .filter { it.trimStart().startsWith("{") }
+            .toList()
+            .asReversed()
+            .asSequence()
+            .mapNotNull { runCatching { JsonParser.parseString(it).asJsonObject }.getOrNull() }
+            .firstOrNull { it.get("type")?.asStringOrNull() == "result" }
+
+    /**
+     * One streamed event as a line for the panel, or null for the events a person does not need.
+     *
+     * Tool calls are the useful ones: they say which file is being read and what is being searched for,
+     * which is exactly the "is it stuck or is it working" question. The model's own prose is skipped —
+     * it is the note being drafted, and half a note scrolling past is noise.
+     */
+    override fun progressOf(line: String): String? {
+        val o = runCatching { JsonParser.parseString(line.trim()).asJsonObject }.getOrNull() ?: return null
+        val content = o.getAsJsonObject("message")?.getAsJsonArray("content") ?: return null
+        return content.mapNotNull { el ->
+            val block = el.asJsonObjectOrNull() ?: return@mapNotNull null
+            if (block.get("type")?.asStringOrNull() != "tool_use") return@mapNotNull null
+            val input = block.getAsJsonObject("input")
+            when (val tool = block.get("name")?.asStringOrNull()) {
+                "Read" -> input?.get("file_path")?.asStringOrNull()?.substringAfterLast('/')?.let { "읽는 중 — $it" }
+                "Grep" -> input?.get("pattern")?.asStringOrNull()?.let { "찾는 중 — ${it.take(50)}" }
+                "Glob" -> input?.get("pattern")?.asStringOrNull()?.let { "파일 훑는 중 — ${it.take(50)}" }
+                null -> null
+                else -> tool
+            }
+        }.firstOrNull()
+    }
+
+    private fun com.google.gson.JsonElement.asStringOrNull(): String? =
+        takeIf { it.isJsonPrimitive }?.asString
+
+    private fun com.google.gson.JsonElement.asJsonObjectOrNull(): JsonObject? =
+        takeIf { it.isJsonObject }?.asJsonObject
 }

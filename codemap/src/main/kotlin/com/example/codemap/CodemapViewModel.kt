@@ -87,7 +87,13 @@ class CodemapViewModel(private val project: Project) {
     /** Analysis progress, shown inline so a long run never looks like a dead button. */
     sealed interface Analysis {
         data object Idle : Analysis
-        data class Running(val path: String) : Analysis
+        /**
+         * [step] is the agent's latest reported activity, empty until it says something.
+         *
+         * Held next to the path rather than replacing it: the path is what was asked for and does not
+         * change, while the step changes every few seconds — a spinner needs both to be readable.
+         */
+        data class Running(val path: String, val step: String = "") : Analysis
         data class Failed(val reason: String) : Analysis
     }
 
@@ -331,6 +337,7 @@ class CodemapViewModel(private val project: Project) {
                 .getService(CodemapSettings::class.java)?.pathFor(chosen)
             val result = r.analyze(
                 loaded.rel, question, flow = scenario, engine = chosen, explicitPath = explicit,
+                onProgress = ::report,
             )
             ApplicationManager.getApplication().invokeLater {
                 analysis = when (result) {
@@ -400,7 +407,10 @@ class CodemapViewModel(private val project: Project) {
         ApplicationManager.getApplication().executeOnPooledThread {
             val explicit = ApplicationManager.getApplication()
                 .getService(CodemapSettings::class.java)?.pathFor(chosen)
-            val result = r.analyze(loaded.rel, question, symbol = symbol, engine = chosen, explicitPath = explicit)
+            val result = r.analyze(
+                loaded.rel, question, symbol = symbol, engine = chosen, explicitPath = explicit,
+                onProgress = ::report,
+            )
             ApplicationManager.getApplication().invokeLater {
                 analysis = when (result) {
                     is AnalysisRunner.Result.Ok -> Analysis.Idle
@@ -410,6 +420,18 @@ class CodemapViewModel(private val project: Project) {
                 }
             }
             reload()
+        }
+    }
+
+    /**
+     * The agent said what it is doing. Called from a reader thread, so it hops to the EDT.
+     *
+     * Dropped unless an analysis is still running: a line that arrives after cancel or failure would
+     * otherwise resurrect the spinner.
+     */
+    private fun report(step: String) {
+        ApplicationManager.getApplication().invokeLater {
+            (analysis as? Analysis.Running)?.let { analysis = it.copy(step = step) }
         }
     }
 

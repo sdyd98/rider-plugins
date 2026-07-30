@@ -77,11 +77,13 @@ fun CodemapChatView(vm: ChatViewModel) {
             vm.turns.forEachIndexed { i, turn -> TurnBlock(turn, i, vm, p) }
             if (vm.running) {
                 Row(Modifier.padding(vertical = Space.sm)) {
-                    Working("${vm.engine.label} 생각 중", p) { vm.cancel() }
+                    Working("${vm.engine.label} 생각 중", p, step = vm.step) { vm.cancel() }
                 }
             }
             vm.writing?.let { what ->
-                Row(Modifier.padding(vertical = Space.sm)) { Working(what, p) { vm.cancel() } }
+                Row(Modifier.padding(vertical = Space.sm)) {
+                    Working(what, p, step = vm.step) { vm.cancel() }
+                }
             }
             vm.wrote?.let {
                 Column(Modifier.padding(vertical = Space.sm)) { Banner("✓ $it", p.accent, p) }

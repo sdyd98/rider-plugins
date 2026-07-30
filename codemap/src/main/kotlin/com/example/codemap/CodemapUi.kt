@@ -792,13 +792,18 @@ fun HintedButton(
 }
 
 /**
- * Work in progress, with the two things a wait needs: that it is alive, and how long it has been going.
+ * Work in progress, with the three things a wait needs: that it is alive, how long it has been going, and
+ * what it is doing.
  *
- * The elapsed count is not decoration — an analysis on a real file runs for minutes, and without a number
- * there is no way to tell "thinking" from "wedged" before the ten-minute timeout fires.
+ * There is no time limit on an analysis any more, which makes [step] the thing that answers "is it stuck?".
+ * The elapsed count alone cannot: two minutes of silence looks the same whether the agent is reading a
+ * 6,000-line file or has wedged. [step] is the agent's own last reported action — the file it opened, the
+ * pattern it searched — so the answer is evidence rather than a guess.
  */
 @Composable
-fun Working(what: String, palette: CodemapPalette, onCancel: () -> Unit) {
+fun Working(what: String, palette: CodemapPalette, step: String = "", onCancel: () -> Unit) {
+    // Keyed on `what`, not on `step`: the step changes every few seconds and the elapsed time must not
+    // restart with it.
     var seconds by remember(what) { mutableStateOf(0) }
     LaunchedEffect(what) {
         while (true) {
@@ -806,19 +811,31 @@ fun Working(what: String, palette: CodemapPalette, onCancel: () -> Unit) {
             seconds++
         }
     }
-    Row(
-        Modifier.padding(top = Space.sm),
-        horizontalArrangement = Arrangement.spacedBy(Space.sm),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        CircularProgressIndicator()
-        Text(what, color = palette.accent, fontSize = Type.label)
-        Text(
-            "%d:%02d".format(seconds / 60, seconds % 60),
-            color = palette.mutedText,
-            fontSize = Type.micro,
-            fontFamily = FontFamily.Monospace,
-        )
-        ActionButton("취소", palette, primary = false, onClick = onCancel)
+    Column(Modifier.padding(top = Space.sm)) {
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(Space.sm),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            CircularProgressIndicator()
+            Text(what, color = palette.accent, fontSize = Type.label)
+            Text(
+                "%d:%02d".format(seconds / 60, seconds % 60),
+                color = palette.mutedText,
+                fontSize = Type.micro,
+                fontFamily = FontFamily.Monospace,
+            )
+            ActionButton("취소", palette, primary = false, onClick = onCancel)
+        }
+        if (step.isNotEmpty()) {
+            Text(
+                step,
+                color = palette.mutedText,
+                fontSize = Type.micro,
+                fontFamily = FontFamily.Monospace,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.padding(top = Space.xxs, start = Space.lg),
+            )
+        }
     }
 }

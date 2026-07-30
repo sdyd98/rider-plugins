@@ -299,7 +299,7 @@ private fun Ask(vm: CodemapViewModel, p: CodemapPalette) {
 
         if (session.running) {
             Row(Modifier.padding(top = Space.xs)) {
-                Working("${vm.engine.label} 생각 중", p) { vm.cancelChat() }
+                Working("${vm.engine.label} 생각 중", p, step = session.step) { vm.cancelChat() }
             }
         }
         session.error?.let { Banner("실패 — $it", p.warn, p) }
@@ -738,7 +738,7 @@ private fun RequestBox(
 
     when (val a = vm.analysis) {
         is CodemapViewModel.Analysis.Running -> {
-            Working("분석 중 — ${a.path.substringAfterLast('/')}", p) { vm.cancelAnalysis() }
+            Working("분석 중 — ${a.path.substringAfterLast('/')}", p, step = a.step) { vm.cancelAnalysis() }
             return
         }
 

@@ -31,6 +31,10 @@ class ChatSessions(private val project: Project) {
         var error: String? by mutableStateOf(null)
             internal set
 
+        /** The engine's latest reported activity while [running] — empty until it says something. */
+        var step: String by mutableStateOf("")
+            internal set
+
         /** Non-null while the conversation is being folded into the note. */
         var writing: String? by mutableStateOf(null)
             internal set
@@ -67,12 +71,18 @@ class ChatSessions(private val project: Project) {
         session.turns += Chat.Turn(Chat.Role.USER, question.trim())
         session.running = true
         session.error = null
+        session.step = ""
 
         val prompt = Chat.prompt(rel, note(rel), session.turns.dropLast(1), question.trim())
         val chosen = engine
         val r = AnalysisRunner(s).also { session.runner = it }
         ApplicationManager.getApplication().executeOnPooledThread {
-            val result = r.ask(prompt, engine = chosen, explicitPath = settings?.pathFor(chosen))
+            val result = r.ask(
+                prompt,
+                engine = chosen,
+                explicitPath = settings?.pathFor(chosen),
+                onProgress = { step -> ApplicationManager.getApplication().invokeLater { session.step = step } },
+            )
             ApplicationManager.getApplication().invokeLater {
                 session.running = false
                 when (result) {
@@ -99,6 +109,7 @@ class ChatSessions(private val project: Project) {
         session.writing = "대화를 노트에 반영하는 중"
         session.wrote = null
         session.error = null
+        session.step = ""
         val chosen = engine
         val conversation = session.turns.toList()
         val r = AnalysisRunner(s).also { session.runner = it }
@@ -108,6 +119,7 @@ class ChatSessions(private val project: Project) {
                 question = "",
                 engine = chosen,
                 explicitPath = settings?.pathFor(chosen),
+                onProgress = { step -> ApplicationManager.getApplication().invokeLater { session.step = step } },
                 conversation = conversation,
             )
             ApplicationManager.getApplication().invokeLater {

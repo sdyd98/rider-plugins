@@ -5,7 +5,6 @@ import com.intellij.openapi.components.Service
 import com.intellij.openapi.components.State
 import com.intellij.openapi.components.Storage
 import java.io.File
-import java.util.concurrent.TimeUnit
 
 /**
  * Which agent runs an analysis, and where its CLI lives when that is not somewhere obvious.
@@ -75,8 +74,12 @@ class AnalysisRunner(private val store: NoteStore) {
     /**
      * Analyze [relPath] and store the result. Blocking — callers run it on a pooled thread.
      *
-     * [timeoutMinutes] exists because a headless agent that wedges would otherwise hold the panel in
-     * "분석 중" forever; the process is killed and the failure is reported rather than hidden.
+     * **No time limit.** There used to be ten minutes, which was a guess about how long a real file takes
+     * and killed the honest runs along with the wedged ones — on a 6,000-line file with a question
+     * attached, ten minutes is not obviously enough. What that limit was really protecting against is
+     * "the panel says 분석 중 forever and I cannot tell if it is alive", and [onProgress] answers that
+     * directly: the panel shows which file the agent is reading right now. 취소 remains the way out, and
+     * it is a decision rather than a timer.
      */
     fun analyze(
         relPath: String,
@@ -86,7 +89,8 @@ class AnalysisRunner(private val store: NoteStore) {
         flow: String = "",
         engine: Engine = Engine.CLAUDE,
         explicitPath: String? = null,
-        timeoutMinutes: Long = 10,
+        /** Called on a reader thread for each line worth showing; see [AgentCli.progressOf]. */
+        onProgress: (String) -> Unit = {},
         /** A conversation about this file, folded in as context — see [NoteRequest.prompt]. */
         conversation: List<Chat.Turn> = emptyList(),
     ): Result {
@@ -114,14 +118,17 @@ class AnalysisRunner(private val store: NoteStore) {
             // complete — without the close it waits for more.
             runCatching { p.outputStream.bufferedWriter(Charsets.UTF_8).use { it.write(prompt) } }
 
-            val reader = Thread { p.inputStream.bufferedReader().forEachLine { out.appendLine(it) } }
+            val reader = Thread {
+                p.inputStream.bufferedReader().forEachLine { line ->
+                    out.appendLine(line)
+                    cli.progressOf(line)?.let(onProgress)
+                }
+            }
             val errReader = Thread { p.errorStream.bufferedReader().forEachLine { err.appendLine(it) } }
             reader.start(); errReader.start()
 
-            if (!p.waitFor(timeoutMinutes, TimeUnit.MINUTES)) {
-                p.destroyForcibly()
-                return Result.Failed("시간 초과 (${timeoutMinutes}분)")
-            }
+            // Waits as long as the agent takes. cancel() destroys the process, which ends this.
+            p.waitFor()
             reader.join(5_000); errReader.join(5_000)
 
             if (p.exitValue() != 0) {
@@ -168,15 +175,15 @@ class AnalysisRunner(private val store: NoteStore) {
     /**
      * One turn of a conversation: same process contract as [analyze], prose out instead of a note.
      *
-     * Deliberately the same code path — the prompt on stdin, the read-only tool policy, the timeout, the
-     * cancel — because a chat that could reach further into the repository than an analysis would be a
+     * Deliberately the same code path — the prompt on stdin, the read-only tool policy, no time limit,
+     * the cancel — because a chat that could reach further into the repository than an analysis would be a
      * quiet privilege escalation. The only difference is how the answer is read.
      */
     fun ask(
         prompt: String,
         engine: Engine = Engine.CLAUDE,
         explicitPath: String? = null,
-        timeoutMinutes: Long = 10,
+        onProgress: (String) -> Unit = {},
     ): Result {
         val cli = engine.cli
         val bin = cli.discover(explicitPath)
@@ -192,14 +199,16 @@ class AnalysisRunner(private val store: NoteStore) {
                 .also { process = it }
             runCatching { p.outputStream.bufferedWriter(Charsets.UTF_8).use { it.write(prompt) } }
 
-            val reader = Thread { p.inputStream.bufferedReader().forEachLine { out.appendLine(it) } }
+            val reader = Thread {
+                p.inputStream.bufferedReader().forEachLine { line ->
+                    out.appendLine(line)
+                    cli.progressOf(line)?.let(onProgress)
+                }
+            }
             val errReader = Thread { p.errorStream.bufferedReader().forEachLine { err.appendLine(it) } }
             reader.start(); errReader.start()
 
-            if (!p.waitFor(timeoutMinutes, TimeUnit.MINUTES)) {
-                p.destroyForcibly()
-                return Result.Failed("시간 초과 (${timeoutMinutes}분)")
-            }
+            p.waitFor()
             reader.join(5_000); errReader.join(5_000)
             if (p.exitValue() != 0) {
                 val reason = err.toString().trim().ifEmpty { out.toString().trim().takeLast(400) }
